@@ -1,0 +1,37 @@
+# Rust
+/Rust/target/
+/Rust/**/*.rs.bk
+Cargo.lock
+
+# Zig
+/Zig/zig-cache/
+/Zig/zig-out/
+/Zig/.zig-cache/
+
+# C++ build artifacts
+*.o
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.idb
+*.lib
+*.dll
+*.exp
+[Dd]ebug/
+[Rr]elease/
+[Xx]64/
+[Bb]uild/
+
+# IDE / Editor
+.vs/
+.vscode/
+.idea/
+*.user
+*~
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
