@@ -1,0 +1,17 @@
+[package]
+name = "orisnik"
+version = "0.0.0"
+edition = "2021"
+authors = ["Eric Jacopin"]
+license = "MIT OR Apache-2.0"
+description = "Reserved crate name for the Rust port of Oris — a Rust and Zig port of Dimitar Lazarov's HPHA (2007). No implementation yet; see https://github.com/PCfVW/oris."
+repository = "https://github.com/PCfVW/oris"
+homepage = "https://github.com/PCfVW/oris"
+documentation = "https://github.com/PCfVW/oris"
+readme = "README.md"
+keywords = ["allocator", "heap", "memory", "hpha", "no-std"]
+categories = ["memory-management"]
+
+[lib]
+name = "orisnik"
+path = "src/lib.rs"
