@@ -19,6 +19,18 @@ This is a project repository at the design-document stage. The two foundational 
 - **`Rust/`** — the `orisnik` crate *(forthcoming, v0.1.0)*
 - **`Zig/`** — the `orisnitsa` module *(forthcoming, v0.1.0)*
 
+## Coding conventions
+
+Both ports follow the [Amphigraphic](https://github.com/PCfVW/Amphigraphic-Strict) `Grit`
+discipline, extended for a high-performance heap allocator (`Grit-ORIS`):
+
+- **[Rust/CONVENTIONS.md](Rust/CONVENTIONS.md)** — `orisnik`
+- **[Zig/CONVENTIONS.md](Zig/CONVENTIONS.md)** — `orisnitsa`
+
+The two share the cross-port-invariant discipline (see [ROADMAP.md](ROADMAP.md)): an identical
+public alloc/free sequence must produce identical internal state transitions across both ports.
+The `CLAUDE.md` files (repo root and one per port) wire these conventions into AI-assisted edits.
+
 ## License
 
 Dual-licensed under [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE), at your option — see [LICENSE](LICENSE).

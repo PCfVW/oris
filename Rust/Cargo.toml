@@ -1,7 +1,8 @@
 [package]
 name = "orisnik"
 version = "0.0.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.85"
 authors = ["Eric Jacopin"]
 license = "MIT OR Apache-2.0"
 description = "Reserved crate name for the Rust port of Oris — a Rust and Zig port of Dimitar Lazarov's HPHA (2007). No implementation yet; see https://github.com/PCfVW/oris."
