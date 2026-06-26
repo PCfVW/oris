@@ -1,0 +1,15 @@
+# Enforce LF line endings for sources so cross-platform tooling (zig fmt,
+# rustfmt) agrees on every CI runner. Without this, GitHub's Windows runner
+# checks files out as CRLF (core.autocrlf=true) and `zig fmt --check` fails
+# even though the committed blobs are LF.
+*.zig  text eol=lf
+*.zon  text eol=lf
+*.rs   text eol=lf
+*.toml text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+
+# Preserve the verbatim 2007 HPHA reference source exactly as vendored — no
+# line-ending normalization.
+Cpp/** -text
