@@ -4,11 +4,20 @@
 
 A Rust and Zig port of Dimitar Lazarov's **HPHA** (2007).
 
-**Working draft — v0.4. No code shipped yet.**
+[![Rust CI](https://github.com/PCfVW/oris/actions/workflows/rust-ci.yml/badge.svg)](https://github.com/PCfVW/oris/actions/workflows/rust-ci.yml)
+[![Zig CI](https://github.com/PCfVW/oris/actions/workflows/zig-ci.yml/badge.svg)](https://github.com/PCfVW/oris/actions/workflows/zig-ci.yml)
+[![crates.io](https://img.shields.io/crates/v/orisnik?logo=rust&label=orisnik)](https://crates.io/crates/orisnik)
+[![Zig release](https://img.shields.io/github/v/release/PCfVW/oris?logo=zig&label=orisnitsa&color=f7a41d)](https://github.com/PCfVW/oris/releases)
+[![docs.rs](https://img.shields.io/docsrs/orisnik?logo=docsdotrs)](https://docs.rs/orisnik)
+[![MSRV](https://img.shields.io/badge/MSRV-1.85-blue?logo=rust)](Rust/Cargo.toml)
+[![Zig](https://img.shields.io/badge/Zig-0.16.0-f7a41d?logo=zig)](https://ziglang.org/)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
+
+**Working draft — v0.4. Design stage — stubs, coding conventions, and CI scaffolding are in place; the allocator core lands in v0.1.0.**
 
 ## Status
 
-This is a project repository at the design-document stage. The two foundational documents are:
+Oris is at its design-and-scaffolding stage — the design documents are settled and per-port build/CI scaffolding is in place, ahead of the v0.1.0 allocator implementation. The two foundational documents are:
 
 - **[BRIEF.md](BRIEF.md)** — design rationale, etymological grounding, target workloads, prior-art positioning
 - **[ROADMAP.md](ROADMAP.md)** — milestones, versioning policy, the cross-language invariant
@@ -16,8 +25,9 @@ This is a project repository at the design-document stage. The two foundational 
 ## Structure
 
 - **[Cpp/](Cpp/)** — the canonical HPHA reference source from 2007, included for diff and reference purposes. See [Cpp/NOTICE.md](Cpp/NOTICE.md) for the license trail.
-- **`Rust/`** — the `orisnik` crate *(forthcoming, v0.1.0)*
-- **`Zig/`** — the `orisnitsa` module *(forthcoming, v0.1.0)*
+- **[Rust/](Rust/)** — the `orisnik` crate (targets Rust 1.85 / edition 2024). Name reserved on crates.io at `0.0.0`; allocator core forthcoming in v0.1.0.
+- **[Zig/](Zig/)** — the `orisnitsa` module (targets Zig 0.16.0). Stub package and manifest in place; allocator core forthcoming in v0.1.0.
+- **[.github/workflows/](.github/workflows/)** — CI for both ports (3-OS matrix; Rust adds a Miri soundness lane) plus tag-driven publishing: crates.io via Trusted Publishing, and a re-rooted Zig release asset.
 
 ## Coding conventions
 
