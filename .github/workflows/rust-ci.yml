@@ -1,0 +1,82 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly canary (Mon 06:00 UTC): catches rolling-stable lint drift between
+    # pushes, so a new compiler emails you instead of ambushing a feature push.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: rust-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    working-directory: Rust
+
+jobs:
+  check:
+    name: ${{ matrix.toolchain }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The OS-page layer is platform-specific (VirtualAlloc vs mmap), so all
+        # three OSes are first-class. macOS runs on a free GitHub-hosted runner.
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        toolchain: ["1.85", "stable"] # 1.85 == MSRV (edition 2024 + strict provenance)
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: Rust
+      - name: Formatting
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test
+
+  miri:
+    # The allocator's soundness gate: Miri models provenance and aliasing, the
+    # two UB classes ordinary tests cannot see. Host-agnostic, so ubuntu only.
+    name: Miri (nightly)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: Rust
+      - name: Miri test (strict provenance + tree borrows)
+        run: cargo miri test
+        env:
+          MIRIFLAGS: "-Zmiri-strict-provenance -Zmiri-tree-borrows"
+
+  docs:
+    name: Doc (stable)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: Rust
+      - name: Doc (deny warnings)
+        run: cargo doc --no-deps
+        env:
+          RUSTDOCFLAGS: "-D warnings"

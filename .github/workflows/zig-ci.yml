@@ -1,0 +1,39 @@
+name: Zig CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: zig-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: Zig
+
+jobs:
+  build-test:
+    name: ${{ matrix.optimize }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Platform-specific OS-page layer → all three OSes are first-class.
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        # Debug + ReleaseSafe run with runtime safety checks ON (where leak
+        # detection and checkAllAllocationFailures live); ReleaseFast confirms
+        # the hot path compiles with safety OFF.
+        optimize: [Debug, ReleaseSafe, ReleaseFast]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: "0.16.0"
+      - name: Formatting
+        run: zig fmt --check build.zig build.zig.zon src
+      - name: Build & test
+        run: zig build test -Doptimize=${{ matrix.optimize }}

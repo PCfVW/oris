@@ -1,0 +1,83 @@
+name: Zig Release
+
+on:
+  push:
+    # Same tag scheme as Rust Publish — one vX.Y.Z tag drives both ports
+    # (lockstep versioning; see ROADMAP.md).
+    tags:
+      - "v*"
+      - "!v*-*"
+  workflow_dispatch:
+
+concurrency:
+  group: zig-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # create the GitHub Release and upload the asset
+
+jobs:
+  release:
+    name: Release orisnitsa
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: "0.16.0"
+
+      # Gauntlet before releasing — safety checks ON.
+      - name: Formatting
+        working-directory: Zig
+        run: zig fmt --check build.zig build.zig.zon src
+      - name: Build & test (Debug + ReleaseSafe)
+        working-directory: Zig
+        run: |
+          zig build test
+          zig build test -Doptimize=ReleaseSafe
+
+      # Re-root the Zig/ subdirectory as the package: a FLAT tarball whose root
+      # holds build.zig.zon, so `zig fetch <url>` finds the manifest. A wrapper
+      # directory does NOT work — verified against Zig 0.16.0. (The GitHub
+      # auto-tarball is repo-rooted, hence unusable for a subdir package.)
+      - name: Package re-rooted tarball
+        id: pkg
+        run: |
+          name="orisnitsa-${GITHUB_REF_NAME}"
+          mkdir -p "staging/${name}"
+          cp -r Zig/build.zig Zig/build.zig.zon Zig/src Zig/LICENSE-MIT Zig/LICENSE-APACHE "staging/${name}/"
+          tar -czf "${name}.tar.gz" -C "staging/${name}" build.zig build.zig.zon src LICENSE-MIT LICENSE-APACHE
+          echo "asset=${name}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      # Compute the package hash the way a consumer's `zig fetch` will, and
+      # surface it in the release notes so it can be pinned verbatim.
+      # NOTE: `zig fetch` (0.16.0) refuses to run without a build.zig in cwd, so
+      # run it from Zig/ — it still hashes the external asset (verified locally),
+      # referenced by absolute path since the asset sits at the workspace root.
+      - name: Compute zig fetch hash
+        id: hash
+        working-directory: Zig
+        run: echo "hash=$(zig fetch "$GITHUB_WORKSPACE/${{ steps.pkg.outputs.asset }}")" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.pkg.outputs.asset }}
+          fail_on_unmatched_files: true
+          body: |
+            **`orisnitsa` ${{ github.ref_name }}** — the Zig port of HPHA, in lockstep with `orisnik` ${{ github.ref_name }} on crates.io.
+
+            Add it to your `build.zig.zon`:
+
+            ```sh
+            zig fetch --save=orisnitsa https://github.com/PCfVW/oris/releases/download/${{ github.ref_name }}/${{ steps.pkg.outputs.asset }}
+            ```
+
+            Or pin the hash directly:
+
+            ```zig
+            .orisnitsa = .{
+                .url = "https://github.com/PCfVW/oris/releases/download/${{ github.ref_name }}/${{ steps.pkg.outputs.asset }}",
+                .hash = "${{ steps.hash.outputs.hash }}",
+            },
+            ```

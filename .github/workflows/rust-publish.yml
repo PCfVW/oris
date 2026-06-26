@@ -1,0 +1,63 @@
+name: Rust Publish
+
+on:
+  push:
+    # Publish to crates.io only on release tags vMAJOR.MINOR.PATCH (e.g. v0.1.0).
+    # Hyphenated pre-release / milestone tags (v0.1.0-rc.1) are git checkpoints
+    # only — to publish one intentionally, use workflow_dispatch.
+    tags:
+      - "v*"
+      - "!v*-*"
+  workflow_dispatch:
+
+concurrency:
+  group: rust-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    working-directory: Rust
+
+jobs:
+  publish:
+    name: Publish orisnik to crates.io
+    runs-on: ubuntu-latest
+    # Matches the crates.io Trusted Publishing config (PCfVW/oris, this filename,
+    # environment crates-io). The filename rust-publish.yml is load-bearing.
+    environment: crates-io
+    permissions:
+      id-token: write # OIDC token for Trusted Publishing
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: Rust
+
+      # Full gauntlet before publishing — a tag must pass the same bar as CI.
+      - name: Formatting
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test
+      - name: Doc (deny warnings)
+        run: cargo doc --no-deps
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
+      # Trusted Publishing: exchange the OIDC token for a short-lived crates.io
+      # token. No stored CARGO_REGISTRY_TOKEN secret.
+      - name: Authenticate to crates.io (Trusted Publishing)
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+      - name: Publish
+        run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
