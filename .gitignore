@@ -7,6 +7,7 @@ Cargo.lock
 /Zig/zig-cache/
 /Zig/zig-out/
 /Zig/.zig-cache/
+/Zig/zig-pkg/
 
 # C++ build artifacts
 *.o
