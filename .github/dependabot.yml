@@ -1,0 +1,19 @@
+version: 2
+updates:
+  # Keep the pinned GitHub Actions current — e.g. the setup-zig Node runtime
+  # deprecation that surfaced as a CI annotation.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+
+  # Keep the orisnik crate's dependencies current. (Zig has no Dependabot
+  # ecosystem; the Zig toolchain is pinned in Zig/build.zig.zon.)
+  - package-ecosystem: cargo
+    directory: /Rust
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: deps
