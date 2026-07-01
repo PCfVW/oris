@@ -73,7 +73,7 @@ jobs:
         run: echo "hash=$(zig fetch "$GITHUB_WORKSPACE/${{ steps.pkg.outputs.asset }}")" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.TAG }}
           files: ${{ steps.pkg.outputs.asset }}
