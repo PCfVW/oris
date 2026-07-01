@@ -80,3 +80,20 @@ jobs:
         run: cargo doc --no-deps
         env:
           RUSTDOCFLAGS: "-D warnings"
+
+  # Aggregator gate: a single stable check to require in branch protection,
+  # so the ruleset never needs editing when the matrix above changes.
+  ci-success:
+    name: Rust CI success
+    needs: [check, miri, docs]
+    if: always()
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: . # gate job has no checkout; override the Rust/ default
+    steps:
+      - name: Fail if any required job did not succeed
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          echo "One or more required Rust CI jobs failed or were cancelled."
+          exit 1
