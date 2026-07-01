@@ -29,7 +29,7 @@ jobs:
         # the hot path compiles with safety OFF.
         optimize: [Debug, ReleaseSafe, ReleaseFast]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: mlugg/setup-zig@v2
         with:
           version: "0.16.0"
