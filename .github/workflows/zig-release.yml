@@ -8,6 +8,11 @@ on:
       - "v*"
       - "!v*-*"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag/name for a manual run (e.g. a smoke test). Empty = use the pushed ref name."
+        required: false
+        default: ""
 
 concurrency:
   group: zig-release-${{ github.ref }}
@@ -26,6 +31,14 @@ jobs:
         with:
           version: "0.16.0"
 
+      # Resolve the release tag: the manual `tag` input when given (smoke tests /
+      # re-releases), otherwise the pushed tag ref.
+      - name: Resolve release tag
+        run: |
+          tag="${{ github.event.inputs.tag }}"
+          [ -z "$tag" ] && tag="${GITHUB_REF_NAME}"
+          echo "TAG=${tag}" >> "$GITHUB_ENV"
+
       # Gauntlet before releasing — safety checks ON.
       - name: Formatting
         working-directory: Zig
@@ -43,16 +56,16 @@ jobs:
       - name: Package re-rooted tarball
         id: pkg
         run: |
-          name="orisnitsa-${GITHUB_REF_NAME}"
+          name="orisnitsa-${TAG}"
           mkdir -p "staging/${name}"
           cp -r Zig/build.zig Zig/build.zig.zon Zig/src Zig/LICENSE-MIT Zig/LICENSE-APACHE "staging/${name}/"
           tar -czf "${name}.tar.gz" -C "staging/${name}" build.zig build.zig.zon src LICENSE-MIT LICENSE-APACHE
           echo "asset=${name}.tar.gz" >> "$GITHUB_OUTPUT"
 
-      # Compute the package hash the way a consumer's `zig fetch` will, and
-      # surface it in the release notes so it can be pinned verbatim.
-      # NOTE: `zig fetch` (0.16.0) refuses to run without a build.zig in cwd, so
-      # run it from Zig/ — it still hashes the external asset (verified locally),
+      # Compute the package hash the way a consumer's `zig fetch` will, and surface
+      # it in the release notes so it can be pinned verbatim.
+      # NOTE: `zig fetch` (0.16.0) refuses to run without a build.zig in cwd, so run
+      # it from Zig/ — it still hashes the external asset (verified locally),
       # referenced by absolute path since the asset sits at the workspace root.
       - name: Compute zig fetch hash
         id: hash
@@ -62,22 +75,23 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.TAG }}
           files: ${{ steps.pkg.outputs.asset }}
           fail_on_unmatched_files: true
           body: |
-            **`orisnitsa` ${{ github.ref_name }}** — the Zig port of HPHA, in lockstep with `orisnik` ${{ github.ref_name }} on crates.io.
+            **`orisnitsa` ${{ env.TAG }}** — the Zig port of HPHA, in lockstep with `orisnik` ${{ env.TAG }} on crates.io.
 
             Add it to your `build.zig.zon`:
 
             ```sh
-            zig fetch --save=orisnitsa https://github.com/PCfVW/oris/releases/download/${{ github.ref_name }}/${{ steps.pkg.outputs.asset }}
+            zig fetch --save=orisnitsa https://github.com/PCfVW/oris/releases/download/${{ env.TAG }}/${{ steps.pkg.outputs.asset }}
             ```
 
             Or pin the hash directly:
 
             ```zig
             .orisnitsa = .{
-                .url = "https://github.com/PCfVW/oris/releases/download/${{ github.ref_name }}/${{ steps.pkg.outputs.asset }}",
+                .url = "https://github.com/PCfVW/oris/releases/download/${{ env.TAG }}/${{ steps.pkg.outputs.asset }}",
                 .hash = "${{ steps.hash.outputs.hash }}",
             },
             ```
