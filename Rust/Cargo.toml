@@ -16,3 +16,39 @@ categories = ["memory-management"]
 [lib]
 name = "orisnik"
 path = "src/lib.rs"
+
+# The Grit-ORIS lint floor (see Rust/CONVENTIONS.md). CI runs
+# `cargo clippy --all-targets -- -D warnings`, so every `warn` below is a hard
+# error there. NOTE: unlike the sibling parser crates, an allocator does NOT
+# deny `unsafe_code` — unsafe is the work. `unsafe_op_in_unsafe_fn` (in lib.rs)
+# plus the block-level clippy lints below keep it scoped and justified instead.
+[lints.clippy]
+# Pedantic net (priority -1 so the specific levels below win).
+pedantic = { level = "warn", priority = -1 }
+
+# Hot path never panics — out-of-memory is a value, not an exception.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+
+# Exhaustive matching over owned enums.
+wildcard_enum_match_arm = "deny"
+
+# Explicit conversions; prefer From/TryFrom and the strict-provenance helpers.
+as_conversions = "warn"
+ptr_as_ptr = "warn"
+cast_ptr_alignment = "warn"
+
+# The load-bearing unsafe-discipline lints for an allocator.
+undocumented_unsafe_blocks = "warn"
+multiple_unsafe_ops_per_block = "warn"
+missing_safety_doc = "warn"
+
+# API hygiene.
+must_use_candidate = "warn"
+missing_errors_doc = "warn"
+
+# Noisy pedantic lints we opt out of.
+module_name_repetitions = "allow"
+too_many_lines = "allow"
