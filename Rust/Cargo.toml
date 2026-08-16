@@ -5,17 +5,33 @@ edition = "2024"
 rust-version = "1.85"
 authors = ["Eric Jacopin"]
 license = "MIT OR Apache-2.0"
-description = "Reserved crate name for the Rust port of Oris — a Rust and Zig port of Dimitar Lazarov's HPHA (2007). No implementation yet; see https://github.com/PCfVW/oris."
+description = "A Rust port of Dimitar Lazarov's HPHA (2007): a bucket + red-black-tree best-fit heap allocator, with oris_* C-ABI, GlobalAlloc, and optional Allocator surfaces."
 repository = "https://github.com/PCfVW/oris"
 homepage = "https://github.com/PCfVW/oris"
-documentation = "https://github.com/PCfVW/oris"
 readme = "README.md"
-keywords = ["allocator", "heap", "memory", "hpha", "no-std"]
+keywords = ["allocator", "heap", "memory", "global-allocator", "hpha"]
 categories = ["memory-management"]
 
 [lib]
 name = "orisnik"
 path = "src/lib.rs"
+
+[features]
+# Enables `unsafe impl core::alloc::Allocator for Orisnik` (src/allocator_trait.rs)
+# via the still-unstable native `allocator_api` feature (rust-lang/rust#32838).
+# Requires a nightly toolchain — `feature(allocator_api)` is itself nightly-gated
+# syntax, so enabling this Cargo feature on stable is a hard compile error by
+# design, not a bug. See INSTALL.md and Rust/CONVENTIONS.md's Idiomatic Surfaces
+# section. The default build (`oris_*` + `GlobalAlloc`) needs none of this.
+nightly = []
+
+[target.'cfg(unix)'.dependencies]
+# mmap/munmap and their flag constants (MAP_ANON differs numerically between Linux
+# and macOS/BSD) — hand-rolling these is a well-known source of silent platform bugs,
+# so the OS layer (src/os.rs) uses the ecosystem-standard bindings here instead of
+# redeclaring them. Windows needs no such crate: VirtualAlloc/VirtualFree are two
+# functions and three constants, declared directly in src/os.rs.
+libc = "0.2"
 
 # The Grit-ORIS lint floor (see Rust/CONVENTIONS.md). CI runs
 # `cargo clippy --all-targets -- -D warnings`, so every `warn` below is a hard

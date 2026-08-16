@@ -1,0 +1,9 @@
+# The `unwrap_used`/`expect_used`/`panic` denials in Cargo.toml's [lints.clippy] target
+# the allocator's hot path — allocation failure is a value (null/None), never a panic.
+# That rule doesn't extend to test code, where panicking on an unexpected failure is the
+# correct, idiomatic way to fail loudly. These three options scope the denials to
+# non-test code, which is what Cargo.toml's comment ("never in allocator hot paths")
+# already intends.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
