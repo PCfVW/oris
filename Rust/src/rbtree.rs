@@ -1298,15 +1298,29 @@ mod tests {
     /// `minimum()`, exactly what `intrusive_multi_rbtree<T>::begin()`/`++` walks in
     /// the C++ reference.
     ///
-    /// This is a manual cross-validation tool, not an automated test: it was run
-    /// once (during the port's Phase 3 development) against a companion C++ harness
-    /// that links the real, unmodified `Cpp/hpha.cpp` and runs the identical
-    /// PRNG-driven sequence through the actual `intrusive_multi_rbtree`, printing the
-    /// same format. All 3000 steps matched byte-for-byte. `#[ignore]`d because it
-    /// requires a separately-built C++ companion (not part of this crate or its CI)
-    /// to be meaningful — run with `cargo test --lib -- --ignored --nocapture
+    /// This is a manual cross-validation tool, not an automated test — three ways:
+    ///
+    /// 1. **Against C++.** Run once (during this port's Phase 3 development) against
+    ///    a companion C++ harness that links the real, unmodified `Cpp/hpha.cpp` and
+    ///    runs the identical PRNG-driven sequence through the actual
+    ///    `intrusive_multi_rbtree`, printing the same format. All 3000 steps matched
+    ///    byte-for-byte.
+    /// 2. **Against `orisnitsa`.** `Zig/src/rbtree.zig`'s own
+    ///    `"oracle cross-validation trace (manual tool, not an assertion)"` test
+    ///    emits this exact same format (same PRNG, same decision logic, same print
+    ///    shape) and was diffed byte-for-byte against a fresh run of this test during
+    ///    `orisnitsa`'s own Phase 3 — transitively validating the Zig port against
+    ///    the C++ reference through this test's own prior validation, without
+    ///    rebuilding the C++ harness. This is the live, ongoing use of this trace
+    ///    format; re-run it on either side of a tree-shape change to either port.
+    ///
+    /// `#[ignore]`d because step 1 requires a separately-built C++ companion (not
+    /// part of this crate or its CI) to be meaningful, and step 2's Zig counterpart
+    /// is likewise excluded from `zig build test` by default (its own trace volume
+    /// breaks that command's IPC protocol with the build runner — see that test's own
+    /// doc comment) — run with `cargo test --lib -- --ignored --nocapture
     /// rbtree::tests::print_oracle_cross_validation_trace` and diff against a fresh
-    /// build of that harness if `rbtree.rs`'s tree-shape logic is ever revisited.
+    /// run of either companion if `rbtree.rs`'s tree-shape logic is ever revisited.
     #[test]
     #[ignore = "manual C++ oracle cross-validation tool, not a self-contained test"]
     fn print_oracle_cross_validation_trace() {
