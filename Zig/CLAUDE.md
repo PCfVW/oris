@@ -23,7 +23,10 @@ Every `.zig` file begins with `// SPDX-License-Identifier: MIT OR Apache-2.0` as
 
 ## Zig version
 
-Target **Zig 0.16.0** (current stable; 0.15.x is one series behind, 0.17.0 imminent) and pin it
-in `build.zig.zon`. The `std.mem.Allocator` vtable signature (alignment representation, the
-`remap` entry) shifted around the 0.15 → 0.16 boundary, and the cross-port invariant is defined
-against a specific interface shape — so the pin matters while Zig is pre-1.0.
+Target **Zig 0.16.0** (current stable as of 2026-08; 0.15.x is one series behind, 0.17.0 is an
+active `-dev` master build with no announced release date) and pin it in `build.zig.zon`. The
+`std.mem.Allocator` vtable signature (alignment representation, the `remap` entry) shifted
+around the 0.15 → 0.16 boundary, and the cross-port invariant is defined against a specific
+interface shape — so the pin matters while Zig is pre-1.0. Re-verify this note directly against
+<https://ziglang.org/download/> before bumping, rather than assuming staleness from the date
+alone — check, don't guess.

@@ -3,9 +3,9 @@ const std = @import("std");
 
 /// Build graph for `orisnitsa` — the Zig port of Dimitar Lazarov's HPHA (2007).
 ///
-/// Stub stage: exposes the `orisnitsa` module and a `test` step so CI has a
-/// green baseline. The allocator core (the bucket and tree *orisnitsi*) lands
-/// in v0.1.0; see `../ROADMAP.md`.
+/// Exposes the `orisnitsa` module and a `test` step. The v0.1.0 allocator core (the
+/// bucket and tree *orisnitsi*) is under active construction, module by module,
+/// mirroring the already-complete `orisnik` Rust port; see `../ROADMAP.md`.
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -16,6 +16,15 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    // `os.zig`'s Unix path calls `std.c.mmap`/`munmap` directly (not the
+    // `std.posix` wrapper — see os.zig's module doc for why), which requires libc
+    // to be linked. Windows uses hand-declared `kernel32` externs instead and needs
+    // no libc; linking it there would be a no-op at best, so this stays conditional,
+    // matching `orisnik`'s own `[target.'cfg(unix)'.dependencies] libc` in Cargo.toml.
+    if (target.result.os.tag != .windows) {
+        mod.link_libc = true;
+    }
 
     // `zig build test` runs the module's `test` blocks. CI runs this in both
     // Debug and ReleaseSafe (runtime safety checks on); see Zig/CONVENTIONS.md.
