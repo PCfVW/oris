@@ -11,9 +11,13 @@ dimitar.lazarov@usa.net
 
 The original header is preserved verbatim in both `hpha.h` and `hpha.cpp`.
 
+## Publication
+
+The HPHA design and this source were published as a chapter by Dimitar Lazarov in *Game Programming Gems 7* (Charles River Media / Course Technology, 2008), alongside the accompanying source code archive from which the files in this directory derive.
+
 ## Licensing basis
 
-The HPHA design was published by Dimitar Lazarov in the *Game Programming Gems* series, and was subsequently re-implemented as `HphaSchemaBase` (and related files) in the [Open 3D Engine](https://github.com/o3de/o3de) (O3DE) project — a Linux Foundation project — where it is distributed under:
+The HPHA design was published by Dimitar Lazarov in the *Game Programming Gems* series (see Publication above), and was subsequently re-implemented as `HphaSchemaBase` (and related files) in the [Open 3D Engine](https://github.com/o3de/o3de) (O3DE) project — a Linux Foundation project — where it is distributed under:
 
 ```
 SPDX-License-Identifier: Apache-2.0 OR MIT
