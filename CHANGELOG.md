@@ -12,6 +12,25 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Added
 
+- The Rust port (`orisnik`) of HPHA's non-debug, single-threaded allocator
+  (`DEBUG_ALLOCATOR`/`MULTITHREADED` remain out of scope, see `ROADMAP.md`):
+  - Cross-platform VM layer, alignment helpers, and a tagged-pointer helper
+    (`os.rs`, `align.rs`, `tag.rs`).
+  - An intrusive doubly-linked list and red-black tree, both faithful ports of
+    HPHA's `intrusive_list`/`intrusive_multi_rbtree` (`list.rs`, `rbtree.rs`),
+    cross-validated against the reference C++ via a standalone oracle harness.
+  - The block header and the bucket (small-allocation) and tree (large-allocation,
+    best-fit + coalescing) sub-allocators (`block.rs`, `bucket.rs`, `tree.rs`).
+  - The top-level `Orisnik` dispatcher plus its three public surfaces: the
+    `oris_*` C-ABI, `unsafe impl GlobalAlloc` (opt-in `#[global_allocator]`), and
+    an optional `unsafe impl core::alloc::Allocator` behind the nightly-only
+    `nightly` Cargo feature (`orisnik.rs`, `capi.rs`, `global_alloc.rs`,
+    `allocator_trait.rs`).
+  - 80+ tests (60+ Miri-covered under `-Zmiri-strict-provenance
+    -Zmiri-tree-borrows`), including a debug-only exhaustive-scan verification of
+    `ptr_in_bucket`'s marker-based dispatch (mirroring HPHA's own `#ifndef
+    NDEBUG` check) added after integration testing reproduced the false-positive
+    HPHA's own comment already anticipates.
 - Project scaffolding ahead of the v0.1.0 allocator implementation:
   - Rust (`orisnik`, edition 2024 / MSRV 1.85) and Zig (`orisnitsa`, 0.16.0) stub
     packages that build and test green.
