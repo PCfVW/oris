@@ -15,9 +15,11 @@ release build — either because they are compile-time / correctness properties,
 because they live in the opt-in debug subsystem (`spomen`: a Rust feature and a Zig
 `comptime` toggle) that is **entirely compiled out when disabled**.
 
-> These describe Oris's **security model**; they are realized as the ports are
-> implemented (v0.1.0 onward; the guard-byte debug subsystem lands in v0.2.0 — see
-> [`ROADMAP.md`](ROADMAP.md)). Until then the repository holds name-reservation stubs.
+> These describe Oris's **security model**, realized starting at v0.1.0 (the
+> guard-byte debug subsystem lands in v0.2.0 — see [`ROADMAP.md`](ROADMAP.md)).
+> Both ports' v0.1.0 allocator cores are implemented on `main` as of this
+> writing; only the published package registries (crates.io, GitHub Releases)
+> still hold name-reservation stubs, pending the v0.1.0 tag.
 
 ## CWEs addressed at no release-time cost
 

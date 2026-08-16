@@ -311,8 +311,8 @@ not a vtable.
 
 ## When Writing `unsafe`
 
-orisnik carries `#![deny(unsafe_op_in_unsafe_fn)]` at the crate root (already present in the
-stub `lib.rs`) — **not** `#![deny(unsafe_code)]`. An allocator cannot quarantine `unsafe`
+orisnik carries `#![deny(unsafe_op_in_unsafe_fn)]` at the crate root (`lib.rs`) — **not**
+`#![deny(unsafe_code)]`. An allocator cannot quarantine `unsafe`
 behind a feature gate the way `anamnesis`, `candle-mi`, and `hypomnesis` do; raw memory is its
 domain. The discipline is therefore not *avoidance* but *containment and proof*.
 

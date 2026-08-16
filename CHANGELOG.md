@@ -31,9 +31,30 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
     `ptr_in_bucket`'s marker-based dispatch (mirroring HPHA's own `#ifndef
     NDEBUG` check) added after integration testing reproduced the false-positive
     HPHA's own comment already anticipates.
+- The Zig port (`orisnitsa`) of the same HPHA slice, module-for-module mirroring
+  `orisnik`:
+  - Cross-platform VM layer, alignment helpers, and a tagged-pointer helper
+    (`os.zig`, `align.zig`, `tag.zig`).
+  - An intrusive doubly-linked list and red-black tree, both faithful ports of
+    HPHA's `intrusive_list`/`intrusive_multi_rbtree` (`list.zig`, `rbtree.zig`),
+    cross-validated against `orisnik`'s own already-C++-oracle-validated trace via
+    a matching 3000-step operation trace (byte-for-byte identical).
+  - The block header and the bucket (small-allocation) and tree (large-allocation,
+    best-fit + coalescing) sub-allocators (`block.zig`, `bucket.zig`, `tree.zig`),
+    including `ptr_in_bucket`'s debug-only exhaustive-scan verification from the
+    start (ported ahead of the false-positive `orisnik` only added after
+    integration testing).
+  - The top-level `Orisnitsa` dispatcher plus its three public surfaces:
+    `Orisnitsa`'s own methods, a `std.mem.Allocator` vtable (`resize` never
+    moves, `remap` may — matching the vtable's own contract), and the `oris_*`
+    C-ABI (`orisnitsa.zig`, `allocator.zig`, `capi.zig`).
+  - 80+ tests, verified in `Debug`/`ReleaseSafe` (`std.testing.allocator` leak
+    detection, runtime safety checks on) and `ReleaseFast`, on all three CI OSes —
+    Zig's analog of the Rust port's Miri gate.
 - Project scaffolding ahead of the v0.1.0 allocator implementation:
-  - Rust (`orisnik`, edition 2024 / MSRV 1.85) and Zig (`orisnitsa`, 0.16.0) stub
-    packages that build and test green.
+  - Initial Rust (`orisnik`, edition 2024 / MSRV 1.85) and Zig (`orisnitsa`,
+    0.16.0) package skeletons — `Cargo.toml`/`build.zig.zon` manifests, a green
+    `cargo test`/`zig build test` baseline — ahead of either allocator core.
   - `Grit-ORIS` coding conventions and AI-assist wiring (`CLAUDE.md`) for both ports.
   - CI for both ports (3-OS matrix; Rust adds a Miri soundness lane) with aggregator
     gate checks, crates.io **Trusted Publishing**, and a re-rooted Zig release asset
