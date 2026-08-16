@@ -51,6 +51,20 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
   - 80+ tests, verified in `Debug`/`ReleaseSafe` (`std.testing.allocator` leak
     detection, runtime safety checks on) and `ReleaseFast`, on all three CI OSes —
     Zig's analog of the Rust port's Miri gate.
+- A shared C header, [`include/oris.h`](include/oris.h), declaring the `oris_*` prototypes
+  behind an opaque `OrisAllocator*` handle, identical for both ports, plus the build
+  changes that make the `oris_*` C-ABI actually linkable by a real C/C++ caller instead
+  of only compiled into each port's own test binary:
+  - `orisnik`: `crate-type = ["lib", "cdylib", "staticlib"]` in `Cargo.toml` — `cargo build
+    --release` now also emits `liborisnik.so`/`.dylib`/`orisnik.dll` and
+    `liborisnik.a`/`orisnik.lib`.
+  - `orisnitsa`: `build.zig` now builds static and shared library artifacts
+    (`liborisnitsa.so`/`.dylib`/`.a`, or `orisnitsa.dll`/`.lib` on Windows) from a module
+    rooted directly at `capi.zig` — Zig only auto-exports `export fn`s that live in a
+    module's own root file, so rooting the library artifacts at `root.zig` (as initially
+    tried) silently produced a library with no `oris_*` symbols at all; verified with
+    `dumpbin /exports` and a real C smoke test linked against both the static and shared
+    artifacts before landing.
 - Project scaffolding ahead of the v0.1.0 allocator implementation:
   - Initial Rust (`orisnik`, edition 2024 / MSRV 1.85) and Zig (`orisnitsa`,
     0.16.0) package skeletons — `Cargo.toml`/`build.zig.zon` manifests, a green

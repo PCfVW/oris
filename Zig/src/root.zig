@@ -53,11 +53,15 @@ pub const Orisnitsa = orisnitsa_mod.Orisnitsa;
 /// `allocator.zig`.
 pub const allocator = allocator_mod.allocator;
 
-// Imported only so their `test` blocks are reachable from this root module, and
-// so `capi.zig`'s `export fn`s are analyzed (and therefore linked, once
-// something builds a library/executable artifact from this module) — not
-// re-exported as part of the public surface above; see this file's own module
-// doc and `capi.zig`'s for why the `oris_*` C-ABI needs no separate `pub use`.
+// Imported only so their `test` blocks are reachable from this root module via
+// this file's own `test { refAllDecls(...) }` block below — not re-exported as
+// part of the public surface above. `capi.zig`'s `export fn`s (the `oris_*`
+// C-ABI) are *not* linked into an artifact by this import alone: Zig only
+// auto-exports `export fn`s that live in a module's own root file, so
+// `build.zig` builds the C-linkable library artifacts from a module rooted
+// directly at `capi.zig`, not this file — see `build.zig`'s own comment on
+// that. This import exists solely so `zig build test` also exercises
+// `capi.zig`'s tests via the `refAllDecls` call below.
 const align_helpers = @import("align.zig");
 const tag = @import("tag.zig");
 const os = @import("os.zig");

@@ -17,7 +17,7 @@ The Zig port of [Oris](https://github.com/PCfVW/oris) — a Rust and Zig port of
 - Three public surfaces over one shared core:
   - **`Orisnitsa`**'s own methods (`alloc`, `free`, `realloc`, `resize`, `purge`, ...) — the idiomatic Zig entry point.
   - **`allocator()`** — hands out a `std.mem.Allocator` backed by an instance, for `std.ArrayList`/`std.HashMap`/etc.
-  - **`oris_*`** — a C-shaped API (`oris_new`, `oris_alloc`, `oris_free`, `oris_realloc`, ...), instance-scoped via an explicit handle — never a hidden global.
+  - **`oris_*`** — a C-shaped API (`oris_new`, `oris_alloc`, `oris_free`, `oris_realloc`, ...), instance-scoped via an explicit handle — never a hidden global. `zig build` also emits real linkable `liborisnitsa.so`/`.dylib`/`.a` (or `orisnitsa.dll`/`.lib` on Windows) artifacts; pair with the shared [`include/oris.h`](https://github.com/PCfVW/oris/blob/main/include/oris.h) prototypes to link from C/C++.
 - 80+ tests, verified in Debug and ReleaseSafe (runtime safety checks on) and ReleaseFast (hot path with checks off), on Windows, Linux, and macOS in CI.
 
 ## Quick start

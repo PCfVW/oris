@@ -15,6 +15,14 @@ categories = ["memory-management"]
 [lib]
 name = "orisnik"
 path = "src/lib.rs"
+# "lib" (rlib) keeps this usable as an ordinary Rust dependency (`Orisnik`,
+# `oris_*` via `pub use`); "cdylib"/"staticlib" additionally emit a real
+# linkable C library (`liborisnik.so`/`.dylib`/`orisnik.dll` +
+# `liborisnik.a`/`orisnik.lib`) so the oris_* C-ABI — implemented and tested
+# since v0.1.0's `capi.rs` — is actually shippable to a C/C++ caller, not just
+# compiled into the test binary. See `../include/oris.h` for the C prototypes
+# (shared with the Zig port, which implements the identical ABI).
+crate-type = ["lib", "cdylib", "staticlib"]
 
 [features]
 # Enables `unsafe impl core::alloc::Allocator for Orisnik` (src/allocator_trait.rs)

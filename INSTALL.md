@@ -49,6 +49,28 @@ each release's notes):
 zig fetch --save=orisnitsa https://github.com/PCfVW/oris/releases/download/vX.Y.Z/orisnitsa-vX.Y.Z.tar.gz
 ```
 
+## Linking from C/C++ (`oris.h`)
+
+Both ports also build a real linkable C library, not just the `oris_*` symbols compiled into
+their own test binaries:
+
+- `orisnik`: `cargo build --release` emits `liborisnik.so`/`.dylib`/`orisnik.dll` (`cdylib`) and
+  `liborisnik.a`/`orisnik.lib` (`staticlib`) under `Rust/target/release/`.
+- `orisnitsa`: `zig build` emits `liborisnitsa.so`/`.dylib`/`.a` (or `orisnitsa.dll`/`.lib` on
+  Windows) under `Zig/zig-out/`.
+
+[`include/oris.h`](include/oris.h) declares the shared `oris_*` prototypes behind an opaque
+`OrisAllocator*` handle — identical whichever port's library is linked:
+
+```c
+#include "oris.h"
+
+OrisAllocator *h = oris_new();
+void *p = oris_alloc(h, 64);
+oris_free(h, p);
+oris_destroy(h);
+```
+
 ## Both ports ship in lockstep
 
 The same version number on `orisnik` (crates.io) and `orisnitsa` (GitHub Release)
