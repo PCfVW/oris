@@ -3,7 +3,7 @@
 *A high-performance heap allocator, after the folk-allotters of fate.*
 A Rust and Zig port of Dimitar Lazarov's **HPHA** (2007).
 
-*Working draft — v0.4.*
+*Document revision 0.4.*
 
 ---
 
@@ -17,7 +17,7 @@ A heap allocator that bounds regions of memory and sets the limits of each block
 
 ## References
 
-1. **Máchal, Jan Hanuš.** *Slavic Mythology.* Vol. 3 of *The Mythology of All Races*, edited by Louis Herbert Gray, translated from the Czech by F. Krupička. Boston: Marshall Jones, 1918. Chapter IV, "Genii of Fate." — The canonical scholarly source on the Bulgarian *Orisnici* and their Greek etymology (ὁρίζοντες). *(Page range to be added once verified against the print edition.)*
+1. **Máchal, Jan Hanuš.** *Slavic Mythology.* Vol. 3 of *The Mythology of All Races*, edited by Louis Herbert Gray, translated from the Czech by F. Krupička. Boston: Marshall Jones, 1918. Chapter IV, "Genii of Fate," pp. 249–252 (the Bulgarian *Orisnici*/*Urisnici* and their Greek etymology, ὁρίζοντες, discussed on p. 250). — The canonical scholarly source on the Bulgarian *Orisnici* and their Greek etymology. Verified against the scanned text at [archive.org](https://archive.org/details/mythologyofallra03gray).
 
 2. **Procopius of Caesarea.** *History of the Wars*, Book VII (the Gothic War), ch. 14 (c. 553 CE). — The earliest written reference to Slavic religious beliefs about fate; Procopius reports that the Slavs did not regard fate as a power over man but offered sacrifices to a higher being who dealt out life and death. *Terminus a quo* for Slavic fate beliefs in the written record.
 
@@ -102,4 +102,4 @@ The voice is **understated mythic**: a serious systems library with quiet folklo
 
 ---
 
-*Open questions:* per-thread cache naming (a fourth sister? a household servant?); whether to keep the gendered Rust/Zig split or pick one canonical name; verification of Máchal page range.
+*Open questions:* per-thread cache naming (a fourth sister? a household servant?); whether to keep the gendered Rust/Zig split or pick one canonical name.

@@ -9,6 +9,8 @@
 *.md   text eol=lf
 *.yml  text eol=lf
 *.yaml text eol=lf
+*.h    text eol=lf
+*.c    text eol=lf
 
 # Preserve the verbatim 2007 HPHA reference source exactly as vendored — no
 # line-ending normalization.

@@ -32,7 +32,7 @@ This invariant is the property that justifies maintaining two ports rather than 
 - **Cross-platform virtual-memory layer** (Linux + macOS + Windows; abstracts HPHA's Win32-only `VirtualAlloc`)
 - **Per-language idiomatic surfaces:** Rust's `Allocator` trait surface, Zig's `std.mem.Allocator` interface — alongside the C-shaped `oris_*` functions
 - **Unit test suites** per port, targeting 50+ tests each, with API parity
-- **Documentation:** top-level README, per-language READMEs, lineage attribution to Lazarov / Luxoflux, `LICENSE` (Apache-2.0), `CHANGELOG.md`, `INSTALL.md`
+- **Documentation:** top-level README, per-language READMEs, lineage attribution to Lazarov / Luxoflux, `LICENSE` (dual MIT OR Apache-2.0, via `LICENSE-MIT`/`LICENSE-APACHE`), `CHANGELOG.md`, `INSTALL.md`
 - **Out of scope for v0.1.0:** debug instrumentation, multithreaded mode, benchmarks, examples beyond the test suite
 
 ### v0.2.0 — Debug allocator

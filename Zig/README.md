@@ -17,8 +17,9 @@ The Zig port of [Oris](https://github.com/PCfVW/oris) — a Rust and Zig port of
 - Three public surfaces over one shared core:
   - **`Orisnitsa`**'s own methods (`alloc`, `free`, `realloc`, `resize`, `purge`, ...) — the idiomatic Zig entry point.
   - **`allocator()`** — hands out a `std.mem.Allocator` backed by an instance, for `std.ArrayList`/`std.HashMap`/etc.
-  - **`oris_*`** — a C-shaped API (`oris_new`, `oris_alloc`, `oris_free`, `oris_realloc`, ...), instance-scoped via an explicit handle — never a hidden global. `zig build` also emits real linkable `liborisnitsa.so`/`.dylib`/`.a` (or `orisnitsa.dll`/`.lib` on Windows) artifacts; pair with the shared [`include/oris.h`](https://github.com/PCfVW/oris/blob/main/include/oris.h) prototypes to link from C/C++.
+  - **`oris_*`** — a C-shaped API (`oris_new`, `oris_alloc`, `oris_free`, `oris_realloc`, ...), instance-scoped via an explicit handle — never a hidden global. `zig build` also emits real linkable `liborisnitsa.so`/`.dylib`/`.a` (or `orisnitsa.dll`/`.lib` on Windows) artifacts; pair with [`include/oris.h`](include/oris.h) (vendored here — byte-identical to [the canonical copy](https://github.com/PCfVW/oris/blob/main/include/oris.h), so this package is self-contained) to link from C/C++.
 - 80+ tests, verified in Debug and ReleaseSafe (runtime safety checks on) and ReleaseFast (hot path with checks off), on Windows, Linux, and macOS in CI.
+- **64-bit platforms only for v0.1.0** — enforced at compile time (see `src/block.zig`'s module doc).
 
 ## Quick start
 
@@ -36,6 +37,12 @@ defer list.deinit(gpa);
 `Orisnitsa.init()` is a pure, `comptime`-constructible value, so a
 `var ALLOCATOR: orisnitsa.Orisnitsa = .init();`-style global needs no
 `OnceLock`/`LazyLock`-equivalent indirection. See [INSTALL.md](https://github.com/PCfVW/oris/blob/main/INSTALL.md) for build instructions and toolchain requirements — the **Zig 0.16.0** pin in [`build.zig.zon`](build.zig.zon) is load-bearing while Zig is pre-1.0: the `std.mem.Allocator` vtable shape is version-sensitive across releases.
+
+> **Single-threaded only.** The `std.mem.Allocator` `allocator()` hands out has no
+> internal locking; calling into the same `Orisnitsa` instance from more than one
+> thread concurrently is undefined behaviour. The explicit-instance model (no hidden
+> global) makes this easy to scope correctly — one instance per thread — but nothing
+> checks it for you.
 
 The Rust sibling is `orisnik`. See the [project brief](https://github.com/PCfVW/oris/blob/main/BRIEF.md) for design rationale and the [roadmap](https://github.com/PCfVW/oris/blob/main/ROADMAP.md) for what ships in each version.
 

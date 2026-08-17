@@ -13,13 +13,13 @@ A Rust and Zig port of Dimitar Lazarov's **HPHA** (2007).
 [![Zig](https://img.shields.io/badge/Zig-0.16.0-f7a41d?logo=zig)](https://ziglang.org/)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
-**Working draft — v0.4. Both the `orisnik` (Rust) and `orisnitsa` (Zig) v0.1.0 allocator cores are implemented and passing their full verification gauntlets. Both ports release together, in lockstep, once v0.1.0 is tagged.**
+**Document revision 0.4, tracking the codebase toward v0.1.0. Both the `orisnik` (Rust) and `orisnitsa` (Zig) v0.1.0 allocator cores are implemented and passing their full verification gauntlets. Both ports release together, in lockstep, once v0.1.0 is tagged.**
 
 ## Status
 
 - **`orisnik` (Rust)** — the v0.1.0 allocator core is implemented: the bucket (small-allocation) and red-black-tree best-fit (large-allocation) sub-allocators, plus the three public surfaces (`oris_*` C-ABI, `GlobalAlloc`, an optional `Allocator` trait). 80+ tests, most Miri-covered. Not yet released — see [Rust/README.md](Rust/README.md) for details and [CHANGELOG.md](CHANGELOG.md) for what shipped.
 - **`orisnitsa` (Zig)** — the v0.1.0 allocator core is implemented: the same bucket and red-black-tree best-fit sub-allocators, plus the three public surfaces (`Orisnitsa`'s own methods, a `std.mem.Allocator` vtable, the `oris_*` C-ABI). 80+ tests, verified in Debug/ReleaseSafe/ReleaseFast across all three OSes — Zig's analog of the Rust port's Miri gate. Not yet released — see [Zig/README.md](Zig/README.md) for details and [CHANGELOG.md](CHANGELOG.md) for what shipped.
-- Both ports **ship in lockstep** (see [Versioning policy](ROADMAP.md#versioning-policy)): one version number means the same feature set and the same internal state transitions on both sides. With both cores now feature-complete, v0.1.0 is ready to tag once the release ceremony runs.
+- Both ports **ship in lockstep** (see [Versioning policy](ROADMAP.md#versioning-policy)): one version number means the same feature set and the same internal state transitions on both sides. With both cores now feature-complete, v0.1.0 is ready to tag once the release ceremony runs — see [RELEASING.md](RELEASING.md) for that checklist.
 
 The two foundational documents:
 

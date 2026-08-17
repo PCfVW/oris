@@ -16,10 +16,11 @@ A Rust port of [Oris](https://github.com/PCfVW/oris) — a Rust and Zig port of 
 - A size-class **bucket allocator** for small allocations (up to 256 bytes), backed by fixed-size 64&nbsp;KiB OS pages.
 - A red-black-tree **best-fit allocator** for everything larger, with physical-neighbour coalescing.
 - Three public surfaces over one shared core:
-  - **`oris_*`** — a C-shaped API (`oris_new`, `oris_alloc`, `oris_free`, `oris_realloc`, ...), instance-scoped via an explicit handle — never a hidden global. `cargo build --release` also emits real linkable `liborisnik.so`/`.dylib`/`orisnik.dll` + `liborisnik.a`/`orisnik.lib` artifacts (`crate-type = ["lib", "cdylib", "staticlib"]`); pair with the shared [`include/oris.h`](https://github.com/PCfVW/oris/blob/main/include/oris.h) prototypes to link from C/C++.
+  - **`oris_*`** — a C-shaped API (`oris_new`, `oris_alloc`, `oris_free`, `oris_realloc`, ...), instance-scoped via an explicit handle — never a hidden global. `cargo build --release` also emits real linkable `liborisnik.so`/`.dylib`/`orisnik.dll` + `liborisnik.a`/`orisnik.lib` artifacts (`crate-type = ["lib", "cdylib", "staticlib"]`); pair with [`include/oris.h`](include/oris.h) (vendored here — byte-identical to [the canonical copy](https://github.com/PCfVW/oris/blob/main/include/oris.h), so this package is self-contained) to link from C/C++.
   - **`unsafe impl GlobalAlloc`** — opt in as a `#[global_allocator]`.
   - **`unsafe impl core::alloc::Allocator`** — optional, behind the `nightly` Cargo feature, for `Box::new_in`/`Vec::new_in`.
 - 80+ tests, most Miri-covered under `-Zmiri-strict-provenance -Zmiri-tree-borrows`.
+- **64-bit platforms only for v0.1.0** — enforced at compile time (see `src/block.rs`'s module doc).
 
 ## Quick start
 
@@ -32,6 +33,11 @@ static ALLOCATOR: Orisnik = Orisnik::new();
 
 `Orisnik::new()` is a `const fn`, so the `static` above const-evaluates at compile time — no `OnceLock`/`LazyLock` indirection needed. See [INSTALL.md](https://github.com/PCfVW/oris/blob/main/INSTALL.md) for build instructions and toolchain requirements.
 
+> **Single-threaded only.** `orisnik` has no internal locking; installing it as
+> `#[global_allocator]` in a genuinely multithreaded program — including the default
+> `cargo test` harness — is undefined behaviour, not merely unsupported. See
+> [`Orisnik`](https://docs.rs/orisnik)'s own `# Thread safety` doc section.
+
 The Zig sibling is `orisnitsa`. See the [project brief](https://github.com/PCfVW/oris/blob/main/BRIEF.md) for design rationale and the [roadmap](https://github.com/PCfVW/oris/blob/main/ROADMAP.md) for what ships in each version.
 
 ## License
@@ -39,6 +45,11 @@ The Zig sibling is `orisnitsa`. See the [project brief](https://github.com/PCfVW
 Dual-licensed under [MIT](https://github.com/PCfVW/oris/blob/main/LICENSE-MIT) OR [Apache-2.0](https://github.com/PCfVW/oris/blob/main/LICENSE-APACHE), at your option.
 
 ## Development
+
+> The crates.io package is lean by design — source, license, and this README only.
+> `CLAUDE.md`, `CONVENTIONS.md`, and `clippy.toml` (the AI-assistant wiring and coding
+> conventions below) are excluded from the published crate; see them on
+> [GitHub](https://github.com/PCfVW/oris/tree/main/Rust) instead.
 
 - Exclusively developed with [Claude Code](https://claude.com/product/claude-code)
 - `unsafe` soundness gated on [Miri](https://github.com/rust-lang/miri) (`-Zmiri-strict-provenance -Zmiri-tree-borrows`) as a required CI lane, not just a local dev-time check

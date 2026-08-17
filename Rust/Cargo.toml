@@ -11,6 +11,11 @@ homepage = "https://github.com/PCfVW/oris"
 readme = "README.md"
 keywords = ["allocator", "heap", "memory", "global-allocator", "hpha"]
 categories = ["memory-management"]
+# Keeps the published package to source + license + README + the shared C header.
+# CLAUDE.md/CONVENTIONS.md (AI-assistant wiring, coding conventions) and clippy.toml
+# (this crate's own lint-floor config, not meaningful to a downstream consumer's
+# build) stay GitHub-only — crates.io is the lean tier, the repo is the full tier.
+exclude = ["CLAUDE.md", "CONVENTIONS.md", "clippy.toml"]
 
 [lib]
 name = "orisnik"

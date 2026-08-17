@@ -2,6 +2,10 @@
 
 Oris is a two-port monorepo; each port builds independently with its own toolchain.
 
+**64-bit platforms only for v0.1.0** — both ports enforce this at compile time (a
+`const`/`comptime` assert on `usize`/`@bitSizeOf(usize) == 64`; see `Rust/src/block.rs`'s and
+`Zig/src/block.zig`'s module docs for why).
+
 ## Rust — `orisnik`
 
 - **Toolchain:** Rust **1.85+** (edition 2024). The MSRV is 1.85 — the release that
@@ -60,7 +64,11 @@ their own test binaries:
   Windows) under `Zig/zig-out/`.
 
 [`include/oris.h`](include/oris.h) declares the shared `oris_*` prototypes behind an opaque
-`OrisAllocator*` handle — identical whichever port's library is linked:
+`OrisAllocator*` handle — identical whichever port's library is linked. Building from this
+repo, use the canonical copy at the repo root; each port's own published package (crates.io,
+the Zig release tarball) also carries its own byte-identical vendored copy
+(`Rust/include/oris.h`, `Zig/include/oris.h` — kept in sync by `c-abi-ci.yml`'s drift check)
+since a package can't reference a file outside its own root:
 
 ```c
 #include "oris.h"
