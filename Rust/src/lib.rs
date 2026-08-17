@@ -29,6 +29,11 @@
 //! `os.rs`'s module doc describes for every other OS-touching test in this crate; the
 //! actual runtime behaviour this illustrates is covered by `global_alloc.rs`'s own
 //! Miri-ignored, OS-touching tests instead.)
+//!
+//! **Before installing [`Orisnik`] as a `#[global_allocator]`, read its own doc's
+//! `# Thread safety` section**: this crate is single-threaded internally, and doing
+//! so in a genuinely multithreaded program — including the default `cargo test`
+//! harness — is undefined behaviour, not merely unsupported.
 
 #![doc(html_root_url = "https://docs.rs/orisnik/0.0.0")]
 #![deny(unsafe_op_in_unsafe_fn)]

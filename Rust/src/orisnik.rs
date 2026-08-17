@@ -34,6 +34,24 @@ use core::ptr::NonNull;
 /// - `buckets` and `tree` are otherwise fully independent: neither reads nor mutates
 ///   the other's state, matching HPHA's own `allocator` (whose `bucket_*`/`tree_*`
 ///   methods never call each other except through this dispatch layer).
+///
+/// # Thread safety
+/// **`Orisnik` is single-threaded internally** (`Cell`-based state throughout
+/// `buckets`/`tree`, no locking — HPHA's `MULTITHREADED` mode is out of scope until
+/// v2.x, see `ROADMAP.md`) and carries `unsafe impl Sync` for one reason only: every
+/// `static` item, including the standard `#[global_allocator] static ALLOCATOR: Orisnik
+/// = Orisnik::new();` pattern shown below, requires its type to be `Sync`
+/// unconditionally, regardless of whether `#[global_allocator]` itself implies any
+/// concurrency guarantee.
+///
+/// **Installing an `Orisnik` as `#[global_allocator]` in a genuinely multithreaded
+/// program is undefined behaviour** the moment two threads call into it concurrently —
+/// this includes the default `cargo test` harness, which runs tests on a thread pool.
+/// This crate cannot check single-threaded exclusivity at compile time, so it is a
+/// documented embedder contract, not a compiler-enforced one: callers opting into the
+/// `GlobalAlloc` impl or the `nightly`-gated `Allocator` trait impl must guarantee,
+/// themselves, that no more than one OS thread ever calls into a given `Orisnik`
+/// instance.
 pub struct Orisnik {
     /// The small-allocation path — every request `<= MAX_SMALL_ALLOCATION` (after
     /// [`bucket::clamp_small_allocation`]) lands here.
