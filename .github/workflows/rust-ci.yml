@@ -118,8 +118,17 @@ jobs:
       run:
         working-directory: . # gate job has no checkout; override the Rust/ default
     steps:
+      # `contains(needs.*.result, 'failure')` does NOT reliably surface a matrix
+      # job's per-leg failures here — confirmed empirically (not just suspected):
+      # a genuine "1.85 on macos-latest" failure in the `check` matrix left this
+      # step skipped and the job green. Check each dependency by name instead;
+      # `!= 'success'` also catches 'cancelled'/'skipped' without listing them.
       - name: Fail if any required job did not succeed
-        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        if: |
+          needs.check.result != 'success' ||
+          needs.miri.result != 'success' ||
+          needs.docs.result != 'success' ||
+          needs.nightly-feature.result != 'success'
         run: |
           echo "One or more required Rust CI jobs failed or were cancelled."
           exit 1
