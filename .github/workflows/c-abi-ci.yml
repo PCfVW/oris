@@ -57,9 +57,19 @@ jobs:
         working-directory: Zig
         run: zig build
 
-      # Locate each port's shared-library artifact and its link-time import
-      # library (Windows only — ELF/Mach-O link directly against the .so/.dylib
-      # itself). Exported as env vars so the next step stays OS-agnostic.
+      # Locate each port's shared-library artifact. Windows links against an
+      # explicit import-library path (its DLL search order already includes the
+      # exe's own directory, so a copy alongside it is enough at runtime). ELF/
+      # Mach-O instead link by -L<dir> -l<name>, not a bare path: neither
+      # `cargo build --release`'s .so nor a path-linked .dylib is guaranteed to
+      # carry an SONAME/install-name of just its own filename, and passing the
+      # relative path directly as a linker input embeds that whole path as the
+      # NEEDED entry — confirmed the hard way on ubuntu-latest ("cannot open
+      # shared object file: Rust/target/release/liborisnik.so", LD_LIBRARY_PATH
+      # notwithstanding, since the loader was looking for that literal path, not
+      # a bare filename it could resolve via the search path). -L/-l is the
+      # standard, SONAME-independent way to link and get a bare-filename NEEDED
+      # entry, which LD_LIBRARY_PATH (set below) can then actually resolve.
       - name: Locate shared-library artifacts
         shell: bash
         run: |
@@ -69,20 +79,26 @@ jobs:
             Linux)
               cp Rust/target/release/liborisnik.so smoke_run/
               cp Zig/zig-out/lib/liborisnitsa.so smoke_run/
-              echo "RUST_LINK_LIB=Rust/target/release/liborisnik.so" >> "$GITHUB_ENV"
-              echo "ZIG_LINK_LIB=Zig/zig-out/lib/liborisnitsa.so" >> "$GITHUB_ENV"
+              {
+                echo "RUST_LINK_ARGS=-LRust/target/release -lorisnik"
+                echo "ZIG_LINK_ARGS=-LZig/zig-out/lib -lorisnitsa"
+              } >> "$GITHUB_ENV"
               ;;
             macOS)
               cp Rust/target/release/liborisnik.dylib smoke_run/
               cp Zig/zig-out/lib/liborisnitsa.dylib smoke_run/
-              echo "RUST_LINK_LIB=Rust/target/release/liborisnik.dylib" >> "$GITHUB_ENV"
-              echo "ZIG_LINK_LIB=Zig/zig-out/lib/liborisnitsa.dylib" >> "$GITHUB_ENV"
+              {
+                echo "RUST_LINK_ARGS=-LRust/target/release -lorisnik"
+                echo "ZIG_LINK_ARGS=-LZig/zig-out/lib -lorisnitsa"
+              } >> "$GITHUB_ENV"
               ;;
             Windows)
               cp Rust/target/release/orisnik.dll smoke_run/
               cp Zig/zig-out/bin/orisnitsa.dll smoke_run/
-              echo "RUST_LINK_LIB=Rust/target/release/orisnik.dll.lib" >> "$GITHUB_ENV"
-              echo "ZIG_LINK_LIB=Zig/zig-out/lib/import/orisnitsa.lib" >> "$GITHUB_ENV"
+              {
+                echo "RUST_LINK_ARGS=Rust/target/release/orisnik.dll.lib"
+                echo "ZIG_LINK_ARGS=Zig/zig-out/lib/import/orisnitsa.lib"
+              } >> "$GITHUB_ENV"
               ;;
             *)
               echo "::error::unhandled runner.os '${{ runner.os }}'"; exit 1
@@ -91,16 +107,17 @@ jobs:
 
       # `zig cc` (a real Clang) compiles+links tests/c-abi/smoke.c uniformly on
       # all three OSes — no per-OS MSVC/gcc setup action needed, since Zig is
-      # already a build dependency of this job. Verified locally before landing
-      # this workflow (both links succeed, both smoke tests exit 0).
+      # already a build dependency of this job. $RUST_LINK_ARGS/$ZIG_LINK_ARGS
+      # deliberately expand unquoted: each is a shell word list (a path on
+      # Windows, "-L... -l..." on Unix), not a single token.
       - name: Compile and run the C smoke test against both ports
         shell: bash
         run: |
           set -euo pipefail
           ext=""
           [ "${{ runner.os }}" = "Windows" ] && ext=".exe"
-          zig cc -Iinclude tests/c-abi/smoke.c "$RUST_LINK_LIB" -o "smoke_run/smoke_rust${ext}"
-          zig cc -Iinclude tests/c-abi/smoke.c "$ZIG_LINK_LIB" -o "smoke_run/smoke_zig${ext}"
+          zig cc -Iinclude tests/c-abi/smoke.c $RUST_LINK_ARGS -o "smoke_run/smoke_rust${ext}"
+          zig cc -Iinclude tests/c-abi/smoke.c $ZIG_LINK_ARGS -o "smoke_run/smoke_zig${ext}"
           cd smoke_run
           export LD_LIBRARY_PATH="$PWD:${LD_LIBRARY_PATH:-}"
           export DYLD_LIBRARY_PATH="$PWD:${DYLD_LIBRARY_PATH:-}"
