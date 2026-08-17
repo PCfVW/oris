@@ -1,7 +1,8 @@
 # Rust
 /Rust/target/
 /Rust/**/*.rs.bk
-Cargo.lock
+# Cargo.lock is intentionally tracked (Rust/Cargo.lock) — pins the Miri/nightly CI
+# lanes and local builds against dependency drift; see Rust/CLAUDE.md.
 
 # Zig
 /Zig/zig-cache/
