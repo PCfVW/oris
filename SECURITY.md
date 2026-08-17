@@ -17,9 +17,6 @@ because they live in the opt-in debug subsystem (`spomen`: a Rust feature and a 
 
 > These describe Oris's **security model**, realized starting at v0.1.0 (the
 > guard-byte debug subsystem lands in v0.2.0 — see [`ROADMAP.md`](ROADMAP.md)).
-> Both ports' v0.1.0 allocator cores are implemented on `main` as of this
-> writing; only the published package registries (crates.io, GitHub Releases)
-> still hold name-reservation stubs, pending the v0.1.0 tag.
 
 ## CWEs addressed at no release-time cost
 
@@ -53,13 +50,10 @@ allocator:
 
 ## Supported versions
 
-Oris is pre-release. Until v0.1.0 there is no supported release line; fixes land on
-`main`.
-
 | Version | Supported |
 |---|---|
-| `main` (pre-release) | ✅ |
-| < 0.1.0 | ❌ — name-reservation stubs only |
+| 0.1.x | ✅ |
+| < 0.1.0 | ❌ — pre-release / name-reservation stubs only |
 
 ## Reporting a vulnerability
 

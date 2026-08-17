@@ -10,6 +10,8 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-17
+
 ### Added
 
 - The Rust port (`orisnik`) of HPHA's non-debug, single-threaded allocator
@@ -74,9 +76,21 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
     gate checks, crates.io **Trusted Publishing**, and a re-rooted Zig release asset
     with a recorded `zig fetch` hash.
   - `INSTALL.md`, `SECURITY.md`, README badges, Dependabot, and the Rust lint floor.
+- Release engineering ahead of the tag:
+  - `RELEASING.md`, the release-ceremony checklist, plus tag↔manifest version
+    consistency gates in both `rust-publish.yml` and `zig-release.yml`.
+  - A cross-platform C-ABI smoke-test workflow (`c-abi-ci.yml`) that builds both
+    ports' real linkable libraries and links a real C caller against each via
+    `zig cc`; `oris.h` vendored into both packages with a CI drift check.
+  - CI coverage for the `nightly` `Allocator`-trait feature (test + clippy),
+    previously verified only locally; both release workflows' own gauntlets
+    extended to match (Miri re-run on the exact tagged commit, `ReleaseFast`
+    tests, a packaged-tarball build-test for the Zig release asset).
+  - `Orisnik`'s single-threaded/UB-if-multithreaded contract published on its
+    public type doc (previously only in a private module's comment).
+  - The C++ oracle harness (`Cpp/oracle/`) behind the three-way RB-tree
+    cross-validation, reconstructed and re-verified live: all 3000 steps match
+    byte-for-byte across every C++/Rust/Zig pairing.
 
-<!-- On cutting v0.1.0, add a dated section and move the shipped items here:
-## [0.1.0] - YYYY-MM-DD
--->
-
-[Unreleased]: https://github.com/PCfVW/oris/commits/main
+[Unreleased]: https://github.com/PCfVW/oris/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/PCfVW/oris/releases/tag/v0.1.0
