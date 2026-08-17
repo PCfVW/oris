@@ -39,28 +39,66 @@ jobs:
           [ -z "$tag" ] && tag="${GITHUB_REF_NAME}"
           echo "TAG=${tag}" >> "$GITHUB_ENV"
 
-      # Gauntlet before releasing — safety checks ON.
+      # Lockstep-versioning gate (ROADMAP.md#versioning-policy): a tag pushed without
+      # first bumping build.zig.zon's own .version would otherwise release a package
+      # whose manifest silently disagrees with the tag that shipped it. Skipped on a
+      # workflow_dispatch smoke test with no matching vX.Y.Z tag ref (TAG then has no
+      # leading "v" to strip and version drift isn't the point of that run).
+      - name: Verify build.zig.zon version matches the release tag
+        working-directory: Zig
+        run: |
+          case "$TAG" in
+            v*)
+              want="${TAG#v}"
+              got="$(grep -oP '(?<=\.version = ")[^"]+' build.zig.zon)"
+              if [ "$want" != "$got" ]; then
+                echo "::error::build.zig.zon .version ('$got') does not match release tag '$TAG' (expected '$want')"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Non-vX.Y.Z tag/ref ('$TAG') — skipping version-match check (manual smoke-test run)."
+              ;;
+          esac
+
+      # Gauntlet before releasing — safety checks ON, plus the hot-path-with-checks-off
+      # build zig-ci.yml's matrix already requires.
       - name: Formatting
         working-directory: Zig
         run: zig fmt --check build.zig build.zig.zon src
-      - name: Build & test (Debug + ReleaseSafe)
+      - name: Build & test (Debug + ReleaseSafe + ReleaseFast)
         working-directory: Zig
         run: |
           zig build test
           zig build test -Doptimize=ReleaseSafe
+          zig build test -Doptimize=ReleaseFast
 
       # Re-root the Zig/ subdirectory as the package: a FLAT tarball whose root
       # holds build.zig.zon, so `zig fetch <url>` finds the manifest. A wrapper
       # directory does NOT work — verified against Zig 0.16.0. (The GitHub
-      # auto-tarball is repo-rooted, hence unusable for a subdir package.)
+      # auto-tarball is repo-rooted, hence unusable for a subdir package.) Mirrors
+      # build.zig.zon's own .paths list (kept in sync by hand): include/ carries the
+      # vendored oris.h (Rust/CONVENTIONS.md's G7 fix), README.md so an installed
+      # package carries its own docs.
       - name: Package re-rooted tarball
         id: pkg
         run: |
           name="orisnitsa-${TAG}"
           mkdir -p "staging/${name}"
-          cp -r Zig/build.zig Zig/build.zig.zon Zig/src Zig/LICENSE-MIT Zig/LICENSE-APACHE "staging/${name}/"
-          tar -czf "${name}.tar.gz" -C "staging/${name}" build.zig build.zig.zon src LICENSE-MIT LICENSE-APACHE
+          cp -r Zig/build.zig Zig/build.zig.zon Zig/src Zig/include Zig/LICENSE-MIT Zig/LICENSE-APACHE Zig/README.md "staging/${name}/"
+          tar -czf "${name}.tar.gz" -C "staging/${name}" build.zig build.zig.zon src include LICENSE-MIT LICENSE-APACHE README.md
           echo "asset=${name}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      # Build-test the packaged tarball itself — not just the Zig/ checkout — so a
+      # missing .paths entry or a re-rooting regression fails here, not in a
+      # consumer's zig fetch. Exercises the exact bytes about to be released.
+      - name: Build-test the packaged tarball
+        run: |
+          mkdir -p extracted
+          tar -xzf "${{ steps.pkg.outputs.asset }}" -C extracted
+          cd extracted
+          zig build test
+          zig build test -Doptimize=ReleaseSafe
 
       # Compute the package hash the way a consumer's `zig fetch` will, and surface
       # it in the release notes so it can be pinned verbatim.

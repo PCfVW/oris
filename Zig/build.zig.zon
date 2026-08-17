@@ -20,11 +20,18 @@
 
     // Files included in the package hash and kept on disk by the package
     // manager. Paths are relative to this build root (the Zig/ subdirectory).
+    // `include/oris.h` is a vendored, byte-identical copy of the canonical
+    // `../include/oris.h` (kept in sync by c-abi-ci.yml's drift check) — the
+    // top-level file itself sits outside this build root and can't be
+    // referenced directly. `README.md` ships so an installed package carries
+    // its own documentation, not just source.
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
+        "include",
         "LICENSE-MIT",
         "LICENSE-APACHE",
+        "README.md",
     },
 }
