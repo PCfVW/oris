@@ -1,0 +1,122 @@
+name: C-ABI CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: c-abi-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke-test:
+    # Builds both ports' real linkable libraries and links a real C caller
+    # against each via include/oris.h — the gap this closes: zig-ci.yml only ran
+    # `zig build test` (never even building the library artifacts), and neither
+    # port's CI compiled a caller outside its own test binary. This is exactly
+    # the failure mode the project already hit once (CHANGELOG.md: a re-rooted
+    # module producing a DLL with an empty export table, caught only by manually
+    # running `dumpbin /exports`) — the guard against its recurrence used to be a
+    # comment; this job makes it a gate.
+    name: smoke test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: Rust
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: "0.16.0"
+
+      # Header-parity gate: Rust/include/oris.h and Zig/include/oris.h are
+      # vendored, byte-identical copies of the canonical root include/oris.h
+      # (each port's own package can't reference a file outside its package
+      # root — see Rust/README.md's and Zig/README.md's C-linking notes). A
+      # copy that drifts from the canonical header is a silent ABI mismatch
+      # waiting to happen; catch it here instead.
+      - name: Verify vendored oris.h copies match the canonical header
+        shell: bash
+        run: |
+          diff include/oris.h Rust/include/oris.h
+          diff include/oris.h Zig/include/oris.h
+
+      - name: Build orisnik (release, cdylib + staticlib)
+        working-directory: Rust
+        run: cargo build --release
+
+      - name: Build orisnitsa (static + shared libs)
+        working-directory: Zig
+        run: zig build
+
+      # Locate each port's shared-library artifact and its link-time import
+      # library (Windows only — ELF/Mach-O link directly against the .so/.dylib
+      # itself). Exported as env vars so the next step stays OS-agnostic.
+      - name: Locate shared-library artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p smoke_run
+          case "${{ runner.os }}" in
+            Linux)
+              cp Rust/target/release/liborisnik.so smoke_run/
+              cp Zig/zig-out/lib/liborisnitsa.so smoke_run/
+              echo "RUST_LINK_LIB=Rust/target/release/liborisnik.so" >> "$GITHUB_ENV"
+              echo "ZIG_LINK_LIB=Zig/zig-out/lib/liborisnitsa.so" >> "$GITHUB_ENV"
+              ;;
+            macOS)
+              cp Rust/target/release/liborisnik.dylib smoke_run/
+              cp Zig/zig-out/lib/liborisnitsa.dylib smoke_run/
+              echo "RUST_LINK_LIB=Rust/target/release/liborisnik.dylib" >> "$GITHUB_ENV"
+              echo "ZIG_LINK_LIB=Zig/zig-out/lib/liborisnitsa.dylib" >> "$GITHUB_ENV"
+              ;;
+            Windows)
+              cp Rust/target/release/orisnik.dll smoke_run/
+              cp Zig/zig-out/bin/orisnitsa.dll smoke_run/
+              echo "RUST_LINK_LIB=Rust/target/release/orisnik.dll.lib" >> "$GITHUB_ENV"
+              echo "ZIG_LINK_LIB=Zig/zig-out/lib/import/orisnitsa.lib" >> "$GITHUB_ENV"
+              ;;
+            *)
+              echo "::error::unhandled runner.os '${{ runner.os }}'"; exit 1
+              ;;
+          esac
+
+      # `zig cc` (a real Clang) compiles+links tests/c-abi/smoke.c uniformly on
+      # all three OSes — no per-OS MSVC/gcc setup action needed, since Zig is
+      # already a build dependency of this job. Verified locally before landing
+      # this workflow (both links succeed, both smoke tests exit 0).
+      - name: Compile and run the C smoke test against both ports
+        shell: bash
+        run: |
+          set -euo pipefail
+          ext=""
+          [ "${{ runner.os }}" = "Windows" ] && ext=".exe"
+          zig cc -Iinclude tests/c-abi/smoke.c "$RUST_LINK_LIB" -o "smoke_run/smoke_rust${ext}"
+          zig cc -Iinclude tests/c-abi/smoke.c "$ZIG_LINK_LIB" -o "smoke_run/smoke_zig${ext}"
+          cd smoke_run
+          export LD_LIBRARY_PATH="$PWD:${LD_LIBRARY_PATH:-}"
+          export DYLD_LIBRARY_PATH="$PWD:${DYLD_LIBRARY_PATH:-}"
+          "./smoke_rust${ext}"
+          "./smoke_zig${ext}"
+
+  # Aggregator gate: a single stable check to require in branch protection,
+  # matching rust-ci.yml's/zig-ci.yml's own pattern.
+  c-abi-ci-success:
+    name: C-ABI CI success
+    needs: [smoke-test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any required job did not succeed
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          echo "One or more required C-ABI CI jobs failed or were cancelled."
+          exit 1
