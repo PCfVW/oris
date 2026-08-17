@@ -12,10 +12,17 @@ Every `.rs` file begins with `// SPDX-License-Identifier: MIT OR Apache-2.0` as 
 ## Pre-commit checks (once code lands)
 
 1. `cargo fmt`
-2. `cargo clippy --all-targets --all-features -- -D warnings`
+2. `cargo clippy --all-targets -- -D warnings` — the default (stable) build. `--all-features`
+   is **not** added here: it pulls in the nightly-only `nightly` feature
+   (`#![feature(allocator_api)]`), which is a hard `E0554` compile error on a stable
+   toolchain, not a lint failure. Run that surface separately, on nightly, whenever
+   `allocator_trait.rs` or the `nightly` feature itself changes:
+   `cargo +nightly clippy --all-targets --features nightly -- -D warnings` and
+   `cargo +nightly test --features nightly`.
 3. `cargo test`
-4. `cargo +nightly miri test` with `-Zmiri-strict-provenance` and `-Zmiri-tree-borrows` — the
-   soundness gate for the allocator's `unsafe`, provenance, and aliasing code. See
+4. `cargo +nightly miri test --features nightly` with `-Zmiri-strict-provenance` and
+   `-Zmiri-tree-borrows` — the soundness gate for the allocator's `unsafe`, provenance, and
+   aliasing code, across both the default surface and the `nightly` `Allocator` trait impl. See
    `CONVENTIONS.md` § *Miri: the verification gate*. A new or modified `unsafe` block is
    *pending* until a Miri-covered test exercises it.
 5. Update `CHANGELOG.md` — a bullet under `[Unreleased]` for any user-visible change.

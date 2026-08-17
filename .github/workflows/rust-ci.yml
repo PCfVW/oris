@@ -52,6 +52,8 @@ jobs:
   miri:
     # The allocator's soundness gate: Miri models provenance and aliasing, the
     # two UB classes ordinary tests cannot see. Host-agnostic, so ubuntu only.
+    # `--features nightly` extends coverage to the optional `Allocator` trait
+    # surface (allocator_trait.rs) — Miri already needs nightly, so this is free.
     name: Miri (nightly)
     runs-on: ubuntu-latest
     steps:
@@ -62,10 +64,34 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: Rust
-      - name: Miri test (strict provenance + tree borrows)
-        run: cargo miri test
+      - name: Miri test (strict provenance + tree borrows, default + nightly features)
+        run: cargo miri test --features nightly
         env:
           MIRIFLAGS: "-Zmiri-strict-provenance -Zmiri-tree-borrows"
+
+  nightly-feature:
+    # The third public surface (`unsafe impl core::alloc::Allocator`, gated behind
+    # the `nightly` Cargo feature — Rust/CONVENTIONS.md's Idiomatic Surfaces
+    # section) is advertised in the README but was previously compiled/tested
+    # nowhere in CI, only locally. This job closes that gap; the miri job above
+    # now also runs it under Miri. Clippy runs here too — the `check` job above
+    # never compiles `allocator_trait.rs` at all (it's `cfg`-gated out without
+    # the `nightly` feature), so this was the only lane that could catch a lint
+    # regression in it.
+    name: nightly feature (nightly toolchain)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: Rust
+      - name: Clippy (nightly feature)
+        run: cargo clippy --all-targets --features nightly -- -D warnings
+      - name: Tests (nightly feature)
+        run: cargo test --features nightly
 
   docs:
     name: Doc (stable)
@@ -85,7 +111,7 @@ jobs:
   # so the ruleset never needs editing when the matrix above changes.
   ci-success:
     name: Rust CI success
-    needs: [check, miri, docs]
+    needs: [check, miri, docs, nightly-feature]
     if: always()
     runs-on: ubuntu-latest
     defaults:

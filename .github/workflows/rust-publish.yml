@@ -40,17 +40,58 @@ jobs:
         with:
           workspaces: Rust
 
+      # Lockstep-versioning gate (ROADMAP.md#versioning-policy): a tag pushed without
+      # first bumping Cargo.toml's own version would otherwise fail cargo publish
+      # halfway through the ceremony, possibly after zig-release.yml's own release
+      # already landed. Skipped on a workflow_dispatch run with no tag ref (manual
+      # smoke test; not what version drift is guarding against).
+      - name: Verify Cargo.toml version matches the release tag
+        if: github.ref_type == 'tag'
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          got="$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')"
+          if [ "$want" != "$got" ]; then
+            echo "::error::Cargo.toml version ('$got') does not match release tag '$GITHUB_REF_NAME' (expected '$want')"
+            exit 1
+          fi
+
       # Full gauntlet before publishing — a tag must pass the same bar as CI.
       - name: Formatting
-        run: cargo fmt --check
+        run: cargo +stable fmt --check
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo +stable clippy --all-targets -- -D warnings
       - name: Tests
-        run: cargo test
+        run: cargo +stable test
       - name: Doc (deny warnings)
-        run: cargo doc --no-deps
+        run: cargo +stable doc --no-deps
         env:
           RUSTDOCFLAGS: "-D warnings"
+
+      # The nightly `Allocator`-trait surface (allocator_trait.rs) is invisible to
+      # every step above: --all-targets alone never compiles it (cfg-gated on the
+      # `nightly` feature), so a tag must re-run rust-ci.yml's nightly-feature job's
+      # own checks too, not just the default-feature gauntlet — otherwise "a tag
+      # must pass the same bar as CI" above is false for this one surface. Installed
+      # as a second toolchain alongside stable (rustup supports both coexisting);
+      # every cargo invocation after this uses an explicit +stable/+nightly prefix
+      # so neither this install nor its "default" side effect can silently change
+      # what channel a later step runs under.
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy, miri
+      - name: Clippy (nightly feature)
+        run: cargo +nightly clippy --all-targets --features nightly -- -D warnings
+      - name: Tests (nightly feature)
+        run: cargo +nightly test --features nightly
+
+      # The allocator's own declared release gate (SECURITY.md, Rust/README.md): a
+      # tag must not publish without Miri's soundness check having actually run on
+      # that exact commit, same as rust-ci.yml's miri job — CI having passed earlier
+      # on main is not equivalent, since a tag can point anywhere.
+      - name: Miri (strict provenance + tree borrows, default + nightly features)
+        run: cargo +nightly miri test --features nightly
+        env:
+          MIRIFLAGS: "-Zmiri-strict-provenance -Zmiri-tree-borrows"
 
       # Trusted Publishing: exchange the OIDC token for a short-lived crates.io
       # token. No stored CARGO_REGISTRY_TOKEN secret.
@@ -58,6 +99,6 @@ jobs:
         id: auth
         uses: rust-lang/crates-io-auth-action@v1
       - name: Publish
-        run: cargo publish
+        run: cargo +stable publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
