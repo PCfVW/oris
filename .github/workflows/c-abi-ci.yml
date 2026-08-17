@@ -59,17 +59,24 @@ jobs:
 
       # Locate each port's shared-library artifact. Windows links against an
       # explicit import-library path (its DLL search order already includes the
-      # exe's own directory, so a copy alongside it is enough at runtime). ELF/
-      # Mach-O instead link by -L<dir> -l<name>, not a bare path: neither
-      # `cargo build --release`'s .so nor a path-linked .dylib is guaranteed to
-      # carry an SONAME/install-name of just its own filename, and passing the
-      # relative path directly as a linker input embeds that whole path as the
-      # NEEDED entry — confirmed the hard way on ubuntu-latest ("cannot open
-      # shared object file: Rust/target/release/liborisnik.so", LD_LIBRARY_PATH
-      # notwithstanding, since the loader was looking for that literal path, not
-      # a bare filename it could resolve via the search path). -L/-l is the
-      # standard, SONAME-independent way to link and get a bare-filename NEEDED
-      # entry, which LD_LIBRARY_PATH (set below) can then actually resolve.
+      # exe's own directory, so a copy alongside it is enough at runtime).
+      #
+      # ELF/Mach-O: neither `cargo build --release`'s .so nor Zig's .so/.dylib
+      # carries a DT_SONAME/install-name of just its own bare filename. Without
+      # one, the linker's fallback is to bake *whatever path it resolved the
+      # library through* into the consuming binary's NEEDED entry — observed
+      # directly on ubuntu-latest, where switching from a bare relative path to
+      # `-L<relative dir> -l<name>` made no difference; the NEEDED entry was
+      # still "Rust/target/release/liborisnik.so" either way ("cannot open
+      # shared object file", LD_LIBRARY_PATH notwithstanding — per ld.so(8), any
+      # NEEDED value containing a slash is used as a literal pathname, resolved
+      # against the process's cwd at exec time, bypassing LD_LIBRARY_PATH/rpath
+      # search entirely). An *absolute* -L path sidesteps this: whatever the
+      # linker embeds is then cwd-independent, so it resolves correctly however
+      # (from wherever) the smoke-test binary is later invoked. LD_LIBRARY_PATH
+      # (set in the next step) stays as a second, redundant safety net for
+      # whichever OS/linker combination *does* end up with a bare-filename
+      # NEEDED/LC_LOAD_DYLIB entry.
       - name: Locate shared-library artifacts
         shell: bash
         run: |
@@ -80,16 +87,16 @@ jobs:
               cp Rust/target/release/liborisnik.so smoke_run/
               cp Zig/zig-out/lib/liborisnitsa.so smoke_run/
               {
-                echo "RUST_LINK_ARGS=-LRust/target/release -lorisnik"
-                echo "ZIG_LINK_ARGS=-LZig/zig-out/lib -lorisnitsa"
+                echo "RUST_LINK_ARGS=-L$GITHUB_WORKSPACE/Rust/target/release -lorisnik"
+                echo "ZIG_LINK_ARGS=-L$GITHUB_WORKSPACE/Zig/zig-out/lib -lorisnitsa"
               } >> "$GITHUB_ENV"
               ;;
             macOS)
               cp Rust/target/release/liborisnik.dylib smoke_run/
               cp Zig/zig-out/lib/liborisnitsa.dylib smoke_run/
               {
-                echo "RUST_LINK_ARGS=-LRust/target/release -lorisnik"
-                echo "ZIG_LINK_ARGS=-LZig/zig-out/lib -lorisnitsa"
+                echo "RUST_LINK_ARGS=-L$GITHUB_WORKSPACE/Rust/target/release -lorisnik"
+                echo "ZIG_LINK_ARGS=-L$GITHUB_WORKSPACE/Zig/zig-out/lib -lorisnitsa"
               } >> "$GITHUB_ENV"
               ;;
             Windows)
