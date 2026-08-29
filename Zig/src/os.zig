@@ -42,8 +42,51 @@ const is_windows = builtin.os.tag == .windows;
 /// panic, per `Zig/CONVENTIONS.md`'s "Allocation outcomes are values" rule.
 pub fn map(size: usize) ?[*]u8 {
     std.debug.assert(size > 0 and size % PAGE_SIZE == 0);
+    if (builtin.is_test and test_vm.shouldFail()) return null;
     return if (is_windows) mapWindows(size) else mapUnix(size);
 }
+
+/// Test-only out-of-memory injection over the OS boundary. Compiled out entirely
+/// outside a test build (`builtin.is_test` is `comptime`-known, so the branch in `map`
+/// above vanishes in a release artifact).
+///
+/// # Why this exists
+/// Every `orelse return null` on a `systemAlloc`/`os.map` result in `Buckets` and
+/// `Tree` was unexecuted by any test before v0.1.1: there was no way to make a mapping
+/// fail, so the out-of-memory early-outs existed only on paper.
+///
+/// `Zig/CONVENTIONS.md` previously named `std.testing.checkAllAllocationFailures` as
+/// the tool for this. It is not applicable here, and the reason is structural rather
+/// than incidental: that helper wraps a `FailingAllocator` around a *backing*
+/// `std.mem.Allocator` and passes it **to** the code under test, so it exercises
+/// allocator *consumers*. `Orisnitsa` consumes no allocator — it calls `os.map`
+/// directly — so the only place a failure can be injected is here. Mirrors `orisnik`'s
+/// `os::test_vm`.
+pub const test_vm = struct {
+    /// Successful `map` calls remaining before it starts returning `null`; `null`
+    /// disables injection.
+    var fail_after: ?usize = null;
+
+    /// Makes the next `successes` calls to `map` succeed and every call after that
+    /// fail, until `clearFailure`. Pair with `defer os.test_vm.clearFailure();` so a
+    /// failing assertion cannot leak injection into the next test.
+    pub fn failMapAfter(successes: usize) void {
+        fail_after = successes;
+    }
+
+    /// Disables out-of-memory injection.
+    pub fn clearFailure() void {
+        fail_after = null;
+    }
+
+    /// Consumes one budgeted success, reporting whether this `map` call must fail.
+    pub fn shouldFail() bool {
+        const n = fail_after orelse return false;
+        if (n == 0) return true;
+        fail_after = n - 1;
+        return false;
+    }
+};
 
 /// Returns memory previously obtained from `map` back to the OS.
 ///

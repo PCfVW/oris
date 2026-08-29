@@ -81,6 +81,12 @@ fn resizeImpl(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_l
     _ = ret_addr;
     // ALIGN: see `allocImpl`'s identical cast for why this is sound.
     const self: *Orisnitsa = @ptrCast(@alignCast(ctx));
+    // `Orisnitsa.resize` asserts `size > 0` (as HPHA's own `resize` does), and a
+    // zero-length resize has no meaningful in-place answer anyway: reporting "no"
+    // leaves `memory` untouched and owned by the caller, which is exactly what
+    // `false` means here. Never forwarded, so the assert is unreachable from this
+    // vtable rather than merely usually-unreached.
+    if (new_len == 0) return false;
     const actual = self.resize(memory.ptr, new_len);
     return actual >= new_len;
 }
@@ -90,6 +96,15 @@ fn remapImpl(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_le
     _ = ret_addr;
     // ALIGN: see `allocImpl`'s identical cast for why this is sound.
     const self: *Orisnitsa = @ptrCast(@alignCast(ctx));
+    if (new_len == 0) {
+        // `Orisnitsa.realloc(ptr, 0)` *frees* and returns null — but `null` out of
+        // `remap` means "no advantage over you doing alloc+copy+free yourself",
+        // i.e. the caller is explicitly told it still owns `memory`. Forwarding
+        // would hand back that answer about a block already on a free list, and the
+        // caller's own later `free` would be a double free. Declining without
+        // touching `memory` reports the same "no" honestly.
+        return null;
+    }
     const align_bytes = alignment.toByteUnits();
     if (align_bytes <= block.DEFAULT_ALIGNMENT) {
         return self.realloc(memory.ptr, new_len);
@@ -164,6 +179,37 @@ test "std.mem.Allocator smoke test via ArrayList" {
     try testing.expectEqual(@as(usize, 2000), list.items.len);
     try testing.expectEqual(@as(u32, 1999), list.items[1999]);
     list.deinit(a);
+    orisnitsa_instance.purge();
+    try testing.expectEqual(@as(usize, 0), orisnitsa_instance.allocated());
+}
+
+test "raw remap/resize to zero length do not free the block" {
+    // F6 regression (docs/audits/2026-08-29-pre-v0.2.0-audit.md): a zero `new_len`
+    // must not free `memory`. `null` out of `remap` means "no advantage, do
+    // alloc+copy+free yourself" — i.e. the caller is told it still owns the block —
+    // and v0.1.0 forwarded to `Orisnitsa.realloc(ptr, 0)`, which *frees*, so the
+    // caller's own later `free` was a double free.
+    //
+    // Exercised through `rawRemap`/`rawResize`, the direct vtable entry points, not
+    // the `Allocator.remap` wrapper: that wrapper intercepts `new_len == 0` itself
+    // (it frees and hands back an empty slice) and never reaches this vtable at all,
+    // so it cannot reach the guard under test. Mirrors `orisnik`'s own F6 test,
+    // which likewise calls `GlobalAlloc::realloc` directly rather than through a
+    // container.
+    var orisnitsa_instance: Orisnitsa = .init();
+    const a = allocator(&orisnitsa_instance);
+    const mem = try a.alloc(u8, 64);
+    const alignment: std.mem.Alignment = .fromByteUnits(@alignOf(u8));
+
+    try testing.expect(a.rawRemap(mem, alignment, 0, @returnAddress()) == null); // "a zero new_len must report failure"
+    try testing.expect(!a.rawResize(mem, alignment, 0, @returnAddress())); // "and so must resize"
+
+    const next = try a.alloc(u8, 64);
+    // "remap-to-zero must not have freed the block it reported failure for"
+    try testing.expect(next.ptr != mem.ptr);
+
+    a.free(next);
+    a.free(mem);
     orisnitsa_instance.purge();
     try testing.expectEqual(@as(usize, 0), orisnitsa_instance.allocated());
 }

@@ -522,38 +522,67 @@ pub const Buckets = struct {
         const bucket = &self.buckets[bi];
         const mrk = bucket.marker();
         const result = page.checkMarker(mrk);
-        std.debug.assert(result == bucket.pages.contains(&page.link)); // "ptrInBucket's marker check disagreed with an exhaustive page-list scan — see this function's own doc for the known, HPHA-inherited cause"
+        // "ptrInBucket's marker check disagreed with an exhaustive page-list scan.
+        //  Two causes are possible. A false positive (marker says yes, scan says no)
+        //  is the known, HPHA-inherited one this function's own doc describes. A
+        //  false *negative* (marker says no, scan says yes) is not: it means every
+        //  marker in this bucket was seeded from a different address than the one
+        //  `Bucket.marker` reports now — i.e. the owning `Orisnitsa` has been moved
+        //  since its first use. See `Orisnitsa`'s Address stability doc section."
+        std.debug.assert(result == bucket.pages.contains(&page.link));
         return result;
     }
 
     /// Returns every page with zero live allocations back to the OS. Ports
     /// `allocator::bucket_purge`.
+    ///
+    /// The walk visits the *whole* page list, stopping only at the first **full**
+    /// page — it does not stop at a merely partially-used one. That distinction is
+    /// HPHA's, and it is load-bearing: `Bucket`'s auto-sort only re-orders a page on
+    /// its full↔not-full transition (`Bucket.alloc` pushes to the back on becoming
+    /// full, `Bucket.free` to the front on ceasing to be full), so the ordering
+    /// *among* not-full pages is arbitrary and an empty page can sit behind a
+    /// partially-used one. v0.1.0 broke out of the loop on the first non-empty page
+    /// and so left those unreclaimed; see
+    /// `docs/audits/2026-08-29-pre-v0.2.0-audit.md`.
     pub fn purge(self: *Buckets) void {
         for (&self.buckets) |*bucket| {
-            // EXPLICIT: page-list walk with early termination and in-loop
-            // removal; `front` is the state (the list's current head), not
-            // expressible as an iterator over a structure this port
-            // deliberately doesn't build one for.
-            while (bucket.pages.front()) |front| {
-                if (front.isFull()) {
-                    // HPHA early-outs on the first full-or-partial page it meets
-                    // scanning from the front — pages are auto-sorted so a full
-                    // page here means every page after it is at least as full.
+            const sentinel = bucket.pages.sentinel();
+            // EXPLICIT: raw link-chase rather than a `front()` loop — the walk must
+            // advance *past* pages it does not free (unlike v0.1.0's head-only
+            // version), and it must latch each node's successor before unlinking it.
+            // `cur` is the state; no higher-level construct can express a traversal
+            // whose current node is spliced out mid-walk.
+            // SAFETY: `sentinel` is live and self-linked (`sentinel()`'s own
+            // guarantee), so its `next` is live.
+            var cur = sentinel.next.?;
+            while (cur != sentinel) {
+                // SAFETY: `cur != sentinel`, so it is a real node's link, and every
+                // node in this list is a `Page` whose `link` field it belongs to.
+                const page: *Page = @fieldParentPtr("link", cur);
+                if (page.isFull()) {
+                    // HPHA's own early-out: a full page means every page after it is
+                    // at least as full, since `Bucket.alloc` moves pages to the back
+                    // exactly when they fill up.
                     break;
                 }
-                if (!front.isEmpty()) break;
-                list.unlinkNode(front);
-                // ALIGN: `front` is a live `Page`, always
-                // `PAGE_SIZE - @sizeOf(Page)` bytes into its owning
-                // PAGE_SIZE-aligned mapping (the type's own invariant); rounding
-                // its address down recovers that mapping's base.
-                const front_bytes: [*]u8 = @ptrCast(front);
-                const mem = align_helpers.alignDown(front_bytes, os.PAGE_SIZE);
-                // `mem` is the live mapping `front` belongs to (established
-                // above), not referenced again after this call (the page was
-                // just unlinked from every structure this module tracks it
-                // through).
-                self.systemFree(mem);
+                // Latched before the unlink below, which rewrites `cur`'s own links.
+                const next = cur.next.?;
+                if (page.isEmpty()) {
+                    list.unlinkNode(page);
+                    // ALIGN: `page` is a live `Page`, always
+                    // `PAGE_SIZE - @sizeOf(Page)` bytes into its owning
+                    // PAGE_SIZE-aligned mapping (the type's own invariant); rounding
+                    // its address down recovers that mapping's base.
+                    const page_bytes: [*]u8 = @ptrCast(page);
+                    const mem = align_helpers.alignDown(page_bytes, os.PAGE_SIZE);
+                    // `mem` is the live mapping `page` belongs to (established
+                    // above), not referenced again after this call (the page was just
+                    // unlinked from every structure this module tracks it through,
+                    // and `next` was latched before the unlink).
+                    self.systemFree(mem);
+                }
+                cur = next;
             }
         }
     }
@@ -734,4 +763,42 @@ test "Buckets.purge returns fully empty pages only" {
     buckets.freeDirect(b, bi);
     buckets.purge();
     try testing.expectEqual(@as(usize, 0), buckets.allocated()); // "fully-empty page must be reclaimed"
+}
+
+test "Buckets.purge reclaims an empty page behind a partial one" {
+    // F3 regression (docs/audits/2026-08-29-pre-v0.2.0-audit.md): `purge` must walk
+    // the *whole* page list, stopping only at a full page — an empty page sitting
+    // behind a partially-used one is still reclaimable, and HPHA reclaims it.
+    //
+    // Builds exactly that list state: fill page A (which auto-sorts it to the back
+    // and spawns page B at the front), take one slot from B, then free one slot of
+    // A — A was full, so it returns to the front, giving `[A partial, B partial]`.
+    // Freeing B's only slot leaves `[A partial, B empty]` with no re-sort, since B
+    // was never full. v0.1.0 broke out of the loop on A and leaked B's whole page.
+    var buckets: Buckets = .init();
+    const elem_size = MAX_SMALL_ALLOCATION; // largest class => fewest slots to fill
+    const bi = bucketSpacingFunction(elem_size);
+    const slots = (os.PAGE_SIZE - @sizeOf(Page)) / elem_size;
+
+    const page_a = try testing.allocator.alloc([*]u8, slots);
+    defer testing.allocator.free(page_a);
+    for (0..slots) |i| {
+        page_a[i] = buckets.allocDirect(bi) orelse return error.TestUnexpectedResult; // "OS map failed"
+    }
+    // One more request finds A full, so it grows page B at the front.
+    const b_slot = buckets.allocDirect(bi) orelse return error.TestUnexpectedResult; // "OS map failed"
+    try testing.expectEqual(@as(usize, 2 * os.PAGE_SIZE), buckets.allocated()); // "expected exactly two pages"
+
+    // A was full, so freeing one slot re-sorts it to the front, ahead of B.
+    buckets.freeDirect(page_a[slots - 1], bi);
+    // B was never full, so this triggers no re-sort: B stays behind A.
+    buckets.freeDirect(b_slot, bi);
+
+    buckets.purge();
+    // "the empty page behind a partially-used one must still be reclaimed"
+    try testing.expectEqual(@as(usize, os.PAGE_SIZE), buckets.allocated());
+
+    for (page_a[0 .. slots - 1]) |slot| buckets.freeDirect(slot, bi);
+    buckets.purge();
+    try testing.expectEqual(@as(usize, 0), buckets.allocated());
 }

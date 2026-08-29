@@ -2,7 +2,7 @@
 
 Oris is a two-port monorepo; each port builds independently with its own toolchain.
 
-**64-bit platforms only for v0.1.0** — both ports enforce this at compile time (a
+**64-bit platforms only** — both ports enforce this at compile time (a
 `const`/`comptime` assert on `usize`/`@bitSizeOf(usize) == 64`; see `Rust/src/block.rs`'s and
 `Zig/src/block.zig`'s module docs for why).
 

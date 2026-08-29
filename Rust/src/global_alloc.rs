@@ -57,6 +57,17 @@ unsafe impl GlobalAlloc for Orisnik {
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        if new_size == 0 {
+            // `GlobalAlloc::realloc`'s contract requires `new_size > 0`, so this is a
+            // caller bug — but it is one with a uniquely bad failure mode here, worth
+            // a branch rather than a comment. `Orisnik::realloc(ptr, 0)` *frees* and
+            // returns `None`, which this would surface as null; and null out of
+            // `GlobalAlloc::realloc` means "allocation failed, your original pointer
+            // is still live". A caller respecting that contract would then
+            // `dealloc` a block already back on a free list. Returning null without
+            // touching `ptr` reports the same failure honestly instead.
+            return core::ptr::null_mut();
+        }
         // SAFETY: `ptr` is non-null and a still-live allocation this instance
         // produced with `layout` (this function's own contract, forwarded).
         let ptr = unsafe { NonNull::new_unchecked(ptr) };
@@ -104,12 +115,11 @@ mod tests {
     // `Vec`-backed test fixtures) through `Orisnik`, turning any latent bug here
     // into a suite-wide failure that is far harder to localize. Calling the trait
     // methods directly exercises exactly the same dispatch this module adds, without
-    // that blast radius; every allocating call still reaches real `os::map` (no
-    // OS-free seeding seam at this layer, same as `orisnik.rs`'s own tests), so
-    // these are Miri-ignored for the same reason.
+    // that blast radius. Every allocating call goes through `os::map`, served under
+    // Miri by `os::test_vm`'s heap-backed stand-in and natively by the real
+    // `VirtualAlloc`/`mmap`, so these run under the soundness gate too.
 
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn global_alloc_default_alignment_round_trip() {
         let orisnik = Orisnik::new();
         let layout = Layout::from_size_align(64, DEFAULT_ALIGNMENT).expect("valid layout");
@@ -125,7 +135,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn global_alloc_zeroed_and_over_aligned() {
         let orisnik = Orisnik::new();
         let layout = Layout::from_size_align(96, 256).expect("valid layout");
@@ -139,6 +148,8 @@ mod tests {
         assert!(zeroed.iter().all(|&b| b == 0));
         // SAFETY: `ptr` is a live allocation `orisnik` produced with `layout`.
         unsafe { GlobalAlloc::dealloc(&orisnik, ptr, layout) };
+        orisnik.purge();
+        assert_eq!(orisnik.allocated(), 0);
     }
 
     /// Simulates the grow-in-place-then-move pattern a `Vec`'s own capacity growth
@@ -146,7 +157,6 @@ mod tests {
     /// via a `Vec`" refers to, exercised directly against the trait rather than by
     /// installing `Orisnik` process-wide (see the module doc above).
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn global_alloc_realloc_grows_like_a_vec_would() {
         let orisnik = Orisnik::new();
         let small = Layout::from_size_align(16, DEFAULT_ALIGNMENT).expect("valid layout");
@@ -166,6 +176,42 @@ mod tests {
 
         // SAFETY: `grown` is a live allocation `orisnik` produced with `big`.
         unsafe { GlobalAlloc::dealloc(&orisnik, grown, big) };
+        orisnik.purge();
+        assert_eq!(orisnik.allocated(), 0);
+    }
+
+    /// F6 regression (docs/audits/2026-08-29-pre-v0.2.0-audit.md): a zero `new_size`
+    /// must not free `ptr`. `GlobalAlloc::realloc`'s contract forbids the call, but
+    /// its failure signal makes getting it wrong uniquely bad — null means "failed,
+    /// your pointer is still live", and v0.1.0 returned null *after* freeing, so a
+    /// contract-respecting caller's later `dealloc` was a double free.
+    ///
+    /// The check: the slot must NOT be recycled by the next allocation of the same
+    /// size class, which is exactly how the audit demonstrated the bug.
+    #[test]
+    fn global_alloc_realloc_to_zero_does_not_free_the_block() {
+        let orisnik = Orisnik::new();
+        let layout = Layout::from_size_align(64, DEFAULT_ALIGNMENT).expect("valid layout");
+        // SAFETY: `layout` has non-zero size.
+        let ptr = unsafe { GlobalAlloc::alloc(&orisnik, layout) };
+        assert!(!ptr.is_null());
+
+        // SAFETY: `ptr` is a live allocation `orisnik` produced with `layout`.
+        let r = unsafe { GlobalAlloc::realloc(&orisnik, ptr, layout, 0) };
+        assert!(r.is_null(), "a zero new_size must report failure");
+
+        // SAFETY: `layout` has non-zero size.
+        let next = unsafe { GlobalAlloc::alloc(&orisnik, layout) };
+        assert_ne!(
+            next, ptr,
+            "realloc-to-zero must not have freed the block it reported failure for"
+        );
+
+        // SAFETY: both are live allocations `orisnik` produced with `layout`, and
+        // `ptr` really is still live — which is the property under test.
+        unsafe { GlobalAlloc::dealloc(&orisnik, ptr, layout) };
+        // SAFETY: same.
+        unsafe { GlobalAlloc::dealloc(&orisnik, next, layout) };
         orisnik.purge();
         assert_eq!(orisnik.allocated(), 0);
     }

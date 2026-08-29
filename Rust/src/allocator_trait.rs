@@ -169,10 +169,15 @@ unsafe impl Allocator for Orisnik {
 mod tests {
     use super::*;
 
-    // Allocating calls below reach real `os::map` (no OS-free seeding seam at this
-    // layer, same as `orisnik.rs`'s own tests) — Miri-ignored for the same reason.
-    // `Layout::size() == 0` is exercised separately below without touching the OS
-    // at all, since `allocate`'s own zero-size branch never calls into `Orisnik`.
+    // Every allocating call below goes through `os::map`, which under Miri is served
+    // by `os::test_vm`'s heap-backed stand-in (see that module's doc); a native
+    // `cargo test` still reaches the real `VirtualAlloc`/`mmap`. That is what lets
+    // these tests run under the soundness gate at all — before v0.1.1 they were all
+    // `#[cfg_attr(miri, ignore)]`. Each therefore ends by returning its pages with
+    // `purge()`: the allocator holds them until asked (matching HPHA), which the
+    // stand-in correctly reports to Miri as still-live memory.
+    // `Layout::size() == 0` is exercised separately below without touching the OS at
+    // all, since `allocate`'s own zero-size branch never calls into `Orisnik`.
 
     /// `NonNull<[u8]>::as_non_null_ptr`/`as_mut_ptr` are gated behind the separate
     /// unstable `slice_ptr_get` feature (not implied by `allocator_api`) — this
@@ -197,7 +202,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn allocator_trait_grow_and_shrink_round_trip() {
         let orisnik = Orisnik::new();
         let small = Layout::from_size_align(16, DEFAULT_ALIGNMENT).expect("valid layout");
@@ -232,7 +236,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn vec_new_in_round_trips_through_orisnik() {
         let orisnik = Orisnik::new();
         let mut v: std::vec::Vec<u32, &Orisnik> = std::vec::Vec::new_in(&orisnik);

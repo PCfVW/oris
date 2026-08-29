@@ -8,6 +8,21 @@
 
 Oris ports ship in lockstep. **The same version number on `orisnik` (crates.io) and `orisnitsa` (Zig package registry) carries the same feature set and the same internal-state-transition behavior** — that is the project's defining invariant. Semantic versioning applies, with the understanding that any change to the public API or to the algorithm's externally-visible state transitions is at minimum a minor version bump.
 
+### Fidelity fixes are patches
+
+One class of change is exempt from the minor-bump rule above: **a change whose sole effect is to make a port agree with HPHA where it previously did not, or to remove undefined behavior, ships as a patch** — even when it is externally visible.
+
+The reasoning is that such a change does not alter the contract; it makes the implementation meet the contract it always claimed. HPHA is the specification. Where a port diverged from it, the divergent behavior was never a promise to anyone, so nothing that depended on it was depending on a documented guarantee. The same holds for a wrapping arithmetic path or a silent misdispatch: behavior that is undefined cannot be relied upon, and replacing it with a defined refusal narrows what the allocator does rather than changing it.
+
+Two conditions make a change eligible, and both must hold:
+
+1. **The reference decides.** The fix is justified by pointing at `Cpp/hpha.h`/`hpha.cpp` and showing the port disagreeing with it, or by showing that the affected inputs reach arithmetic with no defined result. A change that makes a port *better* than HPHA by some other standard is a feature, not a fidelity fix, and takes a minor bump.
+2. **No input that previously behaved correctly changes.** The set of affected inputs must be exactly those that were already broken. If a working call changes its result, it is a minor bump regardless of how the change is motivated.
+
+Both ports must land the fix in the same release, as with any change under the cross-port invariant. The release notes name each fixed divergence and the reference behavior it restores; `v0.1.1` is the first release cut under this rule.
+
+This does not weaken the invariant — it protects it. Under the strict reading, correcting a divergence from HPHA would cost a minor version, which makes fidelity repairs compete with feature milestones for version numbers and creates a standing incentive to defer them. Cheap, prompt fidelity fixes are exactly what a project defined by a cross-port invariant needs most.
+
 ## Cross-language invariant
 
 From v0.1.0 onward, both Oris ports satisfy the following property:
@@ -22,7 +37,7 @@ This invariant is the property that justifies maintaining two ports rather than 
 
 ## Milestones
 
-### v0.1.0 — Foundation
+### v0.1.0 — Foundation ✅ *Released 2026-08-17*
 
 **Theme:** Faithful single-threaded port.
 

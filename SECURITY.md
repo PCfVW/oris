@@ -22,8 +22,8 @@ because they live in the opt-in debug subsystem (`spomen`: a Rust feature and a 
 
 | CWE | Weakness | How Oris addresses it | Cost |
 |---|---|---|---|
-| **CWE-190** / **CWE-131** | Integer overflow / wrong buffer-size calc in a size + alignment request | Size and alignment are combined with **checked arithmetic** and the request is rejected (null / `error.OutOfMemory`) on overflow, before any allocation | always-on, cold path only — effectively free |
-| **CWE-476** | NULL-pointer deref on allocation failure | OOM is a **value**, never a panic: `null` (C / Zig) or `Option<NonNull<_>>` (Rust); the never-null invariant is encoded in the type | always-on |
+| **CWE-190** / **CWE-131** | Integer overflow / wrong buffer-size calc in a size + alignment request | Size and alignment are bounds-checked against `MAX_ALLOCATION` **before** any rounding step can wrap, and `calloc`'s `count * size` uses checked multiplication; an overflowing request is refused (null) rather than served short — **since v0.1.1**, see that release's F1 in [`CHANGELOG.md`](CHANGELOG.md) | always-on, cold path only — effectively free |
+| **CWE-476** | NULL-pointer deref on allocation failure | OOM is a **value**, never a panic: `null` (C / Zig) or `Option<NonNull<_>>` (Rust); the never-null invariant is encoded in the type. One documented exception, below | always-on |
 | **CWE-825** / **CWE-476** *(Rust)* | Dangling / provenance-invalid pointer use | All pointer arithmetic goes through **strict-provenance** APIs; the suite runs under **Miri** (`-Zmiri-strict-provenance -Zmiri-tree-borrows`) as a release gate | compile-time + CI; zero runtime cost |
 | **CWE-908** | Use of uninitialized memory | `alloc` returns uninitialized bytes *by contract* (like `malloc`), modeled as such (`MaybeUninit`); `calloc` zeroes | always-on |
 | **CWE-122** / **CWE-787** | Heap overflow into the adjacent block / inline metadata | **Guard bytes** around each allocation, checked on free | **debug only** — zero cost when the debug subsystem is off |
@@ -31,6 +31,17 @@ because they live in the opt-in debug subsystem (`spomen`: a Rust feature and a 
 | **CWE-590** | Free of a pointer not owned by this allocator | Ownership / record check on free | **debug only** |
 | **CWE-416** | Use after free | Debug poisoning surfaces reuse-after-free; Miri catches it in tests | **debug only** + CI |
 | **CWE-401** | Memory leak | Leak detection on allocator drop / `deinit`; `std.testing.allocator` (Zig) and Miri (Rust) enforce it in CI | **debug only** + CI |
+
+### The one exception to "OOM is a value, never a panic"
+
+`os.rs`/`os.zig` assert unconditionally that a mapping returned by `VirtualAlloc`/`mmap`
+is `PAGE_SIZE`-aligned. This is an always-on `assert!`, not a `debug_assert!`, and it is
+deliberate: every bucket and tree offset in the allocator is computed from that
+alignment, so a violated assumption here would not fail — it would silently corrupt the
+heap from that point on. Aborting is the safer outcome, and the condition is one no
+supported platform can produce (Windows' allocation granularity *is* 64 KiB; the Unix
+path trims its own mapping to alignment before returning). Every *other* failure on
+every path, allocation failure included, is a value.
 
 "Debug only" means the check ships in the debug subsystem and is **eliminated from
 release builds** (Rust: the `debug-allocator` feature off; Zig: the `comptime` debug
@@ -52,7 +63,8 @@ allocator:
 
 | Version | Supported |
 |---|---|
-| 0.1.x | ✅ |
+| 0.1.1 | ✅ |
+| 0.1.0 | ⚠️ — superseded; upgrade to 0.1.1, which fixes an integer-overflow path that under-allocates on very large requests (F1) and a `calloc` overflow that memsets past the block. See [`CHANGELOG.md`](CHANGELOG.md) |
 | < 0.1.0 | ❌ — pre-release / name-reservation stubs only |
 
 ## Reporting a vulnerability

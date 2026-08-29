@@ -39,19 +39,47 @@ const MIN_BLOCK_SIZE: usize = size_of::<FreeNode>();
 /// `hpha.cpp`'s `tree_*` functions.
 const SPLIT_REMAINDER_MIN: usize = size_of::<BlockHeader>() + size_of::<FreeNode>();
 
+/// The largest request this module's own size arithmetic can carry without an
+/// intermediate step wrapping `usize`.
+///
+/// Every term is one rounding step on the path from a caller's `size` to a mapped
+/// arena, subtracted so that step's headroom is guaranteed:
+///
+/// - `os::PAGE_SIZE` — [`Tree::grow`]'s `round_up(_, PAGE_SIZE)`
+/// - `3 * size_of::<BlockHeader>()` — [`Tree::grow`]'s two fences plus one fake block
+/// - `size_of::<BlockHeader>()` — [`normalize_size`]'s own `round_up(_, 16)`
+///
+/// # Deviation from HPHA, and why it is not one
+/// HPHA performs this arithmetic unchecked, so a sufficiently large request wraps and
+/// yields a block far smaller than asked for (`tree_alloc(SIZE_MAX)` normalizes to
+/// zero). That is not behaviour this port preserves: **no request at or below this
+/// bound changes behaviour**, and every request above it was already unsatisfiable —
+/// HPHA merely corrupted the heap instead of saying so. The bound is roughly
+/// `usize::MAX - 64 KiB`, so no allocation any real machine could serve is affected.
+/// Rejecting is therefore a strict refinement of undefined behaviour, not a change of
+/// contract, and it touches no state transition the cross-port invariant counts.
+pub(crate) const MAX_ALLOCATION: usize =
+    usize::MAX - os::PAGE_SIZE - 3 * size_of::<BlockHeader>() - size_of::<BlockHeader>();
+
 /// Rounds `size` up to a valid block payload size: at least [`MIN_BLOCK_SIZE`], and a
 /// multiple of `size_of::<BlockHeader>()` (so every block boundary this produces stays
 /// `BlockHeader`-aligned — see `block.rs`'s alignment note). Ports the
 /// `if (size < sizeof(free_node)) size = sizeof(free_node); size = round_up(size,
 /// sizeof(block_header));` pair opening every `tree_alloc*`/`tree_realloc*`/`tree_resize`.
+///
+/// Returns `None` when `size` exceeds [`MAX_ALLOCATION`] — the one place this port
+/// declines to reproduce HPHA's unchecked arithmetic; see that constant's own doc.
 #[must_use]
-const fn normalize_size(size: usize) -> usize {
+const fn normalize_size(size: usize) -> Option<usize> {
+    if size > MAX_ALLOCATION {
+        return None;
+    }
     let size = if size < MIN_BLOCK_SIZE {
         MIN_BLOCK_SIZE
     } else {
         size
     };
-    round_up(size, size_of::<BlockHeader>())
+    Some(round_up(size, size_of::<BlockHeader>()))
 }
 
 /// Splits `bl` at `size` bytes into its payload, turning the remainder (at least
@@ -485,7 +513,7 @@ impl Tree {
     /// Allocates `size` bytes on the tree path. Ports `allocator::tree_alloc`.
     #[must_use]
     pub(crate) fn alloc(&self, size: usize) -> Option<NonNull<u8>> {
-        let size = normalize_size(size);
+        let size = normalize_size(size)?;
         let new_bl = match self.extract(size) {
             Some(bl) => bl,
             None => self.grow(size)?,
@@ -518,7 +546,15 @@ impl Tree {
     /// `allocator::tree_alloc_aligned`.
     #[must_use]
     pub(crate) fn alloc_aligned(&self, size: usize, alignment: usize) -> Option<NonNull<u8>> {
-        let size = normalize_size(size);
+        let size = normalize_size(size)?;
+        // The aligned path adds `alignment` on top of the normalized size — in
+        // `extract_aligned`'s `size + alignment` upper bound and in `grow`'s own
+        // `size + alignment` below — so it needs that much more headroom than
+        // `normalize_size` alone guarantees. Checked here rather than at each `+`,
+        // for the same reason and with the same rationale as `MAX_ALLOCATION` itself.
+        if alignment > MAX_ALLOCATION || size > MAX_ALLOCATION - alignment {
+            return None;
+        }
         let mut new_bl = match self.extract_aligned(size, alignment) {
             Some(bl) => bl,
             None => self.grow(size + alignment)?,
@@ -584,7 +620,7 @@ impl Tree {
     /// `ptr` must be a still-live tree-path allocation this instance produced.
     #[must_use]
     pub(crate) unsafe fn realloc(&self, ptr: NonNull<u8>, size: usize) -> Option<NonNull<u8>> {
-        let size = normalize_size(size);
+        let size = normalize_size(size)?;
         // SAFETY: forwarded from this function's own contract.
         let bl = unsafe { block::ptr_get_block_header(ptr.as_ptr()) };
         // SAFETY: `bl` is live.
@@ -726,7 +762,11 @@ impl Tree {
         alignment: usize,
     ) -> Option<NonNull<u8>> {
         debug_assert_eq!(ptr.addr().get() % alignment, 0);
-        let size = normalize_size(size);
+        let size = normalize_size(size)?;
+        // Same headroom requirement as `alloc_aligned`, which this falls back to.
+        if alignment > MAX_ALLOCATION || size > MAX_ALLOCATION - alignment {
+            return None;
+        }
         // SAFETY: forwarded from this function's own contract.
         let bl = unsafe { block::ptr_get_block_header(ptr.as_ptr()) };
         // SAFETY: `bl` is live.
@@ -881,9 +921,15 @@ impl Tree {
     /// `ptr` must be a still-live tree-path allocation this instance produced.
     #[must_use]
     pub(crate) unsafe fn resize(&self, ptr: NonNull<u8>, size: usize) -> usize {
-        let size = normalize_size(size);
         // SAFETY: forwarded from this function's own contract.
         let bl = unsafe { block::ptr_get_block_header(ptr.as_ptr()) };
+        let Some(size) = normalize_size(size) else {
+            // Past `MAX_ALLOCATION` (see its doc): no growth is possible, which is
+            // exactly what this function already reports for any request it cannot
+            // satisfy in place — the block keeps its current size, unmoved.
+            // SAFETY: `bl` is live.
+            return unsafe { BlockHeader::size(bl) };
+        };
         // SAFETY: `bl` is live.
         let bl_size = unsafe { BlockHeader::size(bl) };
         if bl_size >= size {
@@ -1318,9 +1364,9 @@ mod tests {
     // that calls real `Tree::alloc`/`grow`/`purge` against actual OS memory (it must:
     // `purge` returning memory to the OS is exactly the behaviour under test, and
     // `os::unmap` is unsound to call on anything but real `os::map` memory — see
-    // `FakeArena`'s doc). Miri-ignored for the same reason as `os.rs`'s own tests.
+    // `FakeArena`'s doc). Under Miri both sides of that pair are `os::test_vm`'s
+    // heap-backed stand-in, so the test runs there too.
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn tree_alloc_free_purge_returns_memory_to_os() {
         let tree = Tree::new();
         let a = tree.alloc(64).expect("OS map failed");
