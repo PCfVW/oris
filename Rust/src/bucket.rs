@@ -716,43 +716,70 @@ impl Buckets {
         debug_assert_eq!(
             result,
             bucket.pages.contains(page.cast::<ListLink>()),
-            "ptr_in_bucket's marker check disagreed with an exhaustive page-list \
-             scan — see this function's own doc for the known, HPHA-inherited cause"
+            "ptr_in_bucket's marker check disagreed with an exhaustive page-list scan. \
+             Two causes are possible. A false positive (marker says yes, scan says no) \
+             is the known, HPHA-inherited one this function's own doc describes. A \
+             false *negative* (marker says no, scan says yes) is not: it means every \
+             marker in this bucket was seeded from a different address than the one \
+             `Bucket::marker` reports now — i.e. the owning `Orisnik` has been moved \
+             since its first use. See `Orisnik`'s `# Address stability` doc section."
         );
         result
     }
 
     /// Returns every page with zero live allocations back to the OS. Ports
     /// `allocator::bucket_purge`.
+    ///
+    /// The walk visits the *whole* page list, stopping only at the first **full**
+    /// page — it does not stop at a merely partially-used one. That distinction is
+    /// HPHA's, and it is load-bearing: `Bucket`'s auto-sort only re-orders a page on
+    /// its full↔not-full transition (`Bucket::alloc` pushes to the back on becoming
+    /// full, `Bucket::free` to the front on ceasing to be full), so the ordering
+    /// *among* not-full pages is arbitrary and an empty page can sit behind a
+    /// partially-used one. v0.1.0 broke out of the loop on the first non-empty page
+    /// and so left those unreclaimed; see `docs/audits/2026-08-29-pre-v0.2.0-audit.md`.
     pub(crate) fn purge(&self) {
         for bucket in &self.buckets {
-            // EXPLICIT: page-list walk with early termination and in-loop removal;
-            // `front` is the state (the list's current head), not expressible as an
-            // iterator over a structure this crate deliberately doesn't build one for.
-            while let Some(front) = bucket.pages.front() {
-                // SAFETY: `front` is live (just returned by the list above).
-                if unsafe { Page::is_full(front.as_ptr()) } {
-                    // HPHA early-outs on the first full-or-partial page it meets
-                    // scanning from the front — pages are auto-sorted so a full page
-                    // here means every page after it is at least as full.
+            let sentinel = bucket.pages.sentinel();
+            // EXPLICIT: raw link-chase rather than a `front()` loop — the walk must
+            // advance *past* pages it does not free (unlike v0.1.0's head-only
+            // version), and it must latch each node's successor before unlinking it.
+            // `cur` is the state; an iterator cannot express a traversal whose
+            // current node is spliced out mid-walk.
+            // SAFETY: `sentinel` is live and self-linked (`IntrusiveList::sentinel`'s
+            // own guarantee); its `next` is therefore live.
+            let mut cur = unsafe { crate::list::ListLink::next(sentinel) };
+            while cur != sentinel {
+                // SAFETY: `cur != sentinel`, so it is a real node's link, and every
+                // node in this list is a `Page` whose `link` sits at offset 0.
+                let page = unsafe { NonNull::new_unchecked(cur.cast::<Page>()) };
+                // SAFETY: `page` is live (a linked member of this bucket's list).
+                if unsafe { Page::is_full(page.as_ptr()) } {
+                    // HPHA's own early-out: a full page means every page after it is
+                    // at least as full, since `Bucket::alloc` moves pages to the back
+                    // exactly when they fill up.
                     break;
                 }
-                // SAFETY: `front` is live.
-                if !unsafe { Page::is_empty(front.as_ptr()) } {
-                    break;
+                // Latched before the unlink below, which rewrites `cur`'s own links.
+                // SAFETY: `cur` is live and linked (established above).
+                let next = unsafe { crate::list::ListLink::next(cur) };
+                // SAFETY: `page` is live.
+                if unsafe { Page::is_empty(page.as_ptr()) } {
+                    crate::list::unlink_node(page);
+                    // ALIGN: `page` is a live `Page`, always
+                    // `PAGE_SIZE - size_of::<Page>()` bytes into its owning
+                    // PAGE_SIZE-aligned mapping (the type's own invariant); rounding
+                    // its address down recovers that mapping's base.
+                    let mem = crate::align::align_down(page.as_ptr().cast::<u8>(), os::PAGE_SIZE);
+                    // SAFETY: `mem` is the live mapping `page` belongs to (established
+                    // above), non-null (a real page address).
+                    let mem = unsafe { NonNull::new_unchecked(mem) };
+                    // SAFETY: `mem` is live, not referenced again after this call (the
+                    // page was just unlinked from every structure this module tracks
+                    // it through, and `next` was latched before the unlink).
+                    unsafe { self.system_free(mem) };
                 }
-                crate::list::unlink_node(front);
-                // ALIGN: `front` is a live `Page`, always PAGE_SIZE - size_of::<Page>()
-                // bytes into its owning PAGE_SIZE-aligned mapping (the type's own
-                // invariant); rounding its address down recovers that mapping's base.
-                let mem = crate::align::align_down(front.as_ptr().cast::<u8>(), os::PAGE_SIZE);
-                // SAFETY: `mem` is the live mapping `front` belongs to (established
-                // above), non-null (a real page address).
-                let mem = unsafe { NonNull::new_unchecked(mem) };
-                // SAFETY: `mem` is live, not referenced again after this call (the
-                // page was just unlinked from every structure this module tracks it
-                // through).
-                unsafe { self.system_free(mem) };
+                cur = next;
             }
         }
     }
@@ -923,15 +950,14 @@ mod tests {
         assert_eq!(bucket.get_free_page(), Some(roomy_page));
     }
 
-    // The five `Buckets`-level tests below (as opposed to the `Bucket`/`init_page_at`
+    // The `Buckets`-level tests below (as opposed to the `Bucket`/`init_page_at`
     // tests above, which use `FakePage`) call `Buckets::new()` and allocate through
-    // it, which reaches real `os::map` — Miri-ignored for the same reason `os.rs`'s
-    // own tests are (see that module's test-module doc comment): Miri does not shim
-    // `VirtualAlloc`, and its `mmap` shim doesn't support the trim-to-alignment
-    // technique `os::map`'s Unix path uses. Verified instead by native `cargo test`
-    // on all three OSes (rust-ci.yml).
+    // `os::map` — served under Miri by `os::test_vm`'s heap-backed stand-in, and by
+    // the real `VirtualAlloc`/`mmap` in a native `cargo test`. See `os::test_vm`'s
+    // own doc for why that split exists: Miri does not shim `VirtualAlloc`, and its
+    // `mmap` shim does not support the trim-to-alignment technique `os::map`'s Unix
+    // path uses, so before v0.1.1 these tests could not run under Miri at all.
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn buckets_alloc_direct_grows_and_serves_from_same_page() {
         let buckets = Buckets::new();
         let bi = bucket_spacing_function(24); // -> the 24-byte class
@@ -947,7 +973,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn buckets_free_recovers_bucket_index_from_page() {
         let buckets = Buckets::new();
         let ptr = buckets.alloc(40).expect("OS map failed");
@@ -960,7 +985,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn buckets_realloc_grows_in_place_within_same_class() {
         let buckets = Buckets::new();
         let ptr = buckets.alloc(8).expect("OS map failed");
@@ -976,7 +1000,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn buckets_realloc_moves_to_larger_class_and_copies() {
         let buckets = Buckets::new();
         let ptr = buckets.alloc(8).expect("OS map failed");
@@ -997,7 +1020,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn buckets_purge_returns_fully_empty_pages_only() {
         let buckets = Buckets::new();
         let bi = bucket_spacing_function(16);
@@ -1018,5 +1040,57 @@ mod tests {
         unsafe { buckets.free_direct(b, bi) };
         buckets.purge();
         assert_eq!(buckets.allocated(), 0, "fully-empty page must be reclaimed");
+    }
+
+    /// F1 regression (docs/audits/2026-08-29-pre-v0.2.0-audit.md): `purge` must walk
+    /// the *whole* page list, stopping only at a full page — an empty page sitting
+    /// behind a partially-used one is still reclaimable, and HPHA reclaims it.
+    ///
+    /// Builds exactly that list state: fill page A (which auto-sorts it to the back
+    /// and spawns page B at the front), take one slot from B, then free one slot of
+    /// A — A was full, so it returns to the front, giving `[A partial, B partial]`.
+    /// Freeing B's only slot leaves `[A partial, B empty]` with no re-sort, since B
+    /// was never full. v0.1.0 broke out of the loop on A and leaked B's whole page.
+    #[test]
+    fn buckets_purge_reclaims_an_empty_page_behind_a_partial_one() {
+        let buckets = Buckets::new();
+        let elem_size = MAX_SMALL_ALLOCATION; // largest class => fewest slots to fill
+        let bi = bucket_spacing_function(elem_size);
+        let slots = (os::PAGE_SIZE - size_of::<Page>()) / elem_size;
+
+        // Page A, filled completely: on its last slot it auto-sorts to the back.
+        let mut page_a: Vec<_> = Vec::with_capacity(slots);
+        for _ in 0..slots {
+            page_a.push(buckets.alloc_direct(bi).expect("OS map failed"));
+        }
+        // One more request finds A full, so it grows page B at the front.
+        let b_slot = buckets.alloc_direct(bi).expect("OS map failed");
+        assert_eq!(
+            buckets.allocated(),
+            2 * os::PAGE_SIZE,
+            "expected exactly two pages"
+        );
+
+        // A was full, so freeing one slot re-sorts it to the front, ahead of B.
+        let a_slot = page_a.pop().expect("page A has slots");
+        // SAFETY: `a_slot` is a live allocation from bucket `bi`.
+        unsafe { buckets.free_direct(a_slot, bi) };
+        // B was never full, so this triggers no re-sort: B stays behind A.
+        // SAFETY: `b_slot` is a live allocation from bucket `bi`.
+        unsafe { buckets.free_direct(b_slot, bi) };
+
+        buckets.purge();
+        assert_eq!(
+            buckets.allocated(),
+            os::PAGE_SIZE,
+            "the empty page behind a partially-used one must still be reclaimed"
+        );
+
+        for slot in page_a {
+            // SAFETY: each is a still-live allocation from bucket `bi`.
+            unsafe { buckets.free_direct(slot, bi) };
+        }
+        buckets.purge();
+        assert_eq!(buckets.allocated(), 0);
     }
 }

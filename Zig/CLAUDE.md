@@ -14,10 +14,10 @@ Every `.zig` file begins with `// SPDX-License-Identifier: MIT OR Apache-2.0` as
 ## Pre-commit checks (once code lands)
 
 1. `zig fmt .`
-2. `zig build test` in `Debug` **and** `ReleaseSafe` (runtime safety checks on), wrapping the
-   allocator-under-test with `std.testing.allocator` (leak detection) and exercising
-   `std.testing.checkAllAllocationFailures`. See `CONVENTIONS.md` § *Verification gate*. A new
-   raw-memory path is *pending* until a safe-build test exercises it.
+2. `zig build test` in `Debug` **and** `ReleaseSafe` (runtime safety checks on), wrapping any
+   *helper* allocation in a test with `std.testing.allocator` (leak detection), and covering
+   every out-of-memory path via `os.test_vm.failMapAfter`. See `CONVENTIONS.md` § *Verification
+   gate*. A new raw-memory path is *pending* until a safe-build test exercises it.
 3. Build `ReleaseFast` to confirm the hot path compiles with safety checks off.
 4. Update `CHANGELOG.md` — a bullet under `[Unreleased]` for any user-visible change.
 

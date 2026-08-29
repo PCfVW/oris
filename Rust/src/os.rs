@@ -29,6 +29,15 @@ pub(crate) const PAGE_SIZE: usize = 1 << 16; // 64 KiB, matches HPHA's VIRTUAL_P
 #[must_use]
 pub(crate) fn map(size: usize) -> Option<NonNull<u8>> {
     debug_assert!(size > 0 && size % PAGE_SIZE == 0);
+    #[cfg(test)]
+    {
+        if test_vm::should_fail() {
+            return None;
+        }
+        if test_vm::ACTIVE {
+            return test_vm::map(size);
+        }
+    }
     imp::map(size)
 }
 
@@ -40,9 +49,109 @@ pub(crate) fn map(size: usize) -> Option<NonNull<u8>> {
 /// - `size` must be the exact size passed to that `map` call.
 pub(crate) unsafe fn unmap(ptr: NonNull<u8>, size: usize) {
     debug_assert!(size > 0 && size % PAGE_SIZE == 0);
+    #[cfg(test)]
+    if test_vm::ACTIVE {
+        // SAFETY: forwarded; under `ACTIVE` every live mapping came from
+        // `test_vm::map`, so this is the matching deallocation.
+        unsafe { test_vm::unmap(ptr, size) };
+        return;
+    }
     // SAFETY: forwarded verbatim; this function's own contract (documented above)
     // is exactly imp::unmap's contract.
     unsafe { imp::unmap(ptr, size) };
+}
+
+/// Test-only seams over the OS boundary: a heap-backed stand-in for the real VM, and
+/// an out-of-memory injector. Compiled out entirely outside `cfg(test)`.
+///
+/// # Why a stand-in backend exists
+/// Miri cannot interpret either platform's VM syscall (see this module's test-module
+/// doc). Before v0.1.1 that meant **every test that actually allocated** — the whole
+/// `Orisnik` dispatcher, the `oris_*` C-ABI, both idiomatic surfaces — was
+/// `#[cfg_attr(miri, ignore)]`, so the crate's public surface never reached the
+/// soundness gate; only `bucket.rs`/`tree.rs`, which had built their own
+/// `FakePage`/`FakeArena` seams, did. [`ACTIVE`] generalizes those seams to the one
+/// place they were always needed: `map`/`unmap` themselves.
+///
+/// The stand-in is used **only under Miri**. A native `cargo test` still exercises the
+/// real `VirtualAlloc`/`mmap`, so this trades nothing away — it adds Miri coverage
+/// where there was none, rather than replacing real-VM coverage.
+#[cfg(test)]
+pub(crate) mod test_vm {
+    use super::PAGE_SIZE;
+    use core::cell::Cell;
+    use core::ptr::NonNull;
+
+    /// Whether `map`/`unmap` use the heap-backed stand-in instead of the real syscall.
+    /// True exactly under Miri — see this module's doc for why that is the right
+    /// boundary rather than "always, in tests".
+    pub(crate) const ACTIVE: bool = cfg!(miri);
+
+    thread_local! {
+        /// Successful [`super::map`] calls remaining before it starts returning
+        /// `None`; `None` disables injection. Thread-local because `cargo test` runs
+        /// tests in parallel and a process-global counter would let one test's
+        /// injection starve another's allocations.
+        static FAIL_AFTER: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+
+    /// Makes the next `successes` calls to [`super::map`] succeed and every call after
+    /// that fail, until [`clear_failure`]. The returned guard restores the previous
+    /// setting on drop, so a panicking assertion cannot leak injection into the next
+    /// test on this thread.
+    #[must_use]
+    pub(crate) fn fail_map_after(successes: usize) -> FailureGuard {
+        FAIL_AFTER.with(|f| f.set(Some(successes)));
+        FailureGuard
+    }
+
+    /// Disables out-of-memory injection on this thread.
+    pub(crate) fn clear_failure() {
+        FAIL_AFTER.with(|f| f.set(None));
+    }
+
+    /// Restores "no injection" when it goes out of scope.
+    pub(crate) struct FailureGuard;
+
+    impl Drop for FailureGuard {
+        fn drop(&mut self) {
+            clear_failure();
+        }
+    }
+
+    /// Consumes one budgeted success, reporting whether this `map` call must fail.
+    pub(crate) fn should_fail() -> bool {
+        FAIL_AFTER.with(|f| match f.get() {
+            None => false,
+            Some(0) => true,
+            Some(n) => {
+                f.set(Some(n - 1));
+                false
+            }
+        })
+    }
+
+    /// The heap-backed stand-in for a real mapping: `PAGE_SIZE`-aligned and zeroed,
+    /// matching what `VirtualAlloc(MEM_COMMIT)` and `mmap(MAP_ANON)` both guarantee.
+    #[must_use]
+    pub(crate) fn map(size: usize) -> Option<NonNull<u8>> {
+        let layout = std::alloc::Layout::from_size_align(size, PAGE_SIZE)
+            .expect("size is a non-zero multiple of PAGE_SIZE, which is a power of two");
+        // SAFETY: `layout` has a non-zero size (`map`'s own precondition, asserted by
+        // its caller). `alloc_zeroed` matches the real mappings' zero-fill guarantee.
+        let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+        NonNull::new(ptr)
+    }
+
+    /// # Safety
+    /// `ptr`/`size` must describe a still-live result of this module's own [`map`].
+    pub(crate) unsafe fn unmap(ptr: NonNull<u8>, size: usize) {
+        let layout = std::alloc::Layout::from_size_align(size, PAGE_SIZE)
+            .expect("size matched a prior `map` call, so the layout is valid");
+        // SAFETY: forwarded from this function's own contract — `ptr` came from
+        // `alloc_zeroed` with exactly this layout and is not used again.
+        unsafe { std::alloc::dealloc(ptr.as_ptr(), layout) };
+    }
 }
 
 #[cfg(windows)]

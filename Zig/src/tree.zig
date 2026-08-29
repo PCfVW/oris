@@ -52,12 +52,39 @@ const MIN_BLOCK_SIZE: usize = @sizeOf(FreeNode);
 /// `hpha.cpp`'s `tree_*` functions.
 const SPLIT_REMAINDER_MIN: usize = @sizeOf(BlockHeader) + @sizeOf(FreeNode);
 
+/// The largest request this module's own size arithmetic can carry without an
+/// intermediate step wrapping `usize`.
+///
+/// Every term is one rounding step on the path from a caller's `size` to a mapped
+/// arena, subtracted so that step's headroom is guaranteed:
+///
+/// - `os.PAGE_SIZE` — `Tree.grow`'s `roundUp(_, PAGE_SIZE)`
+/// - `3 * @sizeOf(BlockHeader)` — `Tree.grow`'s two fences plus one fake block
+/// - `@sizeOf(BlockHeader)` — `normalizeSize`'s own `roundUp(_, 16)`
+///
+/// # Deviation from HPHA, and why it is not one
+/// HPHA performs this arithmetic unchecked, so a sufficiently large request wraps and
+/// yields a block far smaller than asked for (`tree_alloc(SIZE_MAX)` normalizes to
+/// zero). That is not behaviour this port preserves: **no request at or below this
+/// bound changes behaviour**, and every request above it was already unsatisfiable —
+/// HPHA merely corrupted the heap instead of saying so. The bound is roughly
+/// `maxInt(usize) - 64 KiB`, so no allocation any real machine could serve is
+/// affected. Rejecting is therefore a strict refinement of undefined behaviour, not a
+/// change of contract, and it touches no state transition the cross-port invariant
+/// counts. Mirrors `orisnik`'s `tree::MAX_ALLOCATION` exactly.
+pub const MAX_ALLOCATION: usize =
+    std.math.maxInt(usize) - os.PAGE_SIZE - 3 * @sizeOf(BlockHeader) - @sizeOf(BlockHeader);
+
 /// Rounds `size` up to a valid block payload size: at least `MIN_BLOCK_SIZE`, and a
 /// multiple of `@sizeOf(BlockHeader)` (so every block boundary this produces stays
 /// `BlockHeader`-aligned — see `block.zig`'s alignment note). Ports the
 /// `if (size < sizeof(free_node)) size = sizeof(free_node); size = round_up(size,
 /// sizeof(block_header));` pair opening every `tree_alloc*`/`tree_realloc*`/`tree_resize`.
-fn normalizeSize(size: usize) usize {
+///
+/// Returns `null` when `size` exceeds `MAX_ALLOCATION` — the one place this port
+/// declines to reproduce HPHA's unchecked arithmetic; see that constant's own doc.
+fn normalizeSize(size: usize) ?usize {
+    if (size > MAX_ALLOCATION) return null;
     const clamped = if (size < MIN_BLOCK_SIZE) MIN_BLOCK_SIZE else size;
     return align_helpers.roundUp(clamped, @sizeOf(BlockHeader));
 }
@@ -391,7 +418,7 @@ pub const Tree = struct {
 
     /// Allocates `size` bytes on the tree path. Ports `allocator::tree_alloc`.
     pub fn alloc(self: *Tree, size: usize) ?[*]u8 {
-        const sz = normalizeSize(size);
+        const sz = normalizeSize(size) orelse return null;
         const new_bl = self.extract(sz) orelse (self.grow(sz) orelse return null);
         const new_bl_size = new_bl.size();
         std.debug.assert(new_bl_size >= sz);
@@ -406,7 +433,13 @@ pub const Tree = struct {
     /// Allocates `size` bytes on the tree path, aligned to `alignment`. Ports
     /// `allocator::tree_alloc_aligned`.
     pub fn allocAligned(self: *Tree, size: usize, alignment: usize) ?[*]u8 {
-        const sz = normalizeSize(size);
+        const sz = normalizeSize(size) orelse return null;
+        // The aligned path adds `alignment` on top of the normalized size — in
+        // `extractAligned`'s `size + alignment` upper bound and in `grow`'s own
+        // `sz + alignment` below — so it needs that much more headroom than
+        // `normalizeSize` alone guarantees. Checked here rather than at each `+`,
+        // for the same reason and with the same rationale as `MAX_ALLOCATION` itself.
+        if (alignment > MAX_ALLOCATION or sz > MAX_ALLOCATION - alignment) return null;
         var new_bl = self.extractAligned(sz, alignment) orelse (self.grow(sz + alignment) orelse return null);
         const new_bl_size = new_bl.size();
         std.debug.assert(new_bl_size >= sz);
@@ -452,7 +485,7 @@ pub const Tree = struct {
     ///
     /// `ptr` must be a still-live tree-path allocation this instance produced.
     pub fn realloc(self: *Tree, ptr: [*]u8, size: usize) ?[*]u8 {
-        const sz = normalizeSize(size);
+        const sz = normalizeSize(size) orelse return null;
         const bl = block.ptrGetBlockHeader(ptr);
         const bl_size = bl.size();
         if (bl_size >= sz) {
@@ -528,7 +561,9 @@ pub const Tree = struct {
     /// itself already aligned to `alignment`.
     pub fn reallocAligned(self: *Tree, ptr: [*]u8, size: usize, alignment: usize) ?[*]u8 {
         std.debug.assert(@intFromPtr(ptr) % alignment == 0);
-        const sz = normalizeSize(size);
+        const sz = normalizeSize(size) orelse return null;
+        // Same headroom requirement as `allocAligned`, which this falls back to.
+        if (alignment > MAX_ALLOCATION or sz > MAX_ALLOCATION - alignment) return null;
         const bl = block.ptrGetBlockHeader(ptr);
         const bl_size = bl.size();
         if (bl_size >= sz) {
@@ -625,8 +660,11 @@ pub const Tree = struct {
     ///
     /// `ptr` must be a still-live tree-path allocation this instance produced.
     pub fn resize(self: *Tree, ptr: [*]u8, size: usize) usize {
-        const sz = normalizeSize(size);
         const bl = block.ptrGetBlockHeader(ptr);
+        // Past `MAX_ALLOCATION` (see its doc): no growth is possible, which is
+        // exactly what this function already reports for any request it cannot
+        // satisfy in place — the block keeps its current size, unmoved.
+        const sz = normalizeSize(size) orelse return bl.size();
         const bl_size = bl.size();
         if (bl_size >= sz) {
             if (bl_size >= sz + SPLIT_REMAINDER_MIN) {

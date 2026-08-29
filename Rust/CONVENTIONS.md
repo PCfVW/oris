@@ -400,11 +400,39 @@ evidence that the `unsafe` is actually sound, not merely plausible. The rule mir
 `// VECTORIZED:` three-state policy:
 
 - The test suite runs green under `cargo +nightly miri test` with both
-  `-Zmiri-strict-provenance` **and** `-Zmiri-tree-borrows` before any `vX.Y.0` tag.
+  `-Zmiri-strict-provenance` **and** `-Zmiri-tree-borrows` before any `vX.Y.Z` tag — patch
+  releases included, since a fidelity fix touches the same `unsafe` the gate exists for.
 - A new or modified `unsafe` block is *pending* until it has been exercised by a Miri-covered
   test. A `pending` unsafe path older than one release is a release blocker, not a TODO.
 - Provenance and aliasing bugs that escape Miri's per-run coverage are the reason the size-class
   and tree paths each carry a dedicated stress test that Miri runs.
+
+**Reaching the OS boundary under Miri.** Miri cannot interpret `VirtualAlloc` or `mmap`, so
+until v0.1.1 the *pending* rule above was quietly unsatisfiable for most of the crate: every
+test that actually allocated was `#[cfg_attr(miri, ignore)]`, leaving 22 allocator-path tests —
+all of `Orisnik`, the `oris_*` C-ABI, `GlobalAlloc` and the `Allocator` trait — outside the
+gate they were supposed to be inside. `os::test_vm` (`os.rs`, `#[cfg(test)]`) closes that: under
+Miri, and only under Miri, `os::map`/`os::unmap` are served by a `PAGE_SIZE`-aligned,
+zero-filled heap allocation. A native `cargo test` still exercises the real syscalls, so this
+adds coverage rather than substituting for it, and `os.rs`'s own tests stay Miri-ignored on
+purpose — they are the ones testing the syscalls themselves.
+
+Two consequences for new tests:
+
+- **Do not add `#[cfg_attr(miri, ignore)]` to an allocator test.** It is no longer needed, and
+  it silently removes the test from the gate. Reserve it for tests whose *runtime* under Miri is
+  prohibitive, and then scale the workload instead where you can (see
+  `randomized_alloc_free_stress_matches_the_hpha_benchmark_shape`, which runs a reduced `N`
+  under Miri rather than skipping).
+- **End an allocating test with `purge()`.** The allocator holds pages until asked, matching
+  HPHA — which the stand-in correctly reports to Miri as still-live memory, i.e. a leak. Calling
+  `purge()` is both what a well-behaved embedder does and a stronger assertion than omitting it.
+
+`os::test_vm` also carries the out-of-memory injector (`fail_map_after`) that covers every
+`None` return on the `system_alloc` path; those tests are Miri-covered too, since a refused map
+never reaches the OS at all. The Zig port has the injector but not the stand-in — it has no
+Miri, and its `Debug`/`ReleaseSafe` gate already runs against real mappings; see
+[`Zig/CONVENTIONS.md`](../Zig/CONVENTIONS.md)'s *Verification gate*.
 
 ### MSRV Lint Guard
 

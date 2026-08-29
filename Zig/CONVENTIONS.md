@@ -253,12 +253,23 @@ checks *are* on. Never disable safety to paper over a bound you have not proven.
 ### Verification gate
 
 `Debug` and `ReleaseSafe` builds keep every runtime check on; the full test suite runs under
-both before any `vX.Y.0` tag, plus `std.testing.allocator` (leak detection) wrapping the
-allocator-under-test and `std.testing.checkAllAllocationFailures` to exercise every
-allocation-failure path. This is the Zig analog of the Rust port's Miri gate: it is the
+both before any `vX.Y.0` tag, plus `std.testing.allocator` (leak detection) on any *helper*
+allocation a test makes. This is the Zig analog of the Rust port's Miri gate: it is the
 evidence the raw-memory code is sound, not merely plausible. A new raw-memory path is *pending*
 until a safe-build test exercises it; a pending path older than one release is a release
 blocker.
+
+**Out-of-memory paths are covered by `os.test_vm.failMapAfter`, not by
+`std.testing.checkAllAllocationFailures`.** Through v0.1.0 this section named the latter, which
+was a mistake — and a structural one, not an oversight that a bit more diligence would have
+fixed. `checkAllAllocationFailures` wraps a `FailingAllocator` around a *backing*
+`std.mem.Allocator` and passes it **to** the code under test; it exercises allocator
+*consumers*. `Orisnitsa` consumes no allocator — it calls `os.map` directly — so there is no
+allocator to wrap, and the helper can say nothing about this module's own OOM handling. It was
+correspondingly never used anywhere in `src/`, leaving every `orelse return null` on a
+`systemAlloc` result unexecuted until v0.1.1. The injection seam in `os.zig` is the tool that
+actually fits; pair it with `defer os.test_vm.clearFailure()` so a failing assertion cannot
+leak injection into the next test.
 
 ---
 

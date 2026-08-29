@@ -253,13 +253,15 @@ pub unsafe extern "C" fn oris_allocated(handle: *mut Orisnik) -> usize {
 mod tests {
     use super::*;
 
-    // Every allocating call below reaches real `os::map` through a freshly
-    // `oris_new`-created handle (see `orisnik.rs`'s test module doc for why: no
-    // OS-free seeding seam exists at this layer). Miri-ignored for the same reason
-    // as `orisnik.rs`'s own OS-touching tests.
+    // Every allocating call below goes through `os::map`, which under Miri is served
+    // by `os::test_vm`'s heap-backed stand-in (see that module's doc); a native
+    // `cargo test` still reaches the real `VirtualAlloc`/`mmap`. That is what lets
+    // these tests run under the soundness gate at all — before v0.1.1 they were all
+    // `#[cfg_attr(miri, ignore)]`. Each therefore ends by returning its pages with
+    // `purge()`: the allocator holds them until asked (matching HPHA), which the
+    // stand-in correctly reports to Miri as still-live memory.
 
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn c_abi_round_trip_alloc_realloc_free_purge() {
         let handle = oris_new();
         assert!(!handle.is_null());
@@ -296,7 +298,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn c_abi_aligned_alloc_and_free_with_size() {
         let handle = oris_new();
 
@@ -318,6 +319,14 @@ mod tests {
         // SAFETY: `handle` is live; `calloc_ptr` is a live allocation `handle`
         // produced with 64 bytes at the default alignment.
         unsafe { oris_free_with_size(handle, calloc_ptr, 64) };
+
+        // `oris_destroy` does not return outstanding pages to the OS (its own doc
+        // says so); a C caller that wants them back calls `oris_purge` first. Doing
+        // that here both matches the documented pattern and asserts it works.
+        // SAFETY: `handle` is live.
+        unsafe { oris_purge(handle) };
+        // SAFETY: `handle` is live.
+        assert_eq!(unsafe { oris_allocated(handle) }, 0);
 
         // SAFETY: `handle` is a still-live, not-yet-destroyed `oris_new` result.
         unsafe { oris_destroy(handle) };

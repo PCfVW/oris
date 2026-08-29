@@ -35,7 +35,7 @@
 //! so in a genuinely multithreaded program — including the default `cargo test`
 //! harness — is undefined behaviour, not merely unsupported.
 
-#![doc(html_root_url = "https://docs.rs/orisnik/0.1.0")]
+#![doc(html_root_url = "https://docs.rs/orisnik/0.1.1")]
 #![deny(unsafe_op_in_unsafe_fn)]
 // `feature(allocator_api)` is itself nightly-gated syntax — stable rustc hard-errors
 // on any `#![feature(...)]` attribute, so this must stay behind `cfg_attr` even
