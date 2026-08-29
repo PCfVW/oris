@@ -906,6 +906,42 @@ test "VintageRand matches the Microsoft CRT" {
     }
 }
 
+test "VintageRand derived stream is pinned across ports" {
+    // Pins the *exact* derived stream both ports must see, with no allocator
+    // involved — the cross-port invariant's requirement applied to the test workload
+    // itself.
+    //
+    // The golden vectors above pin `next()`; this pins everything derived from it, so
+    // a drift in `size`'s fixed-point arithmetic or `alignment`'s shift cannot slip
+    // through in one port while the other stays put. `orisnik` asserts the identical
+    // constants. Computed independently from the reference LCG, not captured from
+    // this implementation's own output.
+    const Case = struct { n: usize, bucket: usize, tree: usize };
+    for ([_]Case{
+        .{ .n = 150, .bucket = 108, .tree = 42 },
+        .{ .n = 20_000, .bucket = 14_123, .tree = 5_877 },
+    }) |c| {
+        var rng: VintageRand = .init(1234);
+        var bucket_path: usize = 0;
+        var tree_path: usize = 0;
+        for (0..c.n) |_| {
+            if (bucket.isSmallAllocation(rng.size())) bucket_path += 1 else tree_path += 1;
+        }
+        try testing.expectEqual(c.bucket, bucket_path);
+        try testing.expectEqual(c.tree, tree_path);
+    }
+
+    // The aligned pass draws a size and an alignment per iteration; the sum of the
+    // alignments pins that interleaving too.
+    var rng: VintageRand = .init(1234);
+    var alignment_sum: usize = 0;
+    for (0..20_000) |_| {
+        _ = rng.size();
+        alignment_sum += rng.alignment();
+    }
+    try testing.expectEqual(@as(usize, 363_773), alignment_sum);
+}
+
 test "randomized alloc/free stress matches the HPHA benchmark shape" {
     // The shape of `main.cpp`'s `benchmark1()`, with the assertions it never had.
     // Every block is stamped with a byte pattern derived from its index and verified
@@ -916,6 +952,12 @@ test "randomized alloc/free stress matches the HPHA benchmark shape" {
     // test is a hand-written scenario of at most a few thousand allocations, and the
     // only randomized test in the module exercised the `RB-tree` rather than the
     // allocator.
+    //
+    // `N` is the full 20 000 in every optimization mode. `orisnik` scales its own
+    // copy down under Miri (where interpretation costs ~47 min at this size); Zig's
+    // safety-checked builds run at native speed, so there is nothing to trade off
+    // here — the two ports differ in the *cost* of their verification gate, not in
+    // the workload they intend.
     const N: usize = 20_000;
     const Block = struct { ptr: [*]u8, size: usize, stamp: u8 };
 

@@ -17,8 +17,8 @@ A Rust and Zig port of Dimitar Lazarov's **HPHA** (2007).
 
 ## Status
 
-- **`orisnik` (Rust)** — v0.1.1 is released: the bucket (small-allocation) and red-black-tree best-fit (large-allocation) sub-allocators, plus the three public surfaces (`oris_*` C-ABI, `GlobalAlloc`, an optional `Allocator` trait). 93 tests, the entire public surface Miri-covered. See [Rust/README.md](Rust/README.md) for details and [CHANGELOG.md](CHANGELOG.md) for what shipped.
-- **`orisnitsa` (Zig)** — v0.1.1 is released: the same bucket and red-black-tree best-fit sub-allocators, plus the three public surfaces (`Orisnitsa`'s own methods, a `std.mem.Allocator` vtable, the `oris_*` C-ABI). 95 tests, verified in Debug/ReleaseSafe/ReleaseFast across all three OSes — Zig's analog of the Rust port's Miri gate. See [Zig/README.md](Zig/README.md) for details and [CHANGELOG.md](CHANGELOG.md) for what shipped.
+- **`orisnik` (Rust)** — v0.1.1 is released: the bucket (small-allocation) and red-black-tree best-fit (large-allocation) sub-allocators, plus the three public surfaces (`oris_*` C-ABI, `GlobalAlloc`, an optional `Allocator` trait). 94 tests, the entire public surface Miri-covered. See [Rust/README.md](Rust/README.md) for details and [CHANGELOG.md](CHANGELOG.md) for what shipped.
+- **`orisnitsa` (Zig)** — v0.1.1 is released: the same bucket and red-black-tree best-fit sub-allocators, plus the three public surfaces (`Orisnitsa`'s own methods, a `std.mem.Allocator` vtable, the `oris_*` C-ABI). 96 tests, verified in Debug/ReleaseSafe/ReleaseFast across all three OSes — Zig's analog of the Rust port's Miri gate. See [Zig/README.md](Zig/README.md) for details and [CHANGELOG.md](CHANGELOG.md) for what shipped.
 - Both ports **ship in lockstep** (see [Versioning policy](ROADMAP.md#versioning-policy)): one version number means the same feature set and the same internal state transitions on both sides. See [RELEASING.md](RELEASING.md) for the checklist that cuts each release.
 
 The two foundational documents:

@@ -1084,6 +1084,48 @@ mod tests {
         }
     }
 
+    /// Pins the *exact* derived stream both ports must see, with no allocator
+    /// involved — the cross-port invariant's requirement applied to the test
+    /// workload itself.
+    ///
+    /// The golden vectors above pin `next()`; this pins everything derived from it,
+    /// so a drift in `size`'s fixed-point arithmetic or `alignment`'s shift cannot
+    /// slip through in one port while the other stays put. `orisnitsa` asserts the
+    /// identical constants. Computed independently from the reference LCG, not
+    /// captured from this implementation's own output.
+    #[test]
+    fn vintage_rand_derived_stream_is_pinned_across_ports() {
+        // Size distribution over `main.cpp`'s own seed, at both workload scales.
+        for &(n, want_bucket, want_tree) in
+            &[(150_usize, 108_usize, 42_usize), (20_000, 14_123, 5_877)]
+        {
+            let mut rng = VintageRand::new(1234);
+            let (mut bucket_path, mut tree_path) = (0_usize, 0_usize);
+            for _ in 0..n {
+                if bucket::is_small_allocation(rng.size()) {
+                    bucket_path += 1;
+                } else {
+                    tree_path += 1;
+                }
+            }
+            assert_eq!(
+                (bucket_path, tree_path),
+                (want_bucket, want_tree),
+                "N = {n}"
+            );
+        }
+
+        // The aligned pass draws a size and an alignment per iteration; the sum of
+        // the alignments pins that interleaving too.
+        let mut rng = VintageRand::new(1234);
+        let mut alignment_sum = 0_usize;
+        for _ in 0..20_000 {
+            let _ = rng.size();
+            alignment_sum += rng.alignment();
+        }
+        assert_eq!(alignment_sum, 363_773);
+    }
+
     /// The shape of `main.cpp`'s `benchmark1()`, with the assertions it never had.
     ///
     /// Allocates `N` blocks at `rand_size()`-distributed sizes, then frees them in

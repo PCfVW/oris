@@ -19,7 +19,10 @@ A Rust port of [Oris](https://github.com/PCfVW/oris) — a Rust and Zig port of 
   - **`oris_*`** — a C-shaped API (`oris_new`, `oris_alloc`, `oris_free`, `oris_realloc`, ...), instance-scoped via an explicit handle — never a hidden global. `cargo build --release` also emits real linkable `liborisnik.so`/`.dylib`/`orisnik.dll` + `liborisnik.a`/`orisnik.lib` artifacts (`crate-type = ["lib", "cdylib", "staticlib"]`); pair with [`include/oris.h`](include/oris.h) (vendored here — byte-identical to [the canonical copy](https://github.com/PCfVW/oris/blob/main/include/oris.h), so this package is self-contained) to link from C/C++.
   - **`unsafe impl GlobalAlloc`** — opt in as a `#[global_allocator]`.
   - **`unsafe impl core::alloc::Allocator`** — optional, behind the `nightly` Cargo feature, for `Box::new_in`/`Vec::new_in`.
-- 80+ tests, most Miri-covered under `-Zmiri-strict-provenance -Zmiri-tree-borrows`.
+- 94 tests. The **entire public surface** runs under Miri
+  (`-Zmiri-strict-provenance -Zmiri-tree-borrows`): 93 pass there, and the only five
+  skipped are `os.rs`'s own real-syscall tests, which Miri cannot interpret, plus the
+  manual C++ oracle tool.
 - **64-bit platforms only** — enforced at compile time (see `src/block.rs`'s module doc).
 
 ## Quick start

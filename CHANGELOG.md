@@ -139,9 +139,10 @@ requires; findings are numbered as in
   the `oris_*` C-ABI, `GlobalAlloc` and the `Allocator` trait, sat outside the soundness
   gate. `os::test_vm` now serves `map`/`unmap` from a `PAGE_SIZE`-aligned heap
   allocation **under Miri only** — a native `cargo test` still exercises the real
-  syscalls, so this adds coverage rather than replacing it. Miri goes from **60 passed /
-  32 ignored to 92 passed / 5 ignored**; the remaining five are `os.rs`'s own
-  real-syscall tests and the manual oracle tool.
+  syscalls, so this adds coverage rather than replacing it. v0.1.0 skipped **26 of its
+  83 tests** under Miri; v0.1.1 skips **5** — `os.rs`'s four real-syscall tests, which
+  Miri genuinely cannot interpret, and the manual C++ oracle tool — with **93 passing**
+  under `-Zmiri-strict-provenance -Zmiri-tree-borrows`.
   - Nine tests gained a `purge()` they had been missing: with the stand-in backing
     `map`, pages the allocator holds until asked (matching HPHA) show up to Miri as
     still-live memory. That is the documented embedder contract, so calling `purge()`
@@ -178,7 +179,7 @@ requires; findings are numbered as in
   bucket-index agreement the zero-alignment free relies on, the
   raw-vtable/`GlobalAlloc` zero-length realloc guard, and the zero-`orig_size`
   recovery across all three entry points on both the bucket and tree paths.
-  93 Rust tests (from 79) and 95 Zig tests (from 81).
+  94 Rust tests (from 79) and 96 Zig tests (from 81).
 
 ## [0.1.0] - 2026-08-17
 

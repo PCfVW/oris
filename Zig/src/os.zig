@@ -60,8 +60,16 @@ pub fn map(size: usize) ?[*]u8 {
 /// than incidental: that helper wraps a `FailingAllocator` around a *backing*
 /// `std.mem.Allocator` and passes it **to** the code under test, so it exercises
 /// allocator *consumers*. `Orisnitsa` consumes no allocator — it calls `os.map`
-/// directly — so the only place a failure can be injected is here. Mirrors `orisnik`'s
-/// `os::test_vm`.
+/// directly — so the only place a failure can be injected is here.
+///
+/// # Parity with `orisnik`'s `os::test_vm`
+/// The injection half is identical. `orisnik`'s seam carries a second half this one
+/// deliberately does not: a heap-backed stand-in that replaces the real syscall
+/// *under Miri*, because Miri cannot interpret `VirtualAlloc`/`mmap` and every
+/// allocating test would otherwise be skipped there. Zig has no Miri, and its own
+/// verification gate — `Debug`/`ReleaseSafe` runtime safety checks — works against
+/// the real mappings, so there is nothing for a stand-in to unlock. The asymmetry is
+/// in the *tooling*, not in what the two ports test.
 pub const test_vm = struct {
     /// Successful `map` calls remaining before it starts returning `null`; `null`
     /// disables injection.
