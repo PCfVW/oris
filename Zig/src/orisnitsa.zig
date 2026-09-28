@@ -6,11 +6,13 @@
 //! `orisnik`'s `orisnik.rs` — `MULTITHREADED` (mutex-guarded buckets/tree) is out
 //! of scope until v2.x, see `ROADMAP.md`. `DEBUG_ALLOCATOR` (guard bytes,
 //! allocation records, `check()`/`report()`) is v0.2.0's own milestone, landing
-//! incrementally behind `config.debug` (`guard.zig`, `spomen_guard.zig`): the tree
-//! path's guard bytes are wired in here (`treeAlloc`/`treeAllocAligned`/
+//! incrementally behind `config.debug` (`guard.zig`, `spomen_guard.zig`): the
+//! tree path's guard bytes were wired in first (`treeAlloc`/`treeAllocAligned`/
 //! `treeRealloc`/`treeReallocAligned`/`treeResize`, and `querySize`'s tree
-//! branch); the bucket path and the rest of `spomen` (allocation records,
-//! callstack capture, `check()`/`report()`) follow in later phases. With
+//! branch); this phase wires in the bucket path's own choke points
+//! (`bucketAlloc`/`bucketAllocAligned`/`bucketRealloc`/`bucketResize`, and
+//! `querySize`'s bucket branch) — the rest of `spomen` (allocation records,
+//! callstack capture, `check()`/`report()`) follows in a later phase. With
 //! `config.debug` false, `guard.memoryGuardSize(config)` is 0, so every
 //! `+`/`- memoryGuardSize(config)` site below is dead code the compiler removes,
 //! restoring v0.1.x's exact guard-free arithmetic — the same "cancels out and is
@@ -304,16 +306,103 @@ pub fn Orisnitsa(comptime config: Config) type {
             return new_size;
         }
 
+        /// The bucket path's sole *fresh-allocation* choke point for a plain
+        /// (unaligned) request. `size` is the caller-visible, already-clamped
+        /// request — the guard reservation is folded into the bucket-index
+        /// computation and stripped back off nowhere here (bucket "size" is a
+        /// slot's fixed class, never reported through this method; `resize`/
+        /// `querySize` deflate it on their own).
+        fn bucketAlloc(self: *Self, size: usize) ?[*]u8 {
+            const inflated = guard.inflate(config, size) orelse size;
+            const ptr = self.buckets.allocDirect(bucket.bucketSpacingFunction(inflated)) orelse return null;
+            if (config.debug) {
+                // `ptr` is a slot of at least `inflated == size +
+                // memoryGuardSize(config)` bytes (just allocated from that
+                // bucket), exclusively owned (freshly allocated, not yet handed
+                // to any other caller).
+                spomen_guard.writeGuard(config, ptr, size, self.nextGuardSeed());
+            }
+            return ptr;
+        }
+
+        /// `bucketAlloc`'s aligned counterpart. The guard reservation is folded
+        /// in **before** rounding to `alignment` — `roundUp(size +
+        /// memoryGuardSize(config), alignment)`, not `roundUp(size, alignment)
+        /// + memoryGuardSize(config)` — matching HPHA's own `alloc(size_t,
+        /// size_t)` exactly (`Cpp/hpha.h:1291`); the two only ever differ when
+        /// `alignment` doesn't evenly divide `memoryGuardSize(config)`, but the
+        /// order is what HPHA's real arithmetic is, not an equivalent-looking
+        /// alternative.
+        fn bucketAllocAligned(self: *Self, size: usize, alignment: usize) ?[*]u8 {
+            const inflated = guard.inflate(config, size) orelse size;
+            const ptr = self.buckets.allocDirect(
+                bucket.bucketSpacingFunction(align_helpers.roundUp(inflated, alignment)),
+            ) orelse return null;
+            if (config.debug) {
+                // `ptr` is a slot of at least `roundUp(inflated, alignment) >=
+                // size + memoryGuardSize(config)` bytes, aligned to `alignment`,
+                // exclusively owned.
+                spomen_guard.writeGuard(config, ptr, size, self.nextGuardSeed());
+            }
+            return ptr;
+        }
+
+        /// The bucket path's sole choke point for growing/shrinking an
+        /// *existing* bucket-path allocation in place (never a move —
+        /// `Buckets.realloc` only ever grows into a larger size class,
+        /// `realloc`'s own cross-path logic handles the bucket->tree case
+        /// separately). `size` is the caller's already-clamped target; on
+        /// success, the guard ramp is (re)written at that target, exactly
+        /// mirroring HPHA's `bucket_realloc(ptr, size + MEMORY_GUARD_SIZE);
+        /// debug_replace(ptr, newPtr, size, ...)` (`Cpp/hpha.h`'s `realloc`).
+        ///
+        /// `ptr` must be a still-live bucket-path allocation this instance
+        /// produced.
+        fn bucketRealloc(self: *Self, ptr: [*]u8, size: usize) ?[*]u8 {
+            const inflated = guard.inflate(config, size) orelse size;
+            const new_ptr = self.buckets.realloc(ptr, inflated) orelse return null;
+            if (config.debug) {
+                // `new_ptr` is a slot of at least `inflated == size +
+                // memoryGuardSize(config)` bytes, exclusively owned.
+                spomen_guard.writeGuard(config, new_ptr, size, self.nextGuardSeed());
+            }
+            return new_ptr;
+        }
+
+        /// The bucket path's `resize` counterpart. Bucket slots never actually
+        /// grow — this only ever reports the slot's own fixed, deflated size —
+        /// but the guard ramp is still (re)written unconditionally on every
+        /// call, matching HPHA's own `resize` body exactly: `size =
+        /// ptr_get_page(ptr)->elem_size() - MEMORY_GUARD_SIZE;
+        /// debug_update(ptr, size);` runs every time, not only when something
+        /// changed (`Cpp/hpha.h`'s `resize`) — the same unconditional shape
+        /// `treeResize`'s own doc explains at length for the tree path.
+        ///
+        /// `ptr` must be a still-live bucket-path allocation this instance
+        /// produced.
+        fn bucketResize(self: *Self, ptr: [*]u8) usize {
+            const page = bucket.ptrGetPage(ptr);
+            const real_size = page.elemSize();
+            const new_size = guard.deflate(config, real_size);
+            if (config.debug) {
+                // `ptr` is valid for `real_size == new_size +
+                // memoryGuardSize(config)` bytes (the whole slot), exclusively
+                // owned.
+                spomen_guard.writeGuard(config, ptr, new_size, self.nextGuardSeed());
+            }
+            return new_size;
+        }
+
         /// Allocates `size` bytes at `block.DEFAULT_ALIGNMENT`. `size == 0` returns
         /// `null`. Ports `allocator::alloc(size_t)`.
         pub fn alloc(self: *Self, size: usize) ?[*]u8 {
             self.debugAssertNotMoved();
-            if (!bucket.isSmallAllocation(size)) {
+            if (!bucket.isSmallAllocation(config, size)) {
                 return self.treeAlloc(size);
             }
             if (size == 0) return null;
             const sz = bucket.clampSmallAllocation(size);
-            return self.buckets.allocDirect(bucket.bucketSpacingFunction(sz));
+            return self.bucketAlloc(sz);
         }
 
         /// Allocates `size` bytes aligned to `alignment`. `size == 0` returns `null`;
@@ -330,12 +419,12 @@ pub fn Orisnitsa(comptime config: Config) type {
             if (alignment <= block.DEFAULT_ALIGNMENT) {
                 return self.alloc(size);
             }
-            if (!bucket.isSmallAllocation(size) or alignment > bucket.MAX_SMALL_ALLOCATION) {
+            if (!bucket.isSmallAllocation(config, size) or alignment > bucket.MAX_SMALL_ALLOCATION) {
                 return self.treeAllocAligned(size, alignment);
             }
             if (size == 0) return null;
             const sz = bucket.clampSmallAllocation(size);
-            return self.buckets.allocDirect(bucket.bucketSpacingFunction(align_helpers.roundUp(sz, alignment)));
+            return self.bucketAllocAligned(sz, alignment);
         }
 
         /// Allocates `count * size` bytes at `block.DEFAULT_ALIGNMENT` and zeroes
@@ -381,8 +470,8 @@ pub fn Orisnitsa(comptime config: Config) type {
             // contract), exactly what `ptrInBucket` requires.
             if (self.buckets.ptrInBucket(p)) {
                 const sz = bucket.clampSmallAllocation(size);
-                if (bucket.isSmallAllocation(sz)) {
-                    return self.buckets.realloc(p, sz);
+                if (bucket.isSmallAllocation(config, sz)) {
+                    return self.bucketRealloc(p, sz);
                 }
                 const new_ptr = self.treeAlloc(sz) orelse return null;
                 const page = bucket.ptrGetPage(p);
@@ -442,9 +531,9 @@ pub fn Orisnitsa(comptime config: Config) type {
             // `p` is a live allocation this instance produced.
             if (self.buckets.ptrInBucket(p)) {
                 const sz = bucket.clampSmallAllocation(size);
-                if (bucket.isSmallAllocation(sz) and alignment <= bucket.MAX_SMALL_ALLOCATION) {
+                if (bucket.isSmallAllocation(config, sz) and alignment <= bucket.MAX_SMALL_ALLOCATION) {
                     // Growing in place within the bucket path here delegates to
-                    // `Buckets.realloc`, which is not itself alignment-aware —
+                    // `bucketRealloc`, which is not itself alignment-aware —
                     // exactly mirroring HPHA's own `bucket_realloc` call. Soundness
                     // relies on the *original* allocation's bucket having been
                     // chosen by `allocAligned` (whose `roundUp(size, alignment)`
@@ -453,7 +542,7 @@ pub fn Orisnitsa(comptime config: Config) type {
                     // `alignment`-aligned) — this call does not re-establish that
                     // guarantee if it must move to a larger bucket, an inherited
                     // HPHA quirk, not a new one.
-                    return self.buckets.realloc(p, sz);
+                    return self.bucketRealloc(p, sz);
                 }
                 const new_ptr = self.treeAllocAligned(sz, alignment) orelse return null;
                 const page = bucket.ptrGetPage(p);
@@ -498,8 +587,7 @@ pub fn Orisnitsa(comptime config: Config) type {
             // `p` is a live allocation this instance produced (this function's own
             // contract).
             if (self.buckets.ptrInBucket(p)) {
-                const page = bucket.ptrGetPage(p);
-                return page.elemSize();
+                return self.bucketResize(p);
             }
             // `p` is a live tree-path allocation this instance produced.
             return self.treeResize(p, size);
@@ -521,7 +609,7 @@ pub fn Orisnitsa(comptime config: Config) type {
             // contract).
             if (self.buckets.ptrInBucket(p)) {
                 const page = bucket.ptrGetPage(p);
-                return page.elemSize();
+                return guard.deflate(config, page.elemSize());
             }
             // `p` is a live tree-path allocation this instance produced.
             const bl = block.ptrGetBlockHeader(p);
@@ -580,12 +668,22 @@ pub fn Orisnitsa(comptime config: Config) type {
                 self.freeZeroOrigSize(p);
                 return;
             }
-            if (bucket.isSmallAllocation(orig_size)) {
+            if (bucket.isSmallAllocation(config, orig_size)) {
+                // Inflate before recomputing the bucket index — `alloc`'s own
+                // `bucketAlloc` chose this pointer's bucket from
+                // `guard.inflate(config, orig_size)`, not the bare `orig_size`;
+                // recomputing without it would land on a *different* bucket
+                // under `config.debug` and free into the wrong size class's
+                // free list. Ports HPHA's own `bucket_spacing_function(origSize
+                // + MEMORY_GUARD_SIZE)` here exactly (`Cpp/hpha.h`'s
+                // `free(void*, size_t)`).
+                const inflated = guard.inflate(config, orig_size) orelse orig_size;
                 // `p` is a live bucket-path allocation from bucket
-                // `bucketSpacingFunction(orig_size)` — this function's own contract
-                // (`p` was allocated with this exact `orig_size` at
-                // `DEFAULT_ALIGNMENT`) is exactly how `alloc` picks a bucket.
-                self.buckets.freeDirect(p, bucket.bucketSpacingFunction(orig_size));
+                // `bucketSpacingFunction(inflated)` — this function's own
+                // contract (`p` was allocated with this exact `orig_size` at
+                // `DEFAULT_ALIGNMENT`) is exactly how `alloc`/`bucketAlloc`
+                // picked its bucket.
+                self.buckets.freeDirect(p, bucket.bucketSpacingFunction(inflated));
                 return;
             }
             // `p` is a live tree-path allocation (`orig_size` is not small, this
@@ -628,12 +726,21 @@ pub fn Orisnitsa(comptime config: Config) type {
             // every `s` in `1..=MAX_SMALL_ALLOCATION` (both ports carry a test pinning
             // the two expressions together across that whole range).
             const alignment = if (old_alignment == 0) block.DEFAULT_ALIGNMENT else old_alignment;
-            if (bucket.isSmallAllocation(orig_size) and alignment <= bucket.MAX_SMALL_ALLOCATION) {
+            if (bucket.isSmallAllocation(config, orig_size) and alignment <= bucket.MAX_SMALL_ALLOCATION) {
+                // Inflate before rounding to `alignment` — `bucketAllocAligned`
+                // chose this pointer's bucket from
+                // `roundUp(guard.inflate(config, orig_size), alignment)`, not
+                // `roundUp(orig_size, alignment)`; the order (inflate, then
+                // round) matters, not just that both happen. Ports HPHA's own
+                // `bucket_spacing_function(round_up(origSize +
+                // MEMORY_GUARD_SIZE, oldAlignment))` exactly (`Cpp/hpha.h`'s
+                // `free(void*, size_t, size_t)`).
+                const inflated = guard.inflate(config, orig_size) orelse orig_size;
                 // `p` is a live bucket-path allocation from bucket
-                // `bucketSpacingFunction(roundUp(orig_size, old_alignment))` — this
-                // function's own contract is exactly how `allocAligned`'s bucket
-                // branch picks a bucket.
-                self.buckets.freeDirect(p, bucket.bucketSpacingFunction(align_helpers.roundUp(orig_size, alignment)));
+                // `bucketSpacingFunction(roundUp(inflated, old_alignment))` —
+                // this function's own contract is exactly how
+                // `allocAligned`'s `bucketAllocAligned` picked its bucket.
+                self.buckets.freeDirect(p, bucket.bucketSpacingFunction(align_helpers.roundUp(inflated, alignment)));
                 return;
             }
             // `p` is a live tree-path allocation, matching how `allocAligned` would
@@ -824,9 +931,11 @@ test "Orisnitsa(.{ .debug = true }) round-trips identically to the default insta
     // Proves the generic parameterization actually compiles and works for a
     // non-default Config, not just Orisnitsa(.{}) — see Zig/CONVENTIONS.md's
     // "comptime Toggles" section. `size == 64` stays on the bucket path, which
-    // Phase 2 leaves untouched (only the tree path grows guard bytes so far —
-    // see the Phase 2 tests below), so this instantiation must still behave
-    // exactly like the default one for this particular allocation.
+    // now carries its own guard ramp too (`bucketAlloc`, see the Phase 2 tests
+    // below) — but that reservation is invisible through this observable
+    // surface (`querySize`, `free`, `purge`), so the round-trip below must
+    // still match the default instantiation exactly, even though the two
+    // internally claim different bucket size classes for this request.
     var orisnitsa: Orisnitsa(.{ .debug = true }) = .init();
     const ptr = orisnitsa.alloc(64) orelse return error.TestUnexpectedResult; // "OS map failed"
     @memset(ptr[0..64], 0xAB);
@@ -929,6 +1038,111 @@ test "treeResize rewrites the guard ramp on growth" {
     try testing.expect(spomen_guard.checkGuard(debug_config, ptr, new_size));
     orisnitsa.free(ptr);
     orisnitsa.purge();
+}
+
+// ---- v0.2.0 Phase 2: bucket-path guard bytes (real dispatch, not just
+// `spomen_guard`'s own unit tests) ----
+
+test "bucketAlloc hides the guard reservation from the caller" {
+    // `querySize(ptr)` must report exactly what was requested (post-clamp) — the
+    // guard reservation must be as invisible on the bucket path as it is on the
+    // tree path. `MAX_SMALL_ALLOCATION - memoryGuardSize(config)` (the shifted
+    // `isSmallAllocation` boundary — see that function's own doc) is the
+    // largest request that still stays on the bucket path under this config.
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    const requested = bucket.MAX_SMALL_ALLOCATION - guard.memoryGuardSize(debug_config);
+    const ptr = orisnitsa.alloc(requested) orelse return error.TestUnexpectedResult; // "OS map failed"
+    try testing.expectEqual(requested, orisnitsa.querySize(ptr));
+    // `ptr` is a live bucket-path allocation of exactly `requested` bytes, just
+    // reported above — exactly `checkGuard`'s own contract.
+    try testing.expect(spomen_guard.checkGuard(debug_config, ptr, requested));
+    orisnitsa.free(ptr);
+    orisnitsa.purge();
+}
+
+test "bucketAlloc ramp corruption is actually detectable" {
+    // Same corruption-detection property as "treeAlloc ramp corruption is
+    // actually detectable", exercised on the bucket path — the two guard
+    // mechanisms share one primitive (`spomen_guard`) but wire into dispatch
+    // through entirely separate code (`bucketAlloc` vs `treeAlloc`), so each
+    // earns its own real-dispatch test.
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    const requested = bucket.MAX_SMALL_ALLOCATION - guard.memoryGuardSize(debug_config);
+    const ptr = orisnitsa.alloc(requested) orelse return error.TestUnexpectedResult; // "OS map failed"
+    // INDEX: `requested < requested + memoryGuardSize(debug_config)`, and the
+    // slot is at least that large (its own bucket class), so this stays within
+    // `ptr`'s valid span.
+    ptr[requested] = 0;
+    // `ptr` is a live bucket-path allocation of exactly `requested` bytes.
+    try testing.expect(!spomen_guard.checkGuard(debug_config, ptr, requested));
+    orisnitsa.free(ptr);
+    orisnitsa.purge();
+}
+
+test "bucketRealloc rewrites the guard ramp at the new size" {
+    // `realloc` growing a bucket-path allocation in place (staying within the
+    // same or a larger size class) must (re)write the guard ramp at the new
+    // size — `bucketRealloc`'s own doc argues this from HPHA's
+    // `bucket_realloc`/`debug_replace` pairing; this exercises it for real,
+    // including the "moves to a larger class" path (`Buckets.realloc`'s own
+    // internal alloc-copy-free).
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    const small = 8;
+    const big = 200;
+    const ptr = orisnitsa.alloc(small) orelse return error.TestUnexpectedResult; // "OS map failed"
+    const grown = orisnitsa.realloc(ptr, big) orelse return error.TestUnexpectedResult; // "growth never fails here"
+    // `grown` is a live allocation `orisnitsa` produced.
+    try testing.expectEqual(big, orisnitsa.querySize(grown));
+    // `grown` is a live bucket-path allocation of exactly `big` bytes.
+    try testing.expect(spomen_guard.checkGuard(debug_config, grown, big));
+    orisnitsa.free(grown);
+    orisnitsa.purge();
+}
+
+test "bucketResize rewrites the guard ramp at the same position" {
+    // `resize` on a bucket-path allocation never actually grows the slot (its
+    // class is fixed once chosen), but HPHA's own `resize` still (re)writes the
+    // guard unconditionally every call — `bucketResize`'s own doc explains why;
+    // this confirms the ramp survives a `resize` call intact (rewritten at the
+    // same, unchanged position) rather than merely never having been disturbed.
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    const ptr = orisnitsa.alloc(8) orelse return error.TestUnexpectedResult; // "OS map failed"
+    const reported = orisnitsa.querySize(ptr);
+    const new_size = orisnitsa.resize(ptr, 8);
+    try testing.expectEqual(reported, new_size); // "a bucket slot's class never changes size"
+    // `ptr` is a live bucket-path allocation of exactly `new_size` bytes.
+    try testing.expect(spomen_guard.checkGuard(debug_config, ptr, new_size));
+    orisnitsa.free(ptr);
+    orisnitsa.purge();
+}
+
+test "freeWithSize recomputes the same guard-inflated bucket" {
+    // The fix this phase's design depended on most: `freeWithSize` and
+    // `freeWithSizeAligned` must recompute the *same*, guard-inflated bucket
+    // index `bucketAlloc`/`bucketAllocAligned` originally chose — without
+    // inflating before recomputing, these would free into the *wrong* size
+    // class's free list, corrupting it silently (no bounds check catches a
+    // free into a real but incorrect bucket). Exercises every small size once,
+    // both the plain and aligned forms, matching "zero-alignment free picks
+    // the bucket alloc used"'s exhaustive style for the analogous non-guard
+    // invariant.
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    var size: usize = 1;
+    while (size <= bucket.MAX_SMALL_ALLOCATION - guard.memoryGuardSize(debug_config)) : (size += 1) {
+        const a = orisnitsa.alloc(size) orelse return error.TestUnexpectedResult; // "OS map failed"
+        // `a` is a live allocation `orisnitsa` produced with `size` at
+        // `DEFAULT_ALIGNMENT` — exactly this function's own contract.
+        orisnitsa.freeWithSize(a, size);
+
+        const b = orisnitsa.allocAligned(size, block.DEFAULT_ALIGNMENT) orelse return error.TestUnexpectedResult; // "OS map failed"
+        // `b` is a live allocation `orisnitsa` produced with `size` at
+        // `DEFAULT_ALIGNMENT` — exactly this function's own contract.
+        orisnitsa.freeWithSizeAligned(b, size, block.DEFAULT_ALIGNMENT);
+    }
+    orisnitsa.purge();
+    // "every block must have been freed into its real bucket, not a
+    //  differently-sized neighbour's"
+    try testing.expectEqual(@as(usize, 0), orisnitsa.allocated());
 }
 
 // ---- v0.1.1 regression tests (docs/audits/2026-08-29-pre-v0.2.0-audit.md) ----
@@ -1143,7 +1357,7 @@ test "randomized alloc/free stress matches the HPHA benchmark shape" {
 
         for (0..N) |i| {
             const sz = rng.size();
-            if (bucket.isSmallAllocation(sz)) bucket_path += 1 else tree_path += 1;
+            if (bucket.isSmallAllocation(.{}, sz)) bucket_path += 1 else tree_path += 1;
             const ptr = blk: {
                 if (use_alignment) {
                     const a = rng.alignment();

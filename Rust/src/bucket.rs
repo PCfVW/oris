@@ -44,11 +44,18 @@ pub(crate) const MAX_SMALL_ALLOCATION: usize = 1 << MAX_SMALL_ALLOCATION_LOG2; /
 pub(crate) const NUM_BUCKETS: usize = MAX_SMALL_ALLOCATION / MIN_ALLOCATION; // 32
 
 /// Whether `size` belongs on the bucket path (`false` routes to the tree allocator).
-/// Ports `allocator::is_small_allocation` (with `MEMORY_GUARD_SIZE` — always 0 until
-/// the v0.2.0 debug allocator — elided).
+/// Ports `allocator::is_small_allocation` exactly, including its `size +
+/// MEMORY_GUARD_SIZE <= MAX_SMALL_ALLOCATION` shape (`Cpp/hpha.h`'s own
+/// `is_small_allocation`) — with the feature off, `MEMORY_GUARD_SIZE` is 0 and this
+/// is exactly the v0.1.x threshold. `saturating_add` rather than a bare `+`: `size`
+/// is caller-controlled and this threshold (256) is tiny next to `usize::MAX`, so a
+/// wrap here would falsely report a pathologically huge request as "small" — the
+/// same "no request that was ever satisfiable changes behaviour" reasoning
+/// `tree::MAX_ALLOCATION`'s own doc gives, applied to the opposite direction (a
+/// wrap making something falsely fit, not falsely overflow).
 #[must_use]
 pub(crate) const fn is_small_allocation(size: usize) -> bool {
-    size <= MAX_SMALL_ALLOCATION
+    size.saturating_add(crate::guard::MEMORY_GUARD_SIZE) <= MAX_SMALL_ALLOCATION
 }
 
 /// Raises `size` up to the smallest bucket size class if it's below it. Ports
@@ -853,8 +860,12 @@ mod tests {
             clamp_small_allocation(MIN_ALLOCATION + 1),
             MIN_ALLOCATION + 1
         );
-        assert!(is_small_allocation(MAX_SMALL_ALLOCATION));
-        assert!(!is_small_allocation(MAX_SMALL_ALLOCATION + 1));
+        // The threshold itself shifts down by `MEMORY_GUARD_SIZE` under the
+        // `debug-allocator` feature (0 otherwise, restoring the v0.1.x boundary
+        // exactly) — see `is_small_allocation`'s own doc.
+        let boundary = MAX_SMALL_ALLOCATION - crate::guard::MEMORY_GUARD_SIZE;
+        assert!(is_small_allocation(boundary));
+        assert!(!is_small_allocation(boundary + 1));
     }
 
     #[test]

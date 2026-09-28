@@ -12,6 +12,40 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Added
 
+- **Bucket-path memory guard bytes (v0.2.0, Phase 2).** Completes the guard-byte
+  reservation started by the tree-path commit above. Unlike the tree path, the
+  bucket path has no per-block header to inflate — `bucket::is_small_allocation`
+  itself becomes guard-aware (`size + MEMORY_GUARD_SIZE <= MAX_SMALL_ALLOCATION`,
+  ported from HPHA's own `is_small_allocation` exactly, with a saturating add so a
+  pathologically huge `size` can't wrap into falsely reporting "small"), shifting
+  the bucket/tree dispatch boundary down by 16 bytes under the feature/config —
+  exactly mirroring HPHA. New `bucket_alloc`/`bucket_alloc_aligned`/
+  `bucket_realloc`/`bucket_resize` choke points parallel the tree-path ones
+  (`bucket_alloc_aligned` folds the guard in *before* rounding to alignment, not
+  after — order matters, not just that both happen, per HPHA's own
+  `round_up(size + MEMORY_GUARD_SIZE, alignment)`).
+
+  The single most important fix in this commit: `free_with_size`/
+  `free_with_size_aligned` independently recompute a pointer's bucket index from
+  its caller-supplied original size, and that recomputation must apply the
+  *identical* guard inflation the original `alloc` used — without it, a live
+  pointer frees into the *wrong* bucket's free list (verified empirically, not
+  just reasoned about: reverting just this one inflate call and re-running the
+  new regression test reproduces a `bucket_index` mismatch, off by exactly 2 size
+  classes, in both ports — `Cpp/hpha.h`'s own `free(void*, size_t[, size_t])`
+  inflates before recomputing for exactly this reason).
+
+  Both ports' `VintageRand`-derived cross-port golden-number test (bucket/tree
+  split counts over the shared stress-workload stream) now asserts distinct,
+  empirically-measured pairs for the feature/config on vs. off, since the shifted
+  dispatch boundary moves a handful of borderline sizes — the two ports' measured
+  numbers agree exactly, confirming the guard-byte dispatch logic didn't diverge
+  between them.
+
+  No behavior change with the feature/config off. Full suites verified in both
+  ports (cargo test/clippy -D warnings with/without the feature and combined with
+  nightly; zig build test in Debug and ReleaseSafe; zig fmt), plus Miri with
+  -Zmiri-strict-provenance -Zmiri-tree-borrows on the Rust side.
 - **Tree-path memory guard bytes (v0.2.0, Phase 2).** Behind `debug-allocator`/
   `config.debug`: every tree-path allocation now reserves and writes a trailing
   16-byte guard ramp (`seed, seed+1, ..., seed+15`, wrapping) immediately after the

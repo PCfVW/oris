@@ -36,6 +36,7 @@
 
 const std = @import("std");
 const align_helpers = @import("align.zig");
+const guard = @import("guard.zig");
 const list = @import("list.zig");
 const os = @import("os.zig");
 const spomen = @import("spomen.zig");
@@ -56,10 +57,19 @@ pub const MAX_SMALL_ALLOCATION: usize = 1 << MAX_SMALL_ALLOCATION_LOG2; // 256
 pub const NUM_BUCKETS: usize = MAX_SMALL_ALLOCATION / MIN_ALLOCATION; // 32
 
 /// Whether `size` belongs on the bucket path (`false` routes to the tree
-/// allocator). Ports `allocator::is_small_allocation` (with `MEMORY_GUARD_SIZE` —
-/// always 0 until the v0.2.0 debug allocator — elided).
-pub fn isSmallAllocation(size: usize) bool {
-    return size <= MAX_SMALL_ALLOCATION;
+/// allocator). Ports `allocator::is_small_allocation` exactly, including its
+/// `size + MEMORY_GUARD_SIZE <= MAX_SMALL_ALLOCATION` shape (`Cpp/hpha.h`'s own
+/// `is_small_allocation`) — with `config.debug` false, `guard.memoryGuardSize`
+/// is 0 and this is exactly the pre-v0.2.0 threshold. `+|` (saturating add)
+/// rather than a bare `+`: `size` is caller-controlled and this threshold (256)
+/// is tiny next to `maxInt(usize)`, so a wrap here would falsely report a
+/// pathologically huge request as "small" — the same "no request that was ever
+/// satisfiable changes behaviour" reasoning `tree.MAX_ALLOCATION`'s own doc
+/// gives, applied to the opposite direction (a wrap making something falsely
+/// fit, not falsely overflow). Mirrors `orisnik`'s `bucket::is_small_allocation`
+/// exactly, including its `saturating_add`.
+pub fn isSmallAllocation(comptime config: Config, size: usize) bool {
+    return size +| guard.memoryGuardSize(config) <= MAX_SMALL_ALLOCATION;
 }
 
 /// Raises `size` up to the smallest bucket size class if it's below it. Ports
@@ -648,8 +658,14 @@ test "clamp and is-small-allocation" {
     try testing.expectEqual(MIN_ALLOCATION, clampSmallAllocation(1));
     try testing.expectEqual(MIN_ALLOCATION, clampSmallAllocation(MIN_ALLOCATION));
     try testing.expectEqual(MIN_ALLOCATION + 1, clampSmallAllocation(MIN_ALLOCATION + 1));
-    try testing.expect(isSmallAllocation(MAX_SMALL_ALLOCATION));
-    try testing.expect(!isSmallAllocation(MAX_SMALL_ALLOCATION + 1));
+    // The threshold itself shifts down by `guard.memoryGuardSize(config)` under
+    // `config.debug` (0 otherwise, restoring the pre-v0.2.0 boundary exactly) —
+    // see `isSmallAllocation`'s own doc.
+    inline for ([_]Config{ .{}, .{ .debug = true } }) |config| {
+        const boundary = MAX_SMALL_ALLOCATION - guard.memoryGuardSize(config);
+        try testing.expect(isSmallAllocation(config, boundary));
+        try testing.expect(!isSmallAllocation(config, boundary + 1));
+    }
 }
 
 test "initPageAt threads the free list and computes slot count" {

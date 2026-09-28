@@ -21,6 +21,9 @@
 
 const std = @import("std");
 const bucket = @import("bucket.zig");
+const spomen = @import("spomen.zig");
+
+const Config = spomen.Config;
 
 /// One instance of the CRT's `rand()` state (`holdrand`). `pub` so both
 /// `orisnitsa.zig`'s guard-byte seed stream (production) and its pre-existing
@@ -109,23 +112,40 @@ test "VintageRand derived stream is pinned across ports" {
     // cannot slip through in one port while the other stays put. `orisnik`
     // asserts the identical constants. Computed independently from the
     // reference LCG, not captured from this implementation's own output.
+    //
+    // `bucket.isSmallAllocation`'s threshold itself shifts down by
+    // `guard.memoryGuardSize(config)` under `config.debug` (0 otherwise,
+    // restoring the exact non-debug golden pairs) — see that function's own
+    // doc — so a handful of sizes right at the boundary move from bucket to
+    // tree path under that config; both sets of golden numbers were computed
+    // from this same generator, not guessed.
     const Case = struct { n: usize, bucket: usize, tree: usize };
-    for ([_]Case{
-        .{ .n = 150, .bucket = 108, .tree = 42 },
-        .{ .n = 20_000, .bucket = 14_123, .tree = 5_877 },
-    }) |c| {
-        var rng: VintageRand = .init(1234);
-        var bucket_path: usize = 0;
-        var tree_path: usize = 0;
-        for (0..c.n) |_| {
-            if (bucket.isSmallAllocation(rng.size())) bucket_path += 1 else tree_path += 1;
+    inline for ([_]Config{ .{}, .{ .debug = true } }) |config| {
+        const cases: [2]Case = if (config.debug)
+            .{
+                .{ .n = 150, .bucket = 107, .tree = 43 },
+                .{ .n = 20_000, .bucket = 14_006, .tree = 5_994 },
+            }
+        else
+            .{
+                .{ .n = 150, .bucket = 108, .tree = 42 },
+                .{ .n = 20_000, .bucket = 14_123, .tree = 5_877 },
+            };
+        for (cases) |c| {
+            var rng: VintageRand = .init(1234);
+            var bucket_path: usize = 0;
+            var tree_path: usize = 0;
+            for (0..c.n) |_| {
+                if (bucket.isSmallAllocation(config, rng.size())) bucket_path += 1 else tree_path += 1;
+            }
+            try testing.expectEqual(c.bucket, bucket_path);
+            try testing.expectEqual(c.tree, tree_path);
         }
-        try testing.expectEqual(c.bucket, bucket_path);
-        try testing.expectEqual(c.tree, tree_path);
     }
 
     // The aligned pass draws a size and an alignment per iteration; the sum of
-    // the alignments pins that interleaving too.
+    // the alignments pins that interleaving too. Config-independent — `size`'s
+    // draw is never checked against `isSmallAllocation` in this pass.
     var rng: VintageRand = .init(1234);
     var alignment_sum: usize = 0;
     for (0..20_000) |_| {
