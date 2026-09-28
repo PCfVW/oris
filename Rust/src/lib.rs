@@ -41,6 +41,19 @@
 // on any `#![feature(...)]` attribute, so this must stay behind `cfg_attr` even
 // though the `nightly` Cargo feature already implies a nightly toolchain is in use.
 // See `Rust/CONVENTIONS.md`'s Idiomatic Surfaces section and `INSTALL.md`.
+//
+// `#[allow(stable_features)]`: transitional, remove once Rust 1.100 ships to stable.
+// As of nightly-1.101.0, the subset of `allocator_api` this crate actually uses
+// (the `Allocator` trait, `AllocError`, `Vec`/`Box`'s `_in` constructors —
+// rust-lang/rust#156882) has been promoted to stable-pending-1.100, so rustc now
+// flags this `feature(...)` as a `stable_features` warning, which `-D warnings`
+// (CI's nightly-feature Clippy job) turns into a hard error. Older nightlies and
+// today's actual stable channel still require the attribute — the trait is not
+// yet released — so it cannot simply be deleted; suppress the lint here instead of
+// forking on rustc version. The `allocator_ext` name clippy suggests as a
+// replacement covers unrelated leftovers (the Store API, a split `Deallocator`
+// trait, `reallocate()` — rust-lang/rust#163177), none of which this crate uses.
+#![allow(stable_features)]
 #![cfg_attr(feature = "nightly", feature(allocator_api))]
 
 mod align;
