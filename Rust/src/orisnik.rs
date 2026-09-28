@@ -6,11 +6,13 @@
 //! `MULTITHREADED` (mutex-guarded buckets/tree) is out of scope until v2.x, see
 //! `ROADMAP.md`. `DEBUG_ALLOCATOR` (guard bytes, allocation records, `check()`/
 //! `report()`) is v0.2.0's own milestone, landing incrementally behind the
-//! `debug-allocator` feature (`crate::guard`, `crate::spomen`): the tree path's guard
-//! bytes are wired in here (`tree_alloc`/`tree_alloc_aligned`/`tree_realloc`/
-//! `tree_realloc_aligned`/`tree_resize`, and `size`'s tree branch); the bucket path and
-//! the rest of `spomen` (allocation records, callstack capture, `check()`/`report()`)
-//! follow in later phases. With the feature off, `crate::guard::MEMORY_GUARD_SIZE` is
+//! `debug-allocator` feature (`crate::guard`, `crate::spomen`): both paths' guard
+//! bytes and payload poisoning are wired in here (`tree_alloc`/`tree_alloc_aligned`/
+//! `tree_realloc`/`tree_realloc_aligned`/`tree_resize`/`bucket_alloc`/
+//! `bucket_alloc_aligned`/`bucket_realloc`/`bucket_resize`, and `size`/`free`/
+//! `free_with_size`/`free_with_size_aligned`'s deflate/poison calls); the rest of
+//! `spomen` (allocation records, callstack capture, `check()`/`report()`) follows in
+//! later phases. With the feature off, `crate::guard::MEMORY_GUARD_SIZE` is
 //! 0, so every `+`/`- MEMORY_GUARD_SIZE` site below is dead code the compiler removes,
 //! restoring v0.1.x's exact guard-free arithmetic — the same "cancels out and is
 //! simply omitted" shape this doc described before this feature existed, now realized
@@ -228,11 +230,24 @@ impl Orisnik {
     fn tree_alloc(&self, size: usize) -> Option<NonNull<u8>> {
         let ptr = self.tree.alloc(crate::guard::inflate(size)?)?;
         #[cfg(feature = "debug-allocator")]
-        // SAFETY: `ptr` is valid for `size + MEMORY_GUARD_SIZE` bytes (just allocated
-        // with that inflated size above), exclusively owned (freshly allocated, not
-        // yet handed to any other caller).
-        unsafe {
-            crate::spomen::guard::write_guard(ptr, size, self.next_guard_seed());
+        {
+            // SAFETY: `ptr` is valid for `size + MEMORY_GUARD_SIZE` bytes (just
+            // allocated with that inflated size above), exclusively owned (freshly
+            // allocated, not yet handed to any other caller).
+            unsafe {
+                crate::spomen::guard::write_guard(ptr, size, self.next_guard_seed());
+            }
+            // Poisons the payload *after* the guard write, matching HPHA's own
+            // `write_guard()`-then-`initial_fill()` order inside `debug_record`'s
+            // constructor/`debug_record_map::add` — the two ranges are disjoint
+            // ([0, size) vs [size, size + MEMORY_GUARD_SIZE)) so the order has no
+            // functional effect, only fidelity value.
+            // SAFETY: `ptr` is valid for `size` bytes (a subset of the
+            // `size + MEMORY_GUARD_SIZE` bytes just established above), exclusively
+            // owned.
+            unsafe {
+                crate::spomen::poison::fill(ptr, size);
+            }
         }
         Some(ptr)
     }
@@ -245,10 +260,18 @@ impl Orisnik {
             .tree
             .alloc_aligned(crate::guard::inflate(size)?, alignment)?;
         #[cfg(feature = "debug-allocator")]
-        // SAFETY: `ptr` is valid for `size + MEMORY_GUARD_SIZE` bytes, aligned to
-        // `alignment`, exclusively owned (freshly allocated).
-        unsafe {
-            crate::spomen::guard::write_guard(ptr, size, self.next_guard_seed());
+        {
+            // SAFETY: `ptr` is valid for `size + MEMORY_GUARD_SIZE` bytes, aligned to
+            // `alignment`, exclusively owned (freshly allocated).
+            unsafe {
+                crate::spomen::guard::write_guard(ptr, size, self.next_guard_seed());
+            }
+            // See `tree_alloc`'s identical poisoning comment.
+            // SAFETY: `ptr` is valid for `size` bytes (established above),
+            // exclusively owned.
+            unsafe {
+                crate::spomen::poison::fill(ptr, size);
+            }
         }
         Some(ptr)
     }
@@ -340,7 +363,6 @@ impl Orisnik {
         new_size
     }
 
-    /// Allocates `size` bytes at `DEFAULT_ALIGNMENT`. `size == 0` returns `None`.
     /// The bucket path's sole *fresh-allocation* choke point for a plain (unaligned)
     /// request. `size` is the caller-visible, already-clamped request — the guard
     /// reservation is folded into the bucket-index computation and stripped back off
@@ -353,11 +375,20 @@ impl Orisnik {
             .buckets
             .alloc_direct(bucket::bucket_spacing_function(inflated))?;
         #[cfg(feature = "debug-allocator")]
-        // SAFETY: `ptr` is a slot of at least `inflated == size + MEMORY_GUARD_SIZE`
-        // bytes (just allocated from that bucket), exclusively owned (freshly
-        // allocated, not yet handed to any other caller).
-        unsafe {
-            crate::spomen::guard::write_guard(ptr, size, self.next_guard_seed());
+        {
+            // SAFETY: `ptr` is a slot of at least `inflated == size +
+            // MEMORY_GUARD_SIZE` bytes (just allocated from that bucket),
+            // exclusively owned (freshly allocated, not yet handed to any other
+            // caller).
+            unsafe {
+                crate::spomen::guard::write_guard(ptr, size, self.next_guard_seed());
+            }
+            // See `Orisnik::tree_alloc`'s identical poisoning comment.
+            // SAFETY: `ptr` is a slot of at least `size` bytes (established above),
+            // exclusively owned.
+            unsafe {
+                crate::spomen::poison::fill(ptr, size);
+            }
         }
         Some(ptr)
     }
@@ -378,10 +409,19 @@ impl Orisnik {
                 inflated, alignment,
             )))?;
         #[cfg(feature = "debug-allocator")]
-        // SAFETY: `ptr` is a slot of at least `round_up(inflated, alignment) >=
-        // size + MEMORY_GUARD_SIZE` bytes, aligned to `alignment`, exclusively owned.
-        unsafe {
-            crate::spomen::guard::write_guard(ptr, size, self.next_guard_seed());
+        {
+            // SAFETY: `ptr` is a slot of at least `round_up(inflated, alignment) >=
+            // size + MEMORY_GUARD_SIZE` bytes, aligned to `alignment`, exclusively
+            // owned.
+            unsafe {
+                crate::spomen::guard::write_guard(ptr, size, self.next_guard_seed());
+            }
+            // See `Orisnik::tree_alloc`'s identical poisoning comment.
+            // SAFETY: `ptr` is a slot of at least `size` bytes (established above),
+            // exclusively owned.
+            unsafe {
+                crate::spomen::poison::fill(ptr, size);
+            }
         }
         Some(ptr)
     }
@@ -442,6 +482,7 @@ impl Orisnik {
         new_size
     }
 
+    /// Allocates `size` bytes at `DEFAULT_ALIGNMENT`. `size == 0` returns `None`.
     /// Ports `allocator::alloc(size_t)`.
     #[must_use]
     pub fn alloc(&self, size: usize) -> Option<NonNull<u8>> {
@@ -725,9 +766,42 @@ impl Orisnik {
         // SAFETY: `ptr` is a live allocation this instance produced (this
         // function's own contract).
         if unsafe { self.buckets.ptr_in_bucket(ptr) } {
+            #[cfg(feature = "debug-allocator")]
+            {
+                // Poisons *before* the reclaim below, matching HPHA's own
+                // `debug_remove`-before-`bucket_free` order in `allocator::free` — no
+                // caller-supplied size is available on this entry point (unlike
+                // `free_with_size`), so this uses the slot's own current, deflated
+                // usable size rather than any HPHA-tracked original request (which
+                // needs the allocation-record store, a later phase, to supply).
+                // SAFETY: `ptr` is a live bucket-path allocation.
+                let page = unsafe { bucket::ptr_get_page(ptr.as_ptr()) };
+                // SAFETY: `page` is live.
+                let real_size = unsafe { bucket::Page::elem_size(page) };
+                // SAFETY: `ptr` is a slot of `real_size` bytes (just read above);
+                // poisoning its deflated (guard-excluded) span stays within it.
+                unsafe {
+                    crate::spomen::poison::fill(ptr, crate::guard::deflate(real_size));
+                }
+            }
             // SAFETY: `ptr` is a live bucket-path allocation.
             unsafe { self.buckets.free(ptr) };
             return;
+        }
+        #[cfg(feature = "debug-allocator")]
+        {
+            // SAFETY: `ptr` is a live tree-path allocation this instance produced
+            // (this function's own contract). Same reasoning as the bucket branch
+            // above: no record store yet, so this poisons the block's own current,
+            // deflated usable size.
+            let bl = unsafe { block::ptr_get_block_header(ptr.as_ptr()) };
+            // SAFETY: `bl` is live.
+            let real_size = unsafe { block::BlockHeader::size(bl) };
+            // SAFETY: `ptr` is valid for `real_size` bytes (just read above);
+            // poisoning its deflated span stays within it.
+            unsafe {
+                crate::spomen::poison::fill(ptr, crate::guard::deflate(real_size));
+            }
         }
         // SAFETY: `ptr` is a live tree-path allocation this instance produced.
         unsafe { self.tree.free(ptr) };
@@ -769,6 +843,19 @@ impl Orisnik {
             // function's own contract), which is exactly `Orisnik::free`'s.
             unsafe { self.free_zero_orig_size(ptr) };
             return;
+        }
+        #[cfg(feature = "debug-allocator")]
+        // Poisons *before* the reclaim below (either branch), at the
+        // caller-supplied `orig_size` — unlike `Orisnik::free`'s pointer-only
+        // overload, this one already has the exact original request size in hand,
+        // matching HPHA's own `initial_fill(ptr, record->size())` (`record->size()`
+        // is asserted equal to this function's own `origSize` parameter in HPHA's
+        // `debug_record_map::remove(ptr, size)` overload) without needing the
+        // allocation-record store this crate doesn't have yet.
+        // SAFETY: `ptr` is a live allocation this instance produced with `orig_size`
+        // bytes (this function's own contract).
+        unsafe {
+            crate::spomen::poison::fill(ptr, orig_size);
         }
         if bucket::is_small_allocation(orig_size) {
             // Inflate before recomputing the bucket index — `Orisnik::alloc`'s own
@@ -825,6 +912,17 @@ impl Orisnik {
             // function's own contract), which is exactly `Orisnik::free`'s.
             unsafe { self.free_zero_orig_size(ptr) };
             return;
+        }
+        #[cfg(feature = "debug-allocator")]
+        // See `Orisnik::free_with_size`'s identical poisoning comment — same
+        // reasoning, at the same `orig_size` (not the alignment-rounded value HPHA's
+        // own bucket-index computation uses; `initial_fill` is always called with
+        // the plain `origSize`, alignment plays no part in it — `Cpp/hpha.h`'s
+        // `free(void*, size_t, size_t)`).
+        // SAFETY: `ptr` is a live allocation this instance produced with `orig_size`
+        // bytes (this function's own contract).
+        unsafe {
+            crate::spomen::poison::fill(ptr, orig_size);
         }
         // HPHA computes `round_up(origSize, oldAlignment)` below unconditionally,
         // which is well-defined for every alignment `alloc_aligned` could have used
@@ -1395,6 +1493,109 @@ mod tests {
             "every block must have been freed into its real bucket, not a \
              differently-sized neighbour's"
         );
+    }
+
+    // ---- v0.2.0 Phase 2: payload poisoning ----
+
+    /// A fresh tree-path allocation's payload must actually read as the poison
+    /// pattern before the caller writes anything — not merely "some function called
+    /// `spomen::poison::fill` somewhere," verified end to end through the real
+    /// dispatch.
+    #[test]
+    #[cfg(feature = "debug-allocator")]
+    fn tree_alloc_poisons_the_fresh_payload() {
+        let orisnik = Orisnik::new();
+        let size = MAX_SMALL_ALLOCATION + 4096;
+        let ptr = orisnik.alloc(size).expect("OS map failed");
+        // SAFETY: `ptr` is valid for `size` bytes (just reported by `alloc`),
+        // exclusively owned by this test (freshly allocated, not yet aliased).
+        let payload = unsafe { core::slice::from_raw_parts(ptr.as_ptr(), size) };
+        assert!(
+            payload
+                .iter()
+                .enumerate()
+                .all(|(i, &b)| b == crate::spomen::poison::byte_at(i)),
+            "a fresh allocation's payload must read as the poison pattern"
+        );
+        // SAFETY: `ptr` is a live allocation `orisnik` produced.
+        unsafe { orisnik.free(Some(ptr)) };
+        orisnik.purge();
+    }
+
+    /// Same property as `tree_alloc_poisons_the_fresh_payload`, on the bucket path —
+    /// wired through entirely separate dispatch (`bucket_alloc`, not `tree_alloc`),
+    /// so it earns its own real-dispatch test.
+    #[test]
+    #[cfg(feature = "debug-allocator")]
+    fn bucket_alloc_poisons_the_fresh_payload() {
+        let orisnik = Orisnik::new();
+        let size = MAX_SMALL_ALLOCATION - crate::guard::MEMORY_GUARD_SIZE;
+        let ptr = orisnik.alloc(size).expect("OS map failed");
+        // SAFETY: `ptr` is valid for `size` bytes, exclusively owned by this test.
+        let payload = unsafe { core::slice::from_raw_parts(ptr.as_ptr(), size) };
+        assert!(
+            payload
+                .iter()
+                .enumerate()
+                .all(|(i, &b)| b == crate::spomen::poison::byte_at(i)),
+            "a fresh allocation's payload must read as the poison pattern"
+        );
+        // SAFETY: `ptr` is a live allocation `orisnik` produced.
+        unsafe { orisnik.free(Some(ptr)) };
+        orisnik.purge();
+    }
+
+    /// [`Orisnik::free`] must poison the payload *before* the underlying reclaim —
+    /// reading it back afterward is, from the pointer's own point of view,
+    /// indistinguishable from a use-after-free read (which is exactly the scenario
+    /// this mechanism exists to make loud rather than silent): this test is that
+    /// scenario, deliberately, on memory this instance still owns the mapping for
+    /// (not yet `purge()`d), the same way HPHA's own `debug_remove`-before-
+    /// `bucket_free`/`tree_free` order intends the poison to be observed.
+    #[test]
+    #[cfg(feature = "debug-allocator")]
+    fn free_poisons_the_payload_before_reclaim() {
+        let orisnik = Orisnik::new();
+        let size = MAX_SMALL_ALLOCATION + 4096;
+        let ptr = orisnik.alloc(size).expect("OS map failed");
+        // SAFETY: `ptr` is valid for `size` bytes, exclusively owned by this test.
+        unsafe { ptr.as_ptr().write_bytes(0xAB, size) };
+        // SAFETY: `ptr` is a live allocation `orisnik` produced.
+        unsafe { orisnik.free(Some(ptr)) };
+        // SAFETY: the OS mapping backing `ptr` is still live (this instance never
+        // unmapped it — `purge()` hasn't run), and this test is the sole observer of
+        // it, before and after the `free` above.
+        let payload = unsafe { core::slice::from_raw_parts(ptr.as_ptr(), size) };
+        assert!(
+            payload
+                .iter()
+                .enumerate()
+                .all(|(i, &b)| b == crate::spomen::poison::byte_at(i)),
+            "a freed block's payload must read as the poison pattern, not its last \
+             live contents"
+        );
+        orisnik.purge();
+    }
+
+    /// [`Orisnik::calloc`] composes with allocation-time poisoning exactly as HPHA
+    /// does: `alloc` poisons, then `calloc`'s own unconditional zero-fill overwrites
+    /// it — no special-casing either way, so the caller sees zeros, never poison.
+    #[test]
+    #[cfg(feature = "debug-allocator")]
+    fn calloc_zero_fill_overwrites_the_poison() {
+        let orisnik = Orisnik::new();
+        let count = 4;
+        let size = 64;
+        let ptr = orisnik.calloc(count, size).expect("OS map failed");
+        // SAFETY: `ptr` is valid for `count * size` bytes, exclusively owned.
+        let payload = unsafe { core::slice::from_raw_parts(ptr.as_ptr(), count * size) };
+        assert!(
+            payload.iter().all(|&b| b == 0),
+            "calloc's own zero-fill must be the last word, not the poison pattern"
+        );
+        // SAFETY: `ptr` is a live allocation `orisnik` produced.
+        unsafe { orisnik.free(Some(ptr)) };
+        orisnik.purge();
     }
 
     // ---- v0.1.1 regression tests (docs/audits/2026-08-29-pre-v0.2.0-audit.md) ----

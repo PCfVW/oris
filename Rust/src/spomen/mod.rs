@@ -10,7 +10,9 @@
 //! build without the feature links none of it. See `Rust/CONVENTIONS.md`'s
 //! `debug_assert!` Invariants section and `ROADMAP.md`'s v0.2.0 milestone.
 //!
-//! Populated across v0.2.0's phases: allocation-record tracking, callstack capture,
-//! payload poisoning, `OrisError`, and the `check()`/`report()` diagnostics.
+//! Already landed: guard-byte writing/checking ([`guard`]) and payload poisoning
+//! ([`poison`]). Still to come across v0.2.0's remaining phases: allocation-record
+//! tracking, callstack capture, `OrisError`, and the `check()`/`report()` diagnostics.
 
 pub(crate) mod guard;
+pub(crate) mod poison;

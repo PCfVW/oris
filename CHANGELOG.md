@@ -12,6 +12,35 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Added
 
+- **Payload poisoning (v0.2.0, Phase 2 — completes this phase).** Behind
+  `debug-allocator`/`config.debug`: fresh allocations and freed blocks both get
+  filled with a repeating `{0xFF, 0xC0, 0xC0, 0xFF}` pattern (a quiet-NaN bit
+  pattern in either endianness), ported from HPHA's `initial_fill`
+  (`Cpp/hpha.cpp:762-767`) exactly — catching reads of uninitialized memory and
+  use-after-free reads with a recognizable pattern instead of plausible-looking
+  leftover data. Wired into the same tree/bucket `alloc`/`alloc_aligned` choke
+  points guard bytes already use (fill after the guard write — the two spans are
+  disjoint, so order has no functional effect, only fidelity value) and into
+  `free`/`free_with_size`/`free_with_size_aligned` (fill *before* the underlying
+  reclaim, matching HPHA's `debug_remove`-before-`bucket_free`/`tree_free` order).
+  `realloc`/`resize` are deliberately untouched — HPHA's own `update`/`replace`
+  never poison either. `calloc` needed no changes: it already composes for free
+  (`alloc`'s poison, then `calloc`'s own zero-fill, in that order).
+
+  `free`'s pointer-only overload has no caller-supplied size, so it poisons the
+  block's own current, deflated usable size (a safe, documented substitute for
+  HPHA's exact allocation-record-tracked original size, pending that record store
+  in a later phase); `free_with_size`/`free_with_size_aligned` already have the
+  caller's original size in hand and use it directly, matching HPHA exactly. One
+  test deliberately reads a block's payload immediately after `free()` (before
+  `purge()`) to confirm the poison — empirically checked under Miri
+  (`-Zmiri-strict-provenance -Zmiri-tree-borrows`) rather than assumed sound, and
+  it passes clean.
+
+  No behavior change with the feature/config off. Full suites verified in both
+  ports (cargo test/clippy -D warnings with/without the feature and combined with
+  nightly; zig build test in Debug and ReleaseSafe; zig fmt), plus Miri on the
+  Rust side.
 - **Bucket-path memory guard bytes (v0.2.0, Phase 2).** Completes the guard-byte
   reservation started by the tree-path commit above. Unlike the tree path, the
   bucket path has no per-block header to inflate — `bucket::is_small_allocation`

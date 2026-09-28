@@ -76,6 +76,7 @@ const tree = @import("tree.zig");
 const spomen = @import("spomen.zig");
 const guard = @import("guard.zig");
 const spomen_guard = @import("spomen_guard.zig");
+const spomen_poison = @import("spomen_poison.zig");
 const rand = @import("rand.zig");
 const capi = @import("capi.zig");
 
@@ -99,6 +100,7 @@ test {
     std.testing.refAllDecls(spomen);
     std.testing.refAllDecls(guard);
     std.testing.refAllDecls(spomen_guard);
+    std.testing.refAllDecls(spomen_poison);
     std.testing.refAllDecls(rand);
     std.testing.refAllDecls(orisnitsa_mod);
     std.testing.refAllDecls(allocator_mod);

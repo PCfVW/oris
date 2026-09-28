@@ -44,6 +44,7 @@ const os = @import("os.zig");
 const spomen = @import("spomen.zig");
 const guard = @import("guard.zig");
 const spomen_guard = @import("spomen_guard.zig");
+const spomen_poison = @import("spomen_poison.zig");
 const rand = @import("rand.zig");
 const tree_mod = @import("tree.zig");
 
@@ -212,6 +213,15 @@ pub fn Orisnitsa(comptime config: Config) type {
                 // allocated with that inflated size above), exclusively owned
                 // (freshly allocated, not yet handed to any other caller).
                 spomen_guard.writeGuard(config, ptr, size, self.nextGuardSeed());
+                // Poisons the payload *after* the guard write, matching HPHA's
+                // own `write_guard()`-then-`initial_fill()` order inside
+                // `debug_record`'s constructor/`debug_record_map::add` — the two
+                // ranges are disjoint ([0, size) vs
+                // [size, size + memoryGuardSize(config))) so the order has no
+                // functional effect, only fidelity value. `ptr` is valid for
+                // `size` bytes (a subset of the span just established above),
+                // exclusively owned.
+                spomen_poison.fill(ptr, size);
             }
             return ptr;
         }
@@ -225,6 +235,9 @@ pub fn Orisnitsa(comptime config: Config) type {
                 // `ptr` is valid for `size + memoryGuardSize(config)` bytes,
                 // aligned to `alignment`, exclusively owned (freshly allocated).
                 spomen_guard.writeGuard(config, ptr, size, self.nextGuardSeed());
+                // See `treeAlloc`'s identical poisoning comment. `ptr` is valid
+                // for `size` bytes (established above), exclusively owned.
+                spomen_poison.fill(ptr, size);
             }
             return ptr;
         }
@@ -321,6 +334,10 @@ pub fn Orisnitsa(comptime config: Config) type {
                 // bucket), exclusively owned (freshly allocated, not yet handed
                 // to any other caller).
                 spomen_guard.writeGuard(config, ptr, size, self.nextGuardSeed());
+                // See `treeAlloc`'s identical poisoning comment. `ptr` is a slot
+                // of at least `size` bytes (established above), exclusively
+                // owned.
+                spomen_poison.fill(ptr, size);
             }
             return ptr;
         }
@@ -343,6 +360,10 @@ pub fn Orisnitsa(comptime config: Config) type {
                 // size + memoryGuardSize(config)` bytes, aligned to `alignment`,
                 // exclusively owned.
                 spomen_guard.writeGuard(config, ptr, size, self.nextGuardSeed());
+                // See `treeAlloc`'s identical poisoning comment. `ptr` is a slot
+                // of at least `size` bytes (established above), exclusively
+                // owned.
+                spomen_poison.fill(ptr, size);
             }
             return ptr;
         }
@@ -626,8 +647,34 @@ pub fn Orisnitsa(comptime config: Config) type {
             // `p` is a live allocation this instance produced (this function's own
             // contract).
             if (self.buckets.ptrInBucket(p)) {
+                if (config.debug) {
+                    // Poisons *before* the reclaim below, matching HPHA's own
+                    // `debug_remove`-before-`bucket_free` order in
+                    // `allocator::free` — no caller-supplied size is available
+                    // on this entry point (unlike `freeWithSize`), so this uses
+                    // the slot's own current, deflated usable size rather than
+                    // any HPHA-tracked original request (which needs the
+                    // allocation-record store, a later phase, to supply). `p`
+                    // is a live bucket-path allocation; the resulting slot is
+                    // `real_size` bytes, so poisoning its deflated
+                    // (guard-excluded) span stays within it.
+                    const page = bucket.ptrGetPage(p);
+                    const real_size = page.elemSize();
+                    spomen_poison.fill(p, guard.deflate(config, real_size));
+                }
                 self.buckets.free(p);
                 return;
+            }
+            if (config.debug) {
+                // `p` is a live tree-path allocation this instance produced
+                // (this function's own contract). Same reasoning as the bucket
+                // branch above: no record store yet, so this poisons the
+                // block's own current, deflated usable size. `p` is valid for
+                // `real_size` bytes, so poisoning its deflated span stays
+                // within it.
+                const bl = block.ptrGetBlockHeader(p);
+                const real_size = bl.size();
+                spomen_poison.fill(p, guard.deflate(config, real_size));
             }
             // `p` is a live tree-path allocation this instance produced.
             self.tree.free(p);
@@ -667,6 +714,20 @@ pub fn Orisnitsa(comptime config: Config) type {
                 // contract), which is exactly `free`'s.
                 self.freeZeroOrigSize(p);
                 return;
+            }
+            if (config.debug) {
+                // Poisons *before* the reclaim below (either branch), at the
+                // caller-supplied `orig_size` — unlike `free`'s pointer-only
+                // dispatch, this one already has the exact original request
+                // size in hand, matching HPHA's own
+                // `initial_fill(ptr, record->size())` (`record->size()` is
+                // asserted equal to this function's own `origSize` parameter in
+                // HPHA's `debug_record_map::remove(ptr, size)` overload)
+                // without needing the allocation-record store this port
+                // doesn't have yet. `p` is a live allocation this instance
+                // produced with `orig_size` bytes (this function's own
+                // contract).
+                spomen_poison.fill(p, orig_size);
             }
             if (bucket.isSmallAllocation(config, orig_size)) {
                 // Inflate before recomputing the bucket index — `alloc`'s own
@@ -713,6 +774,17 @@ pub fn Orisnitsa(comptime config: Config) type {
                 // contract), which is exactly `free`'s.
                 self.freeZeroOrigSize(p);
                 return;
+            }
+            if (config.debug) {
+                // See `freeWithSize`'s identical poisoning comment — same
+                // reasoning, at the same `orig_size` (not the
+                // alignment-rounded value HPHA's own bucket-index computation
+                // uses; `initial_fill` is always called with the plain
+                // `origSize`, alignment plays no part in it —
+                // `Cpp/hpha.h`'s `free(void*, size_t, size_t)`). `p` is a live
+                // allocation this instance produced with `orig_size` bytes
+                // (this function's own contract).
+                spomen_poison.fill(p, orig_size);
             }
             // HPHA computes `round_up(origSize, oldAlignment)` below unconditionally,
             // which is well-defined for every alignment `allocAligned` could have used
@@ -1143,6 +1215,77 @@ test "freeWithSize recomputes the same guard-inflated bucket" {
     // "every block must have been freed into its real bucket, not a
     //  differently-sized neighbour's"
     try testing.expectEqual(@as(usize, 0), orisnitsa.allocated());
+}
+
+// ---- v0.2.0 Phase 2: payload poisoning ----
+
+test "treeAlloc poisons the fresh payload" {
+    // A fresh tree-path allocation's payload must actually read as the poison
+    // pattern before the caller writes anything — not merely "some function
+    // called `spomen_poison.fill` somewhere," verified end to end through the
+    // real dispatch.
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    const size = bucket.MAX_SMALL_ALLOCATION + 4096;
+    const ptr = orisnitsa.alloc(size) orelse return error.TestUnexpectedResult; // "OS map failed"
+    for (0..size) |i| {
+        try testing.expectEqual(spomen_poison.byteAt(i), ptr[i]);
+    }
+    orisnitsa.free(ptr);
+    orisnitsa.purge();
+}
+
+test "bucketAlloc poisons the fresh payload" {
+    // Same property as "treeAlloc poisons the fresh payload", on the bucket
+    // path — wired through entirely separate dispatch (`bucketAlloc`, not
+    // `treeAlloc`), so it earns its own real-dispatch test.
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    const size = bucket.MAX_SMALL_ALLOCATION - guard.memoryGuardSize(debug_config);
+    const ptr = orisnitsa.alloc(size) orelse return error.TestUnexpectedResult; // "OS map failed"
+    for (0..size) |i| {
+        try testing.expectEqual(spomen_poison.byteAt(i), ptr[i]);
+    }
+    orisnitsa.free(ptr);
+    orisnitsa.purge();
+}
+
+test "free poisons the payload before reclaim" {
+    // `free` must poison the payload *before* the underlying reclaim — reading
+    // it back afterward is, from the pointer's own point of view,
+    // indistinguishable from a use-after-free read (which is exactly the
+    // scenario this mechanism exists to make loud rather than silent): this
+    // test is that scenario, deliberately, on memory this instance still owns
+    // the mapping for (not yet `purge()`d), the same way HPHA's own
+    // `debug_remove`-before-`bucket_free`/`tree_free` order intends the poison
+    // to be observed. Zig has no Miri-equivalent aliasing gate, but the same
+    // justification applies here as it does for `orisnik`'s identical test:
+    // the OS mapping backing `ptr` is still live (this instance never unmapped
+    // it), and this test is the sole observer of it, before and after the
+    // `free` call.
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    const size = bucket.MAX_SMALL_ALLOCATION + 4096;
+    const ptr = orisnitsa.alloc(size) orelse return error.TestUnexpectedResult; // "OS map failed"
+    @memset(ptr[0..size], 0xAB);
+    orisnitsa.free(ptr);
+    for (0..size) |i| {
+        try testing.expectEqual(spomen_poison.byteAt(i), ptr[i]);
+    }
+    orisnitsa.purge();
+}
+
+test "calloc zero-fill overwrites the poison" {
+    // `calloc` composes with allocation-time poisoning exactly as HPHA does:
+    // `alloc` poisons, then `calloc`'s own unconditional zero-fill overwrites
+    // it — no special-casing either way, so the caller sees zeros, never
+    // poison.
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    const count = 4;
+    const size = 64;
+    const ptr = orisnitsa.calloc(count, size) orelse return error.TestUnexpectedResult; // "OS map failed"
+    for (ptr[0 .. count * size]) |b| {
+        try testing.expectEqual(@as(u8, 0), b);
+    }
+    orisnitsa.free(ptr);
+    orisnitsa.purge();
 }
 
 // ---- v0.1.1 regression tests (docs/audits/2026-08-29-pre-v0.2.0-audit.md) ----
