@@ -12,6 +12,18 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Added
 
+- **The `debug-allocator` / `spomen` toggle scaffolding (v0.2.0, Phase 1).**
+  Behavior-inert groundwork for porting HPHA's `DEBUG_ALLOCATOR` mode: `orisnik`
+  gains a `debug-allocator` Cargo feature (same shape as the existing `nightly`)
+  and an always-compiled `guard` module holding just `MEMORY_GUARD_SIZE` (16 when
+  the feature is on, 0 otherwise — not yet consumed anywhere); `orisnitsa`'s
+  `Orisnitsa`/`Buckets`/`Tree` become generic type constructors over a new
+  `spomen.Config`, matching Zig's own `std.heap.DebugAllocator(comptime config:
+  Config)` shape, so the eventual debug instrumentation gets a compiler-guaranteed
+  zero-cost-when-disabled property rather than an optimizer hope. Both ports'
+  default (non-debug) behavior and every existing test are unchanged; each port
+  gains one new test exercising the debug-enabled side of the toggle end to end.
+  See `ROADMAP.md`'s v0.2.0 milestone.
 - **`Cpp/oracle/main_c_abi.cpp`** — Lazarov's own `main.cpp` benchmark (from the
   maintainer's archived HPHA copy, not in this repo), mechanically ported onto the
   `oris_*` C ABI: 512 Ki live allocations at its `r^8`-skewed size distribution,

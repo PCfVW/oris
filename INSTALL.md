@@ -14,6 +14,11 @@ Oris is a two-port monorepo; each port builds independently with its own toolcha
   soundness gate) and the unstable `allocator_api` `Allocator` trait surface. The
   default build, the C-shaped `oris_*` API, and the `#[global_allocator]` surface
   are all stable.
+- **`--features debug-allocator`** enables `spomen`, the port of HPHA's
+  `DEBUG_ALLOCATOR` mode (guard bytes, allocation-record tracking, leak detection,
+  `check()`/`report()`) landing across v0.2.0 (`ROADMAP.md`) — stable, no nightly
+  needed. Currently inert (scaffolding only, nothing it enables does anything yet);
+  build/test instructions land here once it does.
 
 ```sh
 cd Rust
@@ -38,6 +43,10 @@ orisnik = "0.1"
 - **Toolchain:** Zig **0.16.0**, pinned in `Zig/build.zig.zon`. The
   `std.mem.Allocator` vtable shape is version-sensitive while Zig is pre-1.0, so the
   pin is load-bearing.
+- **`Orisnitsa(.{ .debug = true })`** is the Zig analog of `orisnik`'s
+  `debug-allocator` feature — `spomen`, landing across v0.2.0 (`ROADMAP.md`). No
+  `zig build` flag needed; the default `orisnitsa.Orisnitsa` export stays the
+  non-debug `Orisnitsa(.{})`. Currently inert, same as the Rust side above.
 
 ```sh
 cd Zig

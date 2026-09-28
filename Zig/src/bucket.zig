@@ -20,7 +20,7 @@
 //! `orisnik`'s `Buckets`/`Bucket` methods all take `&self` and wrap the running
 //! byte counter in a `Cell<usize>`, purely to satisfy Rust's aliasing rules at the
 //! `GlobalAlloc`/`Allocator` trait boundary (shared access to a `static`). Zig has
-//! no such rule — every method here just takes `*Buckets`/`*Bucket` directly and
+//! no such rule — every method here just takes `*Self`/`*Bucket` directly and
 //! `allocated_bytes` is a plain `usize` field, the same simplification `list.zig`/
 //! `rbtree.zig` already made for their own sentinels.
 //!

@@ -89,9 +89,9 @@ pub fn isHphaAlignment(alignment: usize) bool {
 /// neighbouring bytes. This is the same implicit constraint HPHA's C++ `allocator`
 /// already carries (it defines no move constructor).
 ///
-/// Declare it in final position and pass `*Orisnitsa` from there — the
-/// `var backing: Orisnitsa = .init();` + `orisnitsa.allocator(&backing)` pattern in
-/// `root.zig`'s module doc does exactly this. `Debug`/`ReleaseSafe` builds carry a
+/// Declare it in final position and pass a pointer to it from there — the
+/// `var backing: orisnitsa.Orisnitsa = .init();` + `orisnitsa.allocator(&backing)`
+/// pattern in `root.zig`'s module doc does exactly this. `Debug`/`ReleaseSafe` builds carry a
 /// tripwire (`debugAssertNotMoved`) that trips on the first operation after a move
 /// instead of corrupting silently; `ReleaseFast` does not, so this remains a
 /// contract, not an enforced invariant. Mirrors `orisnik`'s `Orisnik`

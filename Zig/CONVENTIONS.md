@@ -427,6 +427,13 @@ allowed; the core allocator stays value-returning and panic-free. Its record con
 the Rust port's `debug-allocator` records (modulo platform-specific callstack symbols), per the
 cross-port parity goal in the roadmap.
 
+`guard.zig`'s `memoryGuardSize(comptime config: Config)` is deliberately its own small file,
+not part of `spomen.zig`: `bucket.zig`/`tree.zig`/`orisnitsa.zig` must call it unconditionally
+for their size arithmetic to type-check for every `config`, whereas the rest of `spomen` only
+ever needs to exist for a `config.debug = true` instantiation. It folds to 0 for `.{}`, so every
+site that adds/subtracts it becomes dead code in the default build. Mirrors `orisnik`'s own
+`guard`-vs-`spomen` module split exactly — do not fold `guard.zig` into `spomen.zig`.
+
 ---
 
 ## `std.mem.Allocator` vtable

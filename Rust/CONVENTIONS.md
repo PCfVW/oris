@@ -48,6 +48,7 @@ two ports worthwhile (see [`ROADMAP.md`](../ROADMAP.md)).
 | Write a `match` or `if let` | [`if let` vs `match`](#if-let-vs-match), [`// EXPLICIT:`](#explicit-annotation) if no-op arm |
 | Touch size-class math, tree rotation, or coalescing | [The Cross-Port Invariant](#the-cross-port-invariant) |
 | Assert an internal allocator invariant | [`debug_assert!` invariants](#debug_assert-invariants) |
+| Add a debug / instrumentation path | [`debug_assert!` invariants](#debug_assert-invariants) |
 | Implement `GlobalAlloc` or `Allocator` | [Idiomatic surfaces](#idiomatic-surfaces) |
 | Add `#[allow(clippy::...)]` for a newer lint | [MSRV lint guard](#msrv-lint-guard) |
 
@@ -547,9 +548,18 @@ HPHA's `DEBUG_ALLOCATOR` mode becomes, in Rust, a layered scheme:
   machinery — guard bytes, allocation-record tracking, callstack capture, leak detection on
   drop, `check()`/`report()`. `spomen` (*спомен*, "remembrance") is the named twin of the Zig
   port's subsystem, keeping the two debug surfaces parity-comparable. Gated so a release build
-  links none of it (zero-cost-when-disabled, matching the Zig port's
-  `comptime` bool). This is the Rust analog of `hypomnesis`'s feature-gated backends, applied to
-  observability rather than FFI.
+  links none of it (zero-cost-when-disabled, matching the Zig port's `comptime`-known
+  `config.debug` — a generic type-constructor parameter over there, not a runtime field; see
+  `Zig/CONVENTIONS.md`'s `comptime` Toggles section). This is the Rust analog of
+  `hypomnesis`'s feature-gated backends, applied to observability rather than FFI.
+
+`MEMORY_GUARD_SIZE` itself lives in the always-compiled `guard` module, not `spomen`:
+`bucket.rs`/`tree.rs`/`orisnik.rs` must reference it unconditionally for their size
+arithmetic to type-check in every configuration, whereas `spomen` is meant to not exist
+at all in a build without the feature. It folds to 0 without `debug-allocator`, so every
+`+`/`- MEMORY_GUARD_SIZE` site becomes dead code the compiler removes. Do not "clean this
+up" into `spomen` — that would make the constant unreachable from the always-compiled
+code that needs it.
 
 Never use `assert!` (always-on) on the hot path for an invariant that `debug_assert!` can carry
 — it would tax every release-build allocation.

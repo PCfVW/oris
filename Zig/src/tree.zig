@@ -27,7 +27,7 @@
 //! Same simplification as `bucket.zig`'s `Buckets`/`Bucket`: `orisnik`'s `Tree`
 //! wraps `mr_free_block`/`allocated_bytes` in `Cell`s purely to satisfy Rust's
 //! `&self`-only aliasing rule at the allocator trait boundary. Every method here
-//! just takes `*Tree` directly, and both fields are plain.
+//! just takes `*Self` directly, and both fields are plain.
 
 const std = @import("std");
 const align_helpers = @import("align.zig");
