@@ -2,14 +2,21 @@
 //! The top-level allocator: dispatches every request between the bucket path
 //! (small allocations) and the tree path (everything else), and owns nothing else.
 //!
-//! Ports the non-debug, single-threaded slice of `allocator`'s public surface,
-//! mirroring `orisnik`'s `orisnik.rs` — `DEBUG_ALLOCATOR` (guard bytes, allocation
-//! records, `check()`/`report()`) and `MULTITHREADED` (mutex-guarded buckets/tree)
-//! are both out of scope for v0.1.0, see `ROADMAP.md`. With `MEMORY_GUARD_SIZE`
-//! fixed at 0 (the non-debug value), every `+ MEMORY_GUARD_SIZE` /
-//! `- MEMORY_GUARD_SIZE` in HPHA's own arithmetic cancels out and is simply omitted
-//! here; every `debug_*` call in HPHA's non-debug build is a no-op and is likewise
-//! omitted rather than ported as a stub.
+//! Ports the single-threaded slice of `allocator`'s public surface, mirroring
+//! `orisnik`'s `orisnik.rs` — `MULTITHREADED` (mutex-guarded buckets/tree) is out
+//! of scope until v2.x, see `ROADMAP.md`. `DEBUG_ALLOCATOR` (guard bytes,
+//! allocation records, `check()`/`report()`) is v0.2.0's own milestone, landing
+//! incrementally behind `config.debug` (`guard.zig`, `spomen_guard.zig`): the tree
+//! path's guard bytes are wired in here (`treeAlloc`/`treeAllocAligned`/
+//! `treeRealloc`/`treeReallocAligned`/`treeResize`, and `querySize`'s tree
+//! branch); the bucket path and the rest of `spomen` (allocation records,
+//! callstack capture, `check()`/`report()`) follow in later phases. With
+//! `config.debug` false, `guard.memoryGuardSize(config)` is 0, so every
+//! `+`/`- memoryGuardSize(config)` site below is dead code the compiler removes,
+//! restoring v0.1.x's exact guard-free arithmetic — the same "cancels out and is
+//! simply omitted" shape this doc described before this feature existed, now
+//! realized by the compiler rather than by the source never mentioning guard
+//! bytes at all.
 //!
 //! `oris_*` (`capi.zig`) and the `std.mem.Allocator` vtable (`allocator.zig`) are
 //! thin shells over the methods on this type — see `Zig/CONVENTIONS.md`'s
@@ -33,6 +40,9 @@ const block = @import("block.zig");
 const bucket = @import("bucket.zig");
 const os = @import("os.zig");
 const spomen = @import("spomen.zig");
+const guard = @import("guard.zig");
+const spomen_guard = @import("spomen_guard.zig");
+const rand = @import("rand.zig");
 const tree_mod = @import("tree.zig");
 
 const Config = spomen.Config;
@@ -127,6 +137,19 @@ pub fn Orisnitsa(comptime config: Config) type {
         /// `prev`. Compared only under `std.debug.assert`, so `ReleaseFast` pays one word
         /// of storage and no instructions.
         origin: usize = 0,
+        /// The guard-byte ramp's seed stream (`spomen`; see `rand.zig`'s module
+        /// doc). `if (config.debug) rand.VintageRand else void` — Zig's standard
+        /// zero-size-when-disabled idiom (`Zig/CONVENTIONS.md`'s "`comptime`
+        /// Toggles" section): the non-debug `Orisnitsa`'s layout is completely
+        /// unaffected by this field's existence. Seeded from a fixed, documented
+        /// constant rather than any time-/address-derived source: guard-byte
+        /// *content* (unlike its size/placement) is not part of the cross-port
+        /// state-transition invariant, but making it deterministic and shared
+        /// costs nothing and lets both ports produce byte-identical ramps for an
+        /// identical allocation sequence, which a real per-run seed (`std.time`,
+        /// ASLR) would not.
+        guard_rng: if (config.debug) rand.VintageRand else void =
+            if (config.debug) rand.VintageRand.init(0) else {},
 
         /// Builds a fresh, empty allocator instance — no OS memory is claimed until
         /// the first allocation. Ports `allocator::allocator` (the default
@@ -161,12 +184,132 @@ pub fn Orisnitsa(comptime config: Config) type {
             }
         }
 
+        /// Draws the next guard-byte ramp seed from this instance's own stream.
+        /// Only reachable when `config.debug` — every call site below is itself
+        /// inside an `if (config.debug)` branch, `comptime`-eliminated otherwise,
+        /// so this body is never analyzed (and `self.guard_rng` never treated as
+        /// anything but `rand.VintageRand`) for a non-debug instantiation.
+        fn nextGuardSeed(self: *Self) u8 {
+            // CAST: u32 -> u8, HPHA's own `write_guard` does the identical
+            // truncation — `(unsigned char)rand()` — on `rand()`'s `0..=0x7fff`
+            // result; only the low byte seeds the ramp.
+            return @truncate(self.guard_rng.next());
+        }
+
+        /// The tree path's sole *fresh-allocation* choke point: `alloc` and
+        /// `realloc`'s bucket→tree crossover both go through this rather than
+        /// `self.tree.alloc` directly, so the guard-byte write (when
+        /// `config.debug`) exists exactly once. `size` is the caller-visible
+        /// request; the guard reservation is folded in and out here, invisibly to
+        /// every caller of this method.
+        fn treeAlloc(self: *Self, size: usize) ?[*]u8 {
+            const inflated = guard.inflate(config, size) orelse return null;
+            const ptr = self.tree.alloc(inflated) orelse return null;
+            if (config.debug) {
+                // `ptr` is valid for `size + memoryGuardSize(config)` bytes (just
+                // allocated with that inflated size above), exclusively owned
+                // (freshly allocated, not yet handed to any other caller).
+                spomen_guard.writeGuard(config, ptr, size, self.nextGuardSeed());
+            }
+            return ptr;
+        }
+
+        /// `treeAlloc`'s aligned counterpart — the tree path's sole
+        /// *fresh-allocation* choke point for an aligned request.
+        fn treeAllocAligned(self: *Self, size: usize, alignment: usize) ?[*]u8 {
+            const inflated = guard.inflate(config, size) orelse return null;
+            const ptr = self.tree.allocAligned(inflated, alignment) orelse return null;
+            if (config.debug) {
+                // `ptr` is valid for `size + memoryGuardSize(config)` bytes,
+                // aligned to `alignment`, exclusively owned (freshly allocated).
+                spomen_guard.writeGuard(config, ptr, size, self.nextGuardSeed());
+            }
+            return ptr;
+        }
+
+        /// `treeAlloc`'s realloc counterpart: the tree path's sole choke point for
+        /// growing/shrinking/moving an *existing* tree-path allocation. `size` is
+        /// the new caller-visible target; on success, the guard ramp is
+        /// (re)written at the new position regardless of whether the block grew
+        /// in place, merged with a neighbour, or moved via allocate-copy-free —
+        /// `tree.Tree.realloc`'s contract guarantees the returned pointer is valid
+        /// for at least the inflated size passed in, whichever path it took
+        /// internally.
+        ///
+        /// `ptr` must be a still-live tree-path allocation this instance
+        /// produced.
+        fn treeRealloc(self: *Self, ptr: [*]u8, size: usize) ?[*]u8 {
+            const inflated = guard.inflate(config, size) orelse return null;
+            const new_ptr = self.tree.realloc(ptr, inflated) orelse return null;
+            if (config.debug) {
+                // `new_ptr` is valid for `size + memoryGuardSize(config)` bytes
+                // (just (re)allocated with that inflated size above); exclusively
+                // owned — even if this is the same address `ptr` was, the
+                // trailing guard region past the new, still-live payload is this
+                // instance's own to write.
+                spomen_guard.writeGuard(config, new_ptr, size, self.nextGuardSeed());
+            }
+            return new_ptr;
+        }
+
+        /// `treeRealloc`'s aligned counterpart.
+        ///
+        /// `ptr` must be a still-live tree-path allocation this instance
+        /// produced, itself already aligned to `alignment`.
+        fn treeReallocAligned(self: *Self, ptr: [*]u8, size: usize, alignment: usize) ?[*]u8 {
+            const inflated = guard.inflate(config, size) orelse return null;
+            const new_ptr = self.tree.reallocAligned(ptr, inflated, alignment) orelse return null;
+            if (config.debug) {
+                // Same reasoning as `treeRealloc`, aligned.
+                spomen_guard.writeGuard(config, new_ptr, size, self.nextGuardSeed());
+            }
+            return new_ptr;
+        }
+
+        /// `treeAlloc`'s in-place-only counterpart: grows `ptr` without ever
+        /// moving it, reporting the resulting caller-visible size either way. On
+        /// growth, the guard ramp is rewritten at the new position — HPHA's own
+        /// `debug_update` re-runs `write_guard` here too (`resize` changing size
+        /// necessarily changes where the trailing guard region starts).
+        ///
+        /// `ptr` must be a still-live tree-path allocation this instance
+        /// produced.
+        fn treeResize(self: *Self, ptr: [*]u8, size: usize) usize {
+            // `size` this close to `maxInt(usize)` is certainly also past
+            // `tree_mod.MAX_ALLOCATION` (far smaller — see that constant's own
+            // doc), so passing it through unmodified when `inflate` overflows
+            // still reaches `Tree.resize`'s own `normalizeSize`-driven decline
+            // and reports the block's current size unchanged, exactly as
+            // desired — no separate handling needed.
+            const inflated = guard.inflate(config, size) orelse size;
+            const real_size = self.tree.resize(ptr, inflated);
+            const new_size = guard.deflate(config, real_size);
+            // Unconditional — ports HPHA's own `resize` body exactly, which
+            // reassigns `size` to `tree_resize`'s (deflated) return value and
+            // calls `debug_update(ptr, size)` *every* time, whether or not the
+            // block actually grew (`hpha.h`'s `resize`). This is not merely
+            // faithful, it is necessary: when growth lands exactly on the
+            // caller's own target (`new_size == size`), the guard's *position*
+            // still moved from the old size's end to the new one's — comparing
+            // `new_size` against `size` cannot detect that, only comparing
+            // against the block's size *before* this call could, and
+            // `Tree.resize` doesn't hand that back separately from the
+            // *not-grown* case either.
+            if (config.debug) {
+                // `ptr` is valid for `real_size == new_size +
+                // memoryGuardSize(config)` bytes (just reported by `Tree.resize`
+                // above), exclusively owned.
+                spomen_guard.writeGuard(config, ptr, new_size, self.nextGuardSeed());
+            }
+            return new_size;
+        }
+
         /// Allocates `size` bytes at `block.DEFAULT_ALIGNMENT`. `size == 0` returns
         /// `null`. Ports `allocator::alloc(size_t)`.
         pub fn alloc(self: *Self, size: usize) ?[*]u8 {
             self.debugAssertNotMoved();
             if (!bucket.isSmallAllocation(size)) {
-                return self.tree.alloc(size);
+                return self.treeAlloc(size);
             }
             if (size == 0) return null;
             const sz = bucket.clampSmallAllocation(size);
@@ -188,7 +331,7 @@ pub fn Orisnitsa(comptime config: Config) type {
                 return self.alloc(size);
             }
             if (!bucket.isSmallAllocation(size) or alignment > bucket.MAX_SMALL_ALLOCATION) {
-                return self.tree.allocAligned(size, alignment);
+                return self.treeAllocAligned(size, alignment);
             }
             if (size == 0) return null;
             const sz = bucket.clampSmallAllocation(size);
@@ -241,7 +384,7 @@ pub fn Orisnitsa(comptime config: Config) type {
                 if (bucket.isSmallAllocation(sz)) {
                     return self.buckets.realloc(p, sz);
                 }
-                const new_ptr = self.tree.alloc(sz) orelse return null;
+                const new_ptr = self.treeAlloc(sz) orelse return null;
                 const page = bucket.ptrGetPage(p);
                 const elem_size = page.elemSize();
                 // `new_ptr` was just allocated with room for at least
@@ -256,7 +399,7 @@ pub fn Orisnitsa(comptime config: Config) type {
             }
             // `p` is a live tree-path allocation this instance produced (not a
             // bucket pointer, per the `ptrInBucket` check above).
-            return self.tree.realloc(p, size);
+            return self.treeRealloc(p, size);
         }
 
         /// Grows, shrinks, or moves `ptr` to hold `size` bytes aligned to
@@ -312,7 +455,7 @@ pub fn Orisnitsa(comptime config: Config) type {
                     // HPHA quirk, not a new one.
                     return self.buckets.realloc(p, sz);
                 }
-                const new_ptr = self.tree.allocAligned(sz, alignment) orelse return null;
+                const new_ptr = self.treeAllocAligned(sz, alignment) orelse return null;
                 const page = bucket.ptrGetPage(p);
                 const elem_size = page.elemSize();
                 // Deliberate deviation from HPHA: the upstream C++ copies
@@ -339,7 +482,7 @@ pub fn Orisnitsa(comptime config: Config) type {
                 return new_ptr;
             }
             // `p` is a live tree-path allocation this instance produced.
-            return self.tree.reallocAligned(p, size, alignment);
+            return self.treeReallocAligned(p, size, alignment);
         }
 
         /// Grows or shrinks `ptr` in place to the extent possible, without moving
@@ -359,7 +502,7 @@ pub fn Orisnitsa(comptime config: Config) type {
                 return page.elemSize();
             }
             // `p` is a live tree-path allocation this instance produced.
-            return self.tree.resize(p, size);
+            return self.treeResize(p, size);
         }
 
         /// Queries the usable size of `ptr`'s allocation. `ptr == null` returns 0.
@@ -382,7 +525,7 @@ pub fn Orisnitsa(comptime config: Config) type {
             }
             // `p` is a live tree-path allocation this instance produced.
             const bl = block.ptrGetBlockHeader(p);
-            return bl.size();
+            return guard.deflate(config, bl.size());
         }
 
         /// Frees `ptr`. `ptr == null` is a no-op. Ports `allocator::free(void*)`.
@@ -680,9 +823,10 @@ test "allocated tracks both paths and purge reclaims them" {
 test "Orisnitsa(.{ .debug = true }) round-trips identically to the default instantiation" {
     // Proves the generic parameterization actually compiles and works for a
     // non-default Config, not just Orisnitsa(.{}) — see Zig/CONVENTIONS.md's
-    // "comptime Toggles" section. This phase wires `config` through only; no
-    // debug-specific behaviour exists yet (guard bytes/record tracking land in a
-    // later phase), so this instantiation must behave exactly like the default one.
+    // "comptime Toggles" section. `size == 64` stays on the bucket path, which
+    // Phase 2 leaves untouched (only the tree path grows guard bytes so far —
+    // see the Phase 2 tests below), so this instantiation must still behave
+    // exactly like the default one for this particular allocation.
     var orisnitsa: Orisnitsa(.{ .debug = true }) = .init();
     const ptr = orisnitsa.alloc(64) orelse return error.TestUnexpectedResult; // "OS map failed"
     @memset(ptr[0..64], 0xAB);
@@ -690,6 +834,101 @@ test "Orisnitsa(.{ .debug = true }) round-trips identically to the default insta
     orisnitsa.free(ptr);
     orisnitsa.purge();
     try testing.expectEqual(@as(usize, 0), orisnitsa.allocated());
+}
+
+// ---- v0.2.0 Phase 2: tree-path guard bytes (real dispatch, not just
+// `spomen_guard`'s own unit tests) ----
+
+const debug_config: Config = .{ .debug = true };
+
+test "treeAlloc hides the guard reservation from the caller" {
+    // `querySize(ptr)` must report exactly what was requested — the guard
+    // reservation (16 bytes trailing, real block size `size +
+    // memoryGuardSize(config)`) must be completely invisible from the caller's
+    // side of `querySize`/`alloc`.
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    const requested = bucket.MAX_SMALL_ALLOCATION + 4096;
+    const ptr = orisnitsa.alloc(requested) orelse return error.TestUnexpectedResult; // "OS map failed"
+    try testing.expectEqual(requested, orisnitsa.querySize(ptr));
+    // `ptr` is a live tree-path allocation of exactly `requested` bytes, just
+    // reported above — exactly `checkGuard`'s own contract.
+    try testing.expect(spomen_guard.checkGuard(debug_config, ptr, requested));
+    orisnitsa.free(ptr);
+    orisnitsa.purge();
+}
+
+test "treeAlloc ramp corruption is actually detectable" {
+    // A real tree-path `alloc` must have actually written a checkable ramp, not
+    // left the trailing bytes as whatever the arena's own initial content was —
+    // otherwise the test above could pass by accident on a freshly-mapped,
+    // zero-filled page (a ramp of all-zero bytes is *not* a valid
+    // `seed, seed+1, ...` sequence unless `seed == 0` *and* every byte truly
+    // increments). This corrupts one byte and confirms detection, the same
+    // property `spomen_guard`'s own tests pin at the primitive level, exercised
+    // here through the real dispatch instead of a synthetic buffer.
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    const requested = bucket.MAX_SMALL_ALLOCATION + 4096;
+    const ptr = orisnitsa.alloc(requested) orelse return error.TestUnexpectedResult; // "OS map failed"
+    // INDEX: `requested < requested + memoryGuardSize(debug_config)`, and
+    // `memoryGuardSize(debug_config) > 0`, so this stays within `ptr`'s valid
+    // span.
+    ptr[requested] = 0;
+    // `ptr` is a live tree-path allocation of exactly `requested` bytes.
+    try testing.expect(!spomen_guard.checkGuard(debug_config, ptr, requested));
+    // Freed via `free` (pointer-based dispatch), not `freeWithSize`, since the
+    // corrupted guard byte is no longer this test's concern once the check
+    // above has run.
+    orisnitsa.free(ptr);
+    orisnitsa.purge();
+}
+
+test "treeRealloc rewrites the guard ramp at the new size" {
+    // `realloc` growing a tree-path allocation must (re)write the guard ramp at
+    // the *new* size, whichever internal path `Tree.realloc` took (in-place
+    // growth, neighbour merge, or allocate-copy-free) — `treeRealloc`'s own doc
+    // argues this from `Tree.realloc`'s contract; this exercises it for real.
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    const small = bucket.MAX_SMALL_ALLOCATION + 64;
+    const big = bucket.MAX_SMALL_ALLOCATION + 8192;
+    const ptr = orisnitsa.alloc(small) orelse return error.TestUnexpectedResult; // "OS map failed"
+    const grown = orisnitsa.realloc(ptr, big) orelse return error.TestUnexpectedResult; // "growth never fails here"
+    try testing.expectEqual(big, orisnitsa.querySize(grown));
+    // `grown` is a live tree-path allocation of exactly `big` bytes.
+    try testing.expect(spomen_guard.checkGuard(debug_config, grown, big));
+    orisnitsa.free(grown);
+    orisnitsa.purge();
+}
+
+test "treeResize rewrites the guard ramp on growth" {
+    // `resize` growing a tree-path allocation in place must likewise (re)write
+    // the guard ramp at the new size — HPHA's own `debug_update` does the same
+    // on every `resize`, not only on `realloc`.
+    //
+    // This is the scenario that would have caught the naive "only rewrite when
+    // new_size > size" bug `treeResize`'s own doc warns against: growing to
+    // land *exactly* on the caller's requested target still moves the guard's
+    // position (from the old, smaller size's end to the new one's), even though
+    // `new_size == size` in that case. The sizes below are chosen so `resize`
+    // splits off the merged neighbour's excess and returns exactly the
+    // (16-byte-aligned) target rather than the whole merged block — mirroring
+    // `orisnik`'s identical test setup, which pins the same real behaviour.
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    const small = bucket.MAX_SMALL_ALLOCATION + 64;
+    const ptr = orisnitsa.alloc(small) orelse return error.TestUnexpectedResult; // "OS map failed"
+    // Free the immediately-following block first so `resize` has room to grow
+    // into (a lone allocation has no free neighbour to grow into).
+    const next_door = orisnitsa.alloc(bucket.MAX_SMALL_ALLOCATION + 64) orelse return error.TestUnexpectedResult; // "OS map failed"
+    // `next_door` is physically right after `ptr` — the tree path serves
+    // sequential same-size requests from one freshly-grown arena in order.
+    orisnitsa.free(next_door);
+    const target = small + 128;
+    const new_size = orisnitsa.resize(ptr, target);
+    try testing.expect(new_size >= target); // "must have grown into the freed neighbour"
+    // `ptr` is a live tree-path allocation of exactly `new_size` bytes
+    // (`resize`'s own return value, just asserted above).
+    try testing.expect(spomen_guard.checkGuard(debug_config, ptr, new_size));
+    orisnitsa.free(ptr);
+    orisnitsa.purge();
 }
 
 // ---- v0.1.1 regression tests (docs/audits/2026-08-29-pre-v0.2.0-audit.md) ----
@@ -865,117 +1104,13 @@ test "realloc that hits OOM keeps the original allocation" {
 
 // ---- F9: a randomized stress workload (docs/audits/2026-08-29-pre-v0.2.0-audit.md) ----
 
-/// The Microsoft C runtime's `rand()`, reproduced exactly.
-///
-/// `holdrand = holdrand * 214013 + 2531011; return (holdrand >> 16) & 0x7fff`.
-/// Taken from Eric Jacopin's "Vintage RNGs" chapter (*Game AI Pro 3*), and verified
-/// against the real CRT before being relied on here: 200 000 draws after each of
-/// `srand(0)`, `srand(1)`, `srand(42)`, `srand(1234)` and `srand(0xFFFF_FFFF)` are
-/// bit-identical to `rand()` as linked on Windows.
-///
-/// Why this generator and not an arbitrary one: it is what Dimitar Lazarov's own
-/// `main.cpp` benchmark drives HPHA with (`srand(1234)`). Porting it means the stress
-/// sequence below is *the same sequence* his harness produces, so a future three-way
-/// C++/Rust/Zig comparison (`ROADMAP.md`'s v0.3.0 trace corpus) can be generated
-/// independently in each language instead of shipping recorded traces. `orisnik`
-/// carries the identical generator, so both ports see one stream.
-const VintageRand = struct {
-    state: u32,
-
-    fn init(seed: u32) VintageRand {
-        return .{ .state = seed };
-    }
-
-    /// One `rand()` draw: `0..=0x7fff`.
-    fn next(self: *VintageRand) u32 {
-        self.state = self.state *% 214_013 +% 2_531_011;
-        return (self.state >> 16) & 0x7fff;
-    }
-
-    /// `main.cpp`'s `rand_size()`: 2..=4096, heavily skewed toward the floor.
-    ///
-    /// The C++ computes `MIN + (MAX - MIN) * powf(r, 8.0f)` with `r` a float in
-    /// `[0,1]`. This uses an integer analogue — three squarings in 15-bit fixed
-    /// point — deliberately: `powf` is not bit-reproducible across language runtimes,
-    /// and a stress workload whose *shape* both ports agree on exactly is worth more
-    /// here than one that matches C++'s last mantissa bit. The distribution is the
-    /// same: overwhelmingly bucket-path, with a long tail crossing into the tree
-    /// (measured: ~71% / ~29%).
-    fn size(self: *VintageRand) usize {
-        const MIN_SIZE: u64 = 2;
-        const MAX_SIZE: u64 = 4096;
-        const r: u64 = self.next();
-        const r2 = (r * r) >> 15;
-        const r4 = (r2 * r2) >> 15;
-        const r8 = (r4 * r4) >> 15;
-        // CAST: u64 -> usize, the result is at most MAX_SIZE (4096).
-        return @intCast(MIN_SIZE + ((r8 * (MAX_SIZE - MIN_SIZE)) >> 15));
-    }
-
-    /// `main.cpp`'s `rand_alignment()`: one of 1, 2, 4, ..., 128.
-    fn alignment(self: *VintageRand) usize {
-        const MAX_ALIGNMENT_LOG2: u64 = 7;
-        const r: u64 = self.next();
-        // CAST: u64 -> u6, the shift is at most MAX_ALIGNMENT_LOG2 (7).
-        const shift: u6 = @intCast((MAX_ALIGNMENT_LOG2 * r) >> 15);
-        return @as(usize, 1) << shift;
-    }
-
-    /// `main.cpp`'s `i + rand() % (N - i)` — picks a survivor to swap with.
-    fn indexIn(self: *VintageRand, remaining: usize) usize {
-        return @as(usize, self.next()) % remaining;
-    }
-};
-
-test "VintageRand matches the Microsoft CRT" {
-    // Golden vector: the first draws of `random values from rand.txt` in the Vintage
-    // RNGs corpus, produced by the real CRT after `srand(0)`.
-    var r: VintageRand = .init(0);
-    for ([_]u32{ 38, 7719, 21238, 2437, 8855, 11797, 8365, 32285, 10450 }) |expected| {
-        try testing.expectEqual(expected, r.next());
-    }
-    // And the seed Lazarov's own `main.cpp` uses.
-    var r2: VintageRand = .init(1234);
-    for ([_]u32{ 4068, 213, 12761, 8758, 23056, 7717, 15274, 24508 }) |expected| {
-        try testing.expectEqual(expected, r2.next());
-    }
-}
-
-test "VintageRand derived stream is pinned across ports" {
-    // Pins the *exact* derived stream both ports must see, with no allocator
-    // involved — the cross-port invariant's requirement applied to the test workload
-    // itself.
-    //
-    // The golden vectors above pin `next()`; this pins everything derived from it, so
-    // a drift in `size`'s fixed-point arithmetic or `alignment`'s shift cannot slip
-    // through in one port while the other stays put. `orisnik` asserts the identical
-    // constants. Computed independently from the reference LCG, not captured from
-    // this implementation's own output.
-    const Case = struct { n: usize, bucket: usize, tree: usize };
-    for ([_]Case{
-        .{ .n = 150, .bucket = 108, .tree = 42 },
-        .{ .n = 20_000, .bucket = 14_123, .tree = 5_877 },
-    }) |c| {
-        var rng: VintageRand = .init(1234);
-        var bucket_path: usize = 0;
-        var tree_path: usize = 0;
-        for (0..c.n) |_| {
-            if (bucket.isSmallAllocation(rng.size())) bucket_path += 1 else tree_path += 1;
-        }
-        try testing.expectEqual(c.bucket, bucket_path);
-        try testing.expectEqual(c.tree, tree_path);
-    }
-
-    // The aligned pass draws a size and an alignment per iteration; the sum of the
-    // alignments pins that interleaving too.
-    var rng: VintageRand = .init(1234);
-    var alignment_sum: usize = 0;
-    for (0..20_000) |_| {
-        _ = rng.size();
-        alignment_sum += rng.alignment();
-    }
-    try testing.expectEqual(@as(usize, 363_773), alignment_sum);
-}
+/// `rand.zig`'s `VintageRand`, promoted to production for the guard-byte ramp
+/// (see this file's own `guard_rng` field) and originally introduced right here
+/// as a test-only stress-workload helper — see `rand.zig`'s module doc for the
+/// full history and golden-vector provenance. Aliased under its original local
+/// name so the stress test below (and its two golden-vector tests, now living in
+/// `rand.zig` itself) reads unchanged.
+const VintageRand = rand.VintageRand;
 
 test "randomized alloc/free stress matches the HPHA benchmark shape" {
     // The shape of `main.cpp`'s `benchmark1()`, with the assertions it never had.

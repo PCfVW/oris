@@ -74,6 +74,12 @@ mod guard;
 mod list;
 mod orisnik;
 mod os;
+// Two independent consumers, neither the plain shipped library: `spomen`'s guard-byte
+// ramp (see that module's doc), gated on the feature like `spomen` itself; and
+// `orisnik.rs`'s own `#[cfg(test)]` stress workload, unconditionally (it predates and
+// is unrelated to `debug-allocator` — this generator just happens to serve both).
+#[cfg(any(test, feature = "debug-allocator"))]
+mod rand;
 mod rbtree;
 // The port of HPHA's `DEBUG_ALLOCATOR` mode (guard-byte verification, allocation-record
 // tracking, callstack capture, leak detection, `check()`/`report()`) — see `spomen`'s own

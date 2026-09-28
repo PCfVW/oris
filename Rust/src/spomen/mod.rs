@@ -12,3 +12,5 @@
 //!
 //! Populated across v0.2.0's phases: allocation-record tracking, callstack capture,
 //! payload poisoning, `OrisError`, and the `check()`/`report()` diagnostics.
+
+pub(crate) mod guard;

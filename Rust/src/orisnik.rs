@@ -2,13 +2,19 @@
 //! The top-level allocator: dispatches every request between the bucket path (small
 //! allocations) and the tree path (everything else), and owns nothing else.
 //!
-//! Ports the non-debug, single-threaded slice of `allocator`'s public surface —
-//! `DEBUG_ALLOCATOR` (guard bytes, allocation records, `check()`/`report()`) and
-//! `MULTITHREADED` (mutex-guarded buckets/tree) are both out of scope for v0.1.0, see
-//! `ROADMAP.md`. With `MEMORY_GUARD_SIZE` fixed at 0 (the non-debug value), every
-//! `+ MEMORY_GUARD_SIZE` / `- MEMORY_GUARD_SIZE` in HPHA's own arithmetic cancels out
-//! and is simply omitted here; every `debug_*` call in HPHA's non-debug build is a
-//! no-op and is likewise omitted rather than ported as a stub.
+//! Ports the single-threaded slice of `allocator`'s public surface —
+//! `MULTITHREADED` (mutex-guarded buckets/tree) is out of scope until v2.x, see
+//! `ROADMAP.md`. `DEBUG_ALLOCATOR` (guard bytes, allocation records, `check()`/
+//! `report()`) is v0.2.0's own milestone, landing incrementally behind the
+//! `debug-allocator` feature (`crate::guard`, `crate::spomen`): the tree path's guard
+//! bytes are wired in here (`tree_alloc`/`tree_alloc_aligned`/`tree_realloc`/
+//! `tree_realloc_aligned`/`tree_resize`, and `size`'s tree branch); the bucket path and
+//! the rest of `spomen` (allocation records, callstack capture, `check()`/`report()`)
+//! follow in later phases. With the feature off, `crate::guard::MEMORY_GUARD_SIZE` is
+//! 0, so every `+`/`- MEMORY_GUARD_SIZE` site below is dead code the compiler removes,
+//! restoring v0.1.x's exact guard-free arithmetic — the same "cancels out and is
+//! simply omitted" shape this doc described before this feature existed, now realized
+//! by the compiler rather than by the source never mentioning guard bytes at all.
 //!
 //! `oris_*` ([`crate::capi`]), `GlobalAlloc` ([`crate::global_alloc`]), and the
 //! optional `Allocator` trait ([`crate::allocator_trait`]) are thin shells over the
@@ -122,6 +128,16 @@ pub struct Orisnik {
     /// its null `prev`. Read and written only under `debug_assert!`, so release
     /// builds pay one word of storage and no instructions.
     origin: Cell<usize>,
+    /// The guard-byte ramp's seed stream (`spomen`; see `crate::rand`'s module doc).
+    /// Present only under the `debug-allocator` feature — the non-debug `Orisnik`'s
+    /// layout is completely unaffected by this field's existence. Seeded from a fixed,
+    /// documented constant rather than any time-/address-derived source: guard-byte
+    /// *content* (unlike its size/placement) is not part of the cross-port
+    /// state-transition invariant, but making it deterministic and shared costs
+    /// nothing and lets both ports produce byte-identical ramps for an identical
+    /// allocation sequence, which a real per-run seed (`std::time`, ASLR) would not.
+    #[cfg(feature = "debug-allocator")]
+    guard_rng: Cell<crate::rand::VintageRand>,
 }
 
 // SAFETY: `Orisnik`'s interior mutability (`Cell` throughout `Buckets`/`Tree`, no
@@ -149,7 +165,26 @@ impl Orisnik {
             buckets: Buckets::new(),
             tree: Tree::new(),
             origin: Cell::new(0),
+            // Seed `0` — arbitrary but fixed and documented (see the field's own doc);
+            // matches the seed already golden-vector-pinned in `crate::rand`'s tests.
+            #[cfg(feature = "debug-allocator")]
+            guard_rng: Cell::new(crate::rand::VintageRand::new(0)),
         }
+    }
+
+    /// Draws the next guard-byte ramp seed from this instance's own stream. `&self`
+    /// through the `Cell` (read-modify-write), matching every other piece of this
+    /// type's interior mutability.
+    #[cfg(feature = "debug-allocator")]
+    fn next_guard_seed(&self) -> u8 {
+        let mut rng = self.guard_rng.get();
+        // CAST: HPHA's own `write_guard` does the identical truncation —
+        // `(unsigned char)rand()` — on `rand()`'s `0..=0x7fff` result; only the low
+        // byte seeds the ramp.
+        #[allow(clippy::as_conversions, clippy::cast_possible_truncation)]
+        let seed = rng.next() as u8;
+        self.guard_rng.set(rng);
+        seed
     }
 
     /// Latches this instance's address on first use and, on every later call,
@@ -184,13 +219,134 @@ impl Orisnik {
         }
     }
 
+    /// The tree path's sole *fresh-allocation* choke point: [`Orisnik::alloc`] and
+    /// [`Orisnik::realloc`]'s bucket→tree crossover both go through this rather than
+    /// `self.tree.alloc` directly, so the guard-byte write (when `debug-allocator` is
+    /// enabled) exists exactly once. `size` is the caller-visible request; the guard
+    /// reservation is folded in and out here, invisibly to every caller of this method.
+    #[must_use]
+    fn tree_alloc(&self, size: usize) -> Option<NonNull<u8>> {
+        let ptr = self.tree.alloc(crate::guard::inflate(size)?)?;
+        #[cfg(feature = "debug-allocator")]
+        // SAFETY: `ptr` is valid for `size + MEMORY_GUARD_SIZE` bytes (just allocated
+        // with that inflated size above), exclusively owned (freshly allocated, not
+        // yet handed to any other caller).
+        unsafe {
+            crate::spomen::guard::write_guard(ptr, size, self.next_guard_seed());
+        }
+        Some(ptr)
+    }
+
+    /// [`Orisnik::tree_alloc`]'s aligned counterpart — the tree path's sole
+    /// *fresh-allocation* choke point for an aligned request.
+    #[must_use]
+    fn tree_alloc_aligned(&self, size: usize, alignment: usize) -> Option<NonNull<u8>> {
+        let ptr = self
+            .tree
+            .alloc_aligned(crate::guard::inflate(size)?, alignment)?;
+        #[cfg(feature = "debug-allocator")]
+        // SAFETY: `ptr` is valid for `size + MEMORY_GUARD_SIZE` bytes, aligned to
+        // `alignment`, exclusively owned (freshly allocated).
+        unsafe {
+            crate::spomen::guard::write_guard(ptr, size, self.next_guard_seed());
+        }
+        Some(ptr)
+    }
+
+    /// [`Orisnik::tree_alloc`]'s realloc counterpart: the tree path's sole choke point
+    /// for growing/shrinking/moving an *existing* tree-path allocation. `size` is the
+    /// new caller-visible target; on success, the guard ramp is (re)written at the new
+    /// position regardless of whether the block grew in place, merged with a
+    /// neighbour, or moved via allocate-copy-free — [`crate::tree::Tree::realloc`]'s
+    /// contract guarantees the returned pointer is valid for at least the inflated
+    /// size passed in, whichever path it took internally.
+    ///
+    /// # Safety
+    /// `ptr` must be a still-live tree-path allocation this instance produced.
+    #[must_use]
+    unsafe fn tree_realloc(&self, ptr: NonNull<u8>, size: usize) -> Option<NonNull<u8>> {
+        // SAFETY: forwarded from this function's own contract.
+        let new_ptr = unsafe { self.tree.realloc(ptr, crate::guard::inflate(size)?) }?;
+        #[cfg(feature = "debug-allocator")]
+        // SAFETY: `new_ptr` is valid for `size + MEMORY_GUARD_SIZE` bytes (just
+        // (re)allocated with that inflated size above); exclusively owned — even if
+        // this is the same address `ptr` was, the trailing guard region past the new,
+        // still-live payload is this instance's own to write.
+        unsafe {
+            crate::spomen::guard::write_guard(new_ptr, size, self.next_guard_seed());
+        }
+        Some(new_ptr)
+    }
+
+    /// [`Orisnik::tree_realloc`]'s aligned counterpart.
+    ///
+    /// # Safety
+    /// `ptr` must be a still-live tree-path allocation this instance produced, itself
+    /// already aligned to `alignment`.
+    #[must_use]
+    unsafe fn tree_realloc_aligned(
+        &self,
+        ptr: NonNull<u8>,
+        size: usize,
+        alignment: usize,
+    ) -> Option<NonNull<u8>> {
+        // SAFETY: forwarded from this function's own contract.
+        let new_ptr = unsafe {
+            self.tree
+                .realloc_aligned(ptr, crate::guard::inflate(size)?, alignment)
+        }?;
+        #[cfg(feature = "debug-allocator")]
+        // SAFETY: same reasoning as `tree_realloc`, aligned.
+        unsafe {
+            crate::spomen::guard::write_guard(new_ptr, size, self.next_guard_seed());
+        }
+        Some(new_ptr)
+    }
+
+    /// [`Orisnik::tree_alloc`]'s in-place-only counterpart: grows `ptr` without ever
+    /// moving it, reporting the resulting caller-visible size either way. On growth,
+    /// the guard ramp is rewritten at the new position — HPHA's own `debug_update`
+    /// re-runs `write_guard` here too (`resize` changing size necessarily changes
+    /// where the trailing guard region starts).
+    ///
+    /// # Safety
+    /// `ptr` must be a still-live tree-path allocation this instance produced.
+    #[must_use]
+    unsafe fn tree_resize(&self, ptr: NonNull<u8>, size: usize) -> usize {
+        // `size` this close to `usize::MAX` is certainly also past
+        // `tree::MAX_ALLOCATION` (far smaller — see that constant's own doc), so
+        // passing it through unmodified when `inflate` overflows still reaches
+        // `Tree::resize`'s own `normalize_size`-driven decline and reports the block's
+        // current size unchanged, exactly as desired — no separate handling needed.
+        let inflated = crate::guard::inflate(size).unwrap_or(size);
+        // SAFETY: forwarded from this function's own contract.
+        let real_size = unsafe { self.tree.resize(ptr, inflated) };
+        let new_size = crate::guard::deflate(real_size);
+        // Unconditional — ports HPHA's own `resize` body exactly, which reassigns
+        // `size` to `tree_resize`'s (deflated) return value and calls
+        // `debug_update(ptr, size)` *every* time, whether or not the block actually
+        // grew (`hpha.h`'s `resize`). This is not merely faithful, it is necessary:
+        // when growth lands exactly on the caller's own target (`new_size == size`),
+        // the guard's *position* still moved from the old size's end to the new one's
+        // — comparing `new_size` against `size` cannot detect that, only comparing
+        // against the block's size *before* this call could, and `Tree::resize`
+        // doesn't hand that back separately from the *not-grown* case either.
+        #[cfg(feature = "debug-allocator")]
+        // SAFETY: `ptr` is valid for `real_size == new_size + MEMORY_GUARD_SIZE` bytes
+        // (just reported by `Tree::resize` above), exclusively owned.
+        unsafe {
+            crate::spomen::guard::write_guard(ptr, new_size, self.next_guard_seed());
+        }
+        new_size
+    }
+
     /// Allocates `size` bytes at `DEFAULT_ALIGNMENT`. `size == 0` returns `None`.
     /// Ports `allocator::alloc(size_t)`.
     #[must_use]
     pub fn alloc(&self, size: usize) -> Option<NonNull<u8>> {
         self.debug_assert_not_moved();
         if !bucket::is_small_allocation(size) {
-            return self.tree.alloc(size);
+            return self.tree_alloc(size);
         }
         if size == 0 {
             return None;
@@ -218,7 +374,7 @@ impl Orisnik {
             return self.alloc(size);
         }
         if !bucket::is_small_allocation(size) || alignment > MAX_SMALL_ALLOCATION {
-            return self.tree.alloc_aligned(size, alignment);
+            return self.tree_alloc_aligned(size, alignment);
         }
         if size == 0 {
             return None;
@@ -276,7 +432,7 @@ impl Orisnik {
                 // SAFETY: `ptr` is a live bucket-path allocation (just confirmed).
                 return unsafe { self.buckets.realloc(ptr, size) };
             }
-            let new_ptr = self.tree.alloc(size)?;
+            let new_ptr = self.tree_alloc(size)?;
             // SAFETY: `ptr` is a live bucket-path allocation.
             let page = unsafe { bucket::ptr_get_page(ptr.as_ptr()) };
             // SAFETY: `page` is live.
@@ -299,7 +455,7 @@ impl Orisnik {
         }
         // SAFETY: `ptr` is a live tree-path allocation this instance produced (not a
         // bucket pointer, per the `ptr_in_bucket` check above).
-        unsafe { self.tree.realloc(ptr, size) }
+        unsafe { self.tree_realloc(ptr, size) }
     }
 
     /// Grows, shrinks, or moves `ptr` to hold `size` bytes aligned to `alignment`.
@@ -370,7 +526,7 @@ impl Orisnik {
                 // SAFETY: `ptr` is a live bucket-path allocation.
                 return unsafe { self.buckets.realloc(ptr, size) };
             }
-            let new_ptr = self.tree.alloc_aligned(size, alignment)?;
+            let new_ptr = self.tree_alloc_aligned(size, alignment)?;
             // SAFETY: `ptr` is a live bucket-path allocation.
             let page = unsafe { bucket::ptr_get_page(ptr.as_ptr()) };
             // SAFETY: `page` is live.
@@ -403,7 +559,7 @@ impl Orisnik {
             return Some(new_ptr);
         }
         // SAFETY: `ptr` is a live tree-path allocation this instance produced.
-        unsafe { self.tree.realloc_aligned(ptr, size, alignment) }
+        unsafe { self.tree_realloc_aligned(ptr, size, alignment) }
     }
 
     /// Grows or shrinks `ptr` in place to the extent possible, without moving it,
@@ -428,7 +584,7 @@ impl Orisnik {
             return unsafe { bucket::Page::elem_size(page) };
         }
         // SAFETY: `ptr` is a live tree-path allocation this instance produced.
-        unsafe { self.tree.resize(ptr, size) }
+        unsafe { self.tree_resize(ptr, size) }
     }
 
     /// Queries the usable size of `ptr`'s allocation. `ptr == None` returns 0. Ports
@@ -453,7 +609,8 @@ impl Orisnik {
         // SAFETY: `ptr` is a live tree-path allocation this instance produced.
         let bl = unsafe { block::ptr_get_block_header(ptr.as_ptr()) };
         // SAFETY: `bl` is live.
-        unsafe { block::BlockHeader::size(bl) }
+        let real_size = unsafe { block::BlockHeader::size(bl) };
+        crate::guard::deflate(real_size)
     }
 
     /// Frees `ptr`. `ptr == None` is a no-op. Ports `allocator::free(void*)`.
@@ -885,6 +1042,115 @@ mod tests {
         );
     }
 
+    // ---- v0.2.0 Phase 2: tree-path guard bytes (real dispatch, not just
+    // `spomen::guard`'s own unit tests) ----
+
+    /// `size(ptr)` must report exactly what was requested — the guard reservation
+    /// (16 bytes trailing, real block size `size + MEMORY_GUARD_SIZE`) must be
+    /// completely invisible from the caller's side of `Orisnik::size`/`alloc`.
+    #[test]
+    #[cfg(feature = "debug-allocator")]
+    fn tree_alloc_hides_the_guard_reservation_from_the_caller() {
+        let orisnik = Orisnik::new();
+        let requested = MAX_SMALL_ALLOCATION + 4096;
+        let ptr = orisnik.alloc(requested).expect("OS map failed");
+        // SAFETY: `ptr` is a live allocation `orisnik` produced.
+        assert_eq!(unsafe { orisnik.size(Some(ptr)) }, requested);
+        // SAFETY: `ptr` is a live tree-path allocation of exactly `requested` bytes,
+        // just reported above — exactly `check_guard`'s own contract.
+        assert!(unsafe { crate::spomen::guard::check_guard(ptr, requested) });
+        // SAFETY: `ptr` is a live allocation `orisnik` produced.
+        unsafe { orisnik.free(Some(ptr)) };
+        orisnik.purge();
+    }
+
+    /// A real tree-path `alloc` must have actually written a checkable ramp, not left
+    /// the trailing bytes as whatever the arena's own initial content was — otherwise
+    /// `tree_alloc_hides_the_guard_reservation_from_the_caller` above could pass by
+    /// accident on a freshly-mapped, zero-filled page (a ramp of all-zero bytes is
+    /// *not* a valid `seed, seed+1, ...` sequence unless `seed == 0` *and* every byte
+    /// truly increments — coincidentally possible for zeros only if the check itself
+    /// were broken). This corrupts one byte and confirms detection, the same property
+    /// `spomen::guard`'s own tests pin at the primitive level, exercised here through
+    /// the real dispatch instead of a synthetic buffer.
+    #[test]
+    #[cfg(feature = "debug-allocator")]
+    fn tree_alloc_ramp_corruption_is_actually_detectable() {
+        let orisnik = Orisnik::new();
+        let requested = MAX_SMALL_ALLOCATION + 4096;
+        let ptr = orisnik.alloc(requested).expect("OS map failed");
+        // SAFETY: `requested < requested + MEMORY_GUARD_SIZE`, `MEMORY_GUARD_SIZE > 0`
+        // under this feature, so this stays within `ptr`'s valid span.
+        let guard_start = unsafe { ptr.as_ptr().add(requested) };
+        // SAFETY: `guard_start` is within `ptr`'s valid span (established above) and
+        // writable (exclusively owned by this test).
+        unsafe { guard_start.write(0) };
+        // SAFETY: `ptr` is a live tree-path allocation of exactly `requested` bytes.
+        assert!(!unsafe { crate::spomen::guard::check_guard(ptr, requested) });
+        // SAFETY: `ptr` is a live allocation `orisnik` produced. Freed via `free`
+        // (pointer-based dispatch), not `free_with_size`, since the corrupted guard
+        // byte is no longer this test's concern once the check above has run.
+        unsafe { orisnik.free(Some(ptr)) };
+        orisnik.purge();
+    }
+
+    /// [`Orisnik::realloc`] growing a tree-path allocation must (re)write the guard
+    /// ramp at the *new* size, whichever internal path `Tree::realloc` took (in-place
+    /// growth, neighbour merge, or allocate-copy-free) — `tree_realloc`'s own doc
+    /// argues this from `Tree::realloc`'s contract; this exercises it for real.
+    #[test]
+    #[cfg(feature = "debug-allocator")]
+    fn tree_realloc_rewrites_the_guard_ramp_at_the_new_size() {
+        let orisnik = Orisnik::new();
+        let small = MAX_SMALL_ALLOCATION + 64;
+        let big = MAX_SMALL_ALLOCATION + 8192;
+        let ptr = orisnik.alloc(small).expect("OS map failed");
+        // SAFETY: `ptr` is a live tree-path allocation `orisnik` produced.
+        let grown = unsafe { orisnik.realloc(Some(ptr), big) }.expect("growth never fails here");
+        // SAFETY: `grown` is a live allocation `orisnik` produced.
+        assert_eq!(unsafe { orisnik.size(Some(grown)) }, big);
+        // SAFETY: `grown` is a live tree-path allocation of exactly `big` bytes.
+        assert!(unsafe { crate::spomen::guard::check_guard(grown, big) });
+        // SAFETY: `grown` is a live allocation `orisnik` produced.
+        unsafe { orisnik.free(Some(grown)) };
+        orisnik.purge();
+    }
+
+    /// [`Orisnik::resize`] growing a tree-path allocation in place must likewise
+    /// (re)write the guard ramp at the new size — HPHA's own `debug_update` does the
+    /// same on every `resize`, not only on `realloc`.
+    #[test]
+    #[cfg(feature = "debug-allocator")]
+    fn tree_resize_rewrites_the_guard_ramp_on_growth() {
+        let orisnik = Orisnik::new();
+        let small = MAX_SMALL_ALLOCATION + 64;
+        let ptr = orisnik.alloc(small).expect("OS map failed");
+        // Free the immediately-following block first so `resize` has room to grow
+        // into, mirroring `tree::tests::resize_reports_grown_size_without_moving`'s
+        // own setup shape (a lone allocation has no free neighbour to grow into).
+        let next_door = orisnik
+            .alloc(MAX_SMALL_ALLOCATION + 64)
+            .expect("OS map failed");
+        // SAFETY: `next_door` is a live allocation `orisnik` produced, physically
+        // right after `ptr` (the tree path serves sequential same-size requests from
+        // one freshly-grown arena in order — pinned by
+        // `tree::tests::resize_reports_grown_size_without_moving`'s identical setup).
+        unsafe { orisnik.free(Some(next_door)) };
+        let target = small + 128;
+        // SAFETY: `ptr` is a live tree-path allocation `orisnik` produced.
+        let new_size = unsafe { orisnik.resize(Some(ptr), target) };
+        assert!(
+            new_size >= target,
+            "must have grown into the freed neighbour"
+        );
+        // SAFETY: `ptr` is a live tree-path allocation of exactly `new_size` bytes
+        // (`resize`'s own return value, just asserted above).
+        assert!(unsafe { crate::spomen::guard::check_guard(ptr, new_size) });
+        // SAFETY: `ptr` is a live allocation `orisnik` produced.
+        unsafe { orisnik.free(Some(ptr)) };
+        orisnik.purge();
+    }
+
     // ---- v0.1.1 regression tests (docs/audits/2026-08-29-pre-v0.2.0-audit.md) ----
 
     /// F1. Every one of these overflows an intermediate `+` in the tree path's size
@@ -1016,33 +1282,16 @@ mod tests {
 
     // ---- F9: a randomized stress workload (docs/audits/2026-08-29-pre-v0.2.0-audit.md) ----
 
-    /// The Microsoft C runtime's `rand()`, reproduced exactly.
-    ///
-    /// `holdrand = holdrand * 214013 + 2531011; return (holdrand >> 16) & 0x7fff`.
-    /// Taken from Eric Jacopin's "Vintage RNGs" chapter (*Game AI Pro 3*), and verified
-    /// against the real CRT before being relied on here: 200 000 draws after each of
-    /// `srand(0)`, `srand(1)`, `srand(42)`, `srand(1234)` and `srand(0xFFFF_FFFF)` are
-    /// bit-identical to `rand()` as linked on Windows.
-    ///
-    /// Why this generator and not an arbitrary one: it is what Dimitar Lazarov's own
-    /// `main.cpp` benchmark drives HPHA with (`srand(1234)`). Porting it means the
-    /// stress sequence below is *the same sequence* his harness produces, so a future
-    /// three-way C++/Rust/Zig comparison (`ROADMAP.md`'s v0.3.0 trace corpus) can be
-    /// generated independently in each language instead of shipping recorded traces.
-    /// `orisnitsa` carries the identical generator, so both ports see one stream.
-    struct VintageRand(u32);
+    use crate::rand::VintageRand;
 
+    /// Test-only extensions to [`VintageRand`] (promoted to `crate::rand` for
+    /// `spomen`'s guard-byte ramp — see that module's doc), specific to this stress
+    /// workload's needs: `main.cpp`'s size/alignment distributions and its
+    /// survivor-swap index, none of which the production guard-byte seeding uses. A
+    /// second inherent `impl` block for a `crate::rand` type is legal here — Rust's
+    /// orphan rule only requires an inherent impl to live in the type's own crate, not
+    /// its own module.
     impl VintageRand {
-        const fn new(seed: u32) -> Self {
-            Self(seed)
-        }
-
-        /// One `rand()` draw: `0..=0x7fff`.
-        fn next(&mut self) -> u32 {
-            self.0 = self.0.wrapping_mul(214_013).wrapping_add(2_531_011);
-            (self.0 >> 16) & 0x7fff
-        }
-
         /// `main.cpp`'s `rand_size()`: 2..=4096, heavily skewed toward the floor.
         ///
         /// The C++ computes `MIN + (MAX - MIN) * powf(r, 8.0f)` with `r` a float in

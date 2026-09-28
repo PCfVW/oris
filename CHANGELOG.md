@@ -12,6 +12,42 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Added
 
+- **Tree-path memory guard bytes (v0.2.0, Phase 2).** Behind `debug-allocator`/
+  `config.debug`: every tree-path allocation now reserves and writes a trailing
+  16-byte guard ramp (`seed, seed+1, ..., seed+15`, wrapping) immediately after the
+  caller's own requested bytes, ported from HPHA's `write_guard`
+  (`Cpp/hpha.cpp:745-751`) exactly, including its size (`MEMORY_GUARD_SIZE`) and
+  placement. `orisnik::alloc`/`alloc_aligned`/`realloc`/`realloc_aligned`/`resize`
+  (and `orisnitsa`'s equivalents) all route through new private wrapper methods
+  (`tree_alloc`/`tree_alloc_aligned`/`tree_realloc`/`tree_realloc_aligned`/
+  `tree_resize`) that inflate the real block size by the guard reservation and
+  write/rewrite the ramp on success — invisibly to every caller (`size`/`querySize`
+  report exactly the original request either way). `spomen::guard`/`spomen_guard`
+  add a directly-tested, self-consistency-only `check_guard`/`checkGuard`
+  primitive (not yet wired into `free`/`realloc`'s dispatch — that needs the
+  allocation-record store, a later phase, to supply the true original size a
+  live pointer's *usable* size can exceed).
+
+  The existing test-only `VintageRand` (the Microsoft CRT `rand()` port) is
+  promoted to production (`Rust/src/rand.rs`, `Zig/src/rand.zig`) and now also
+  seeds the guard ramp, so both ports write byte-identical ramps for an identical
+  allocation sequence — not merely per-port-plausible content.
+
+  One real bug was caught by testing through the actual dispatch (not just the
+  low-level ramp primitive) and fixed before landing: the first `resize`
+  implementation only rewrote the guard when the block grew *past* the caller's
+  requested size, which misses the case where growth lands *exactly* on it (the
+  guard's position still moves). The fix — always rewrite, at the block's actual
+  reported new size — mirrors HPHA's own `resize` body exactly (`hpha.h`
+  reassigns `size` to `tree_resize`'s real return value before calling
+  `debug_update`, unconditionally, whether or not growth occurred).
+
+  No behavior change with the feature/config off — both full suites (`cargo
+  test`/`clippy -D warnings` with and without `debug-allocator`, incl. `nightly`
+  combined; `zig build test` in Debug and ReleaseSafe) pass unchanged, plus Miri
+  (`-Zmiri-strict-provenance -Zmiri-tree-borrows`) on the Rust side. The bucket
+  path and the rest of `spomen` (allocation records, callstack capture,
+  `check()`/`report()`) follow in later phases.
 - **The `debug-allocator` / `spomen` toggle scaffolding (v0.2.0, Phase 1).**
   Behavior-inert groundwork for porting HPHA's `DEBUG_ALLOCATOR` mode: `orisnik`
   gains a `debug-allocator` Cargo feature (same shape as the existing `nightly`)
