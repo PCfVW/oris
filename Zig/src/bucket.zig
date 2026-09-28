@@ -38,6 +38,9 @@ const std = @import("std");
 const align_helpers = @import("align.zig");
 const list = @import("list.zig");
 const os = @import("os.zig");
+const spomen = @import("spomen.zig");
+
+const Config = spomen.Config;
 
 /// `log2` of the smallest bucket size class. Ports `MIN_ALLOCATION_LOG2`.
 pub const MIN_ALLOCATION_LOG2: usize = 3;
@@ -357,236 +360,251 @@ pub const Bucket = struct {
 /// All 32 bucket size classes, plus the bucket path's running allocated-byte total.
 /// Ports the bucket-related slice of `allocator` (`mBuckets`,
 /// `mTotalAllocatedSizeBuckets`, and the free `bucket_*` methods).
-pub const Buckets = struct {
-    /// One `Bucket` per size class, indexed by `bucketSpacingFunction` and its
-    /// variants. `Bucket.init()` is a pure value (no address-dependent state at
-    /// construction — see `list.zig`'s lazy-sentinel-init doc), so this repeat
-    /// expression is comptime-evaluable, keeping `Buckets.init()` itself
-    /// `comptime`-constructible per `Zig/CONVENTIONS.md`'s `comptime`-over-runtime
-    /// guidance.
-    buckets: [NUM_BUCKETS]Bucket = [1]Bucket{.init()} ** NUM_BUCKETS,
-    /// Total bytes currently mapped for the bucket path (whole `PAGE_SIZE` pages).
-    /// A plain field, not `orisnik`'s `Cell<usize>` — see the module doc's "`&self`
-    /// vs `*Self`" section.
-    allocated_bytes: usize = 0,
+///
+/// Generic over the `spomen` debug-subsystem `Config` (see `Zig/CONVENTIONS.md`'s
+/// "`comptime` Toggles" section) so a future guard-byte/record-tracking phase can
+/// specialize this type's layout and methods per instantiation with a
+/// compiler-enforced zero-cost-when-disabled guarantee. Nothing in this phase
+/// reads `config` yet — `Bucket`/`Page` need no such parameterization of their
+/// own until a later phase actually stores debug-only state in them.
+pub fn Buckets(comptime config: Config) type {
+    // Not yet read: this phase only wires `config` through the type constructor
+    // (see the doc above) — a later phase's guard-byte/record-tracking branches
+    // are what actually consult it.
+    _ = config;
+    return struct {
+        const Self = @This();
 
-    /// Builds a fresh set of empty buckets, none of them yet holding any pages.
-    pub fn init() Buckets {
-        return .{};
-    }
+        /// One `Bucket` per size class, indexed by `bucketSpacingFunction` and its
+        /// variants. `Bucket.init()` is a pure value (no address-dependent state at
+        /// construction — see `list.zig`'s lazy-sentinel-init doc), so this repeat
+        /// expression is comptime-evaluable, keeping `Buckets(config).init()` itself
+        /// `comptime`-constructible per `Zig/CONVENTIONS.md`'s `comptime`-over-runtime
+        /// guidance.
+        buckets: [NUM_BUCKETS]Bucket = [1]Bucket{.init()} ** NUM_BUCKETS,
+        /// Total bytes currently mapped for the bucket path (whole `PAGE_SIZE` pages).
+        /// A plain field, not `orisnik`'s `Cell<usize>` — see the module doc's "`&self`
+        /// vs `*Self`" section.
+        allocated_bytes: usize = 0,
 
-    /// Total bytes currently claimed from the OS by the bucket path (whole pages,
-    /// not payload bytes). Ports the bucket half of `allocator::allocated`.
-    pub fn allocated(self: *Buckets) usize {
-        return self.allocated_bytes;
-    }
+        /// Builds a fresh set of empty buckets, none of them yet holding any pages.
+        pub fn init() Self {
+            return .{};
+        }
 
-    /// Maps one fresh `PAGE_SIZE` OS page. Ports `allocator::bucket_system_alloc`.
-    fn systemAlloc(self: *Buckets) ?[*]u8 {
-        const ptr = os.map(os.PAGE_SIZE) orelse return null;
-        self.allocated_bytes += os.PAGE_SIZE;
-        return ptr;
-    }
+        /// Total bytes currently claimed from the OS by the bucket path (whole pages,
+        /// not payload bytes). Ports the bucket half of `allocator::allocated`.
+        pub fn allocated(self: *Self) usize {
+            return self.allocated_bytes;
+        }
 
-    /// Returns one `PAGE_SIZE` OS page. Ports `allocator::bucket_system_free`.
-    ///
-    /// `ptr` must be a still-live result of `systemAlloc` on `self`.
-    fn systemFree(self: *Buckets, ptr: [*]u8) void {
-        os.unmap(ptr, os.PAGE_SIZE);
-        self.allocated_bytes -= os.PAGE_SIZE;
-    }
+        /// Maps one fresh `PAGE_SIZE` OS page. Ports `allocator::bucket_system_alloc`.
+        fn systemAlloc(self: *Self) ?[*]u8 {
+            const ptr = os.map(os.PAGE_SIZE) orelse return null;
+            self.allocated_bytes += os.PAGE_SIZE;
+            return ptr;
+        }
 
-    /// Maps a fresh page and threads it for `elem_size`-sized slots, owned by
-    /// bucket `bi`. Ports `allocator::bucket_grow`.
-    fn grow(self: *Buckets, bi: usize) ?*Page {
-        std.debug.assert(bi < NUM_BUCKETS);
-        const elem_size = bucketSpacingFunctionInverse(bi);
-        const mem = self.systemAlloc() orelse return null;
-        const mrk = self.buckets[bi].marker();
-        // `mem` is exactly PAGE_SIZE bytes, PAGE_SIZE-aligned (`os.map`'s
-        // guarantee), and freshly mapped (exclusively ours, nothing else accesses
-        // it concurrently — this port is single-threaded in v0.1.0); `elem_size`
-        // is a real bucket size class (`bi < NUM_BUCKETS`, checked above).
-        return initPageAt(mem, elem_size, mrk);
-    }
+        /// Returns one `PAGE_SIZE` OS page. Ports `allocator::bucket_system_free`.
+        ///
+        /// `ptr` must be a still-live result of `systemAlloc` on `self`.
+        fn systemFree(self: *Self, ptr: [*]u8) void {
+            os.unmap(ptr, os.PAGE_SIZE);
+            self.allocated_bytes -= os.PAGE_SIZE;
+        }
 
-    /// Allocates `size` bytes on the bucket path, computing the bucket index from
-    /// `size` directly (used when a prior guard-byte/alignment adjustment already
-    /// produced the final target size — see `realloc`'s HPHA counterpart). Ports
-    /// `allocator::bucket_alloc`.
-    pub fn alloc(self: *Buckets, size: usize) ?[*]u8 {
-        std.debug.assert(size <= MAX_SMALL_ALLOCATION);
-        const bi = bucketSpacingFunction(size);
-        return self.allocDirect(bi);
-    }
+        /// Maps a fresh page and threads it for `elem_size`-sized slots, owned by
+        /// bucket `bi`. Ports `allocator::bucket_grow`.
+        fn grow(self: *Self, bi: usize) ?*Page {
+            std.debug.assert(bi < NUM_BUCKETS);
+            const elem_size = bucketSpacingFunctionInverse(bi);
+            const mem = self.systemAlloc() orelse return null;
+            const mrk = self.buckets[bi].marker();
+            // `mem` is exactly PAGE_SIZE bytes, PAGE_SIZE-aligned (`os.map`'s
+            // guarantee), and freshly mapped (exclusively ours, nothing else accesses
+            // it concurrently — this port is single-threaded in v0.1.0); `elem_size`
+            // is a real bucket size class (`bi < NUM_BUCKETS`, checked above).
+            return initPageAt(mem, elem_size, mrk);
+        }
 
-    /// Allocates from a pre-computed bucket index. Ports
-    /// `allocator::bucket_alloc_direct`.
-    pub fn allocDirect(self: *Buckets, bi: usize) ?[*]u8 {
-        std.debug.assert(bi < NUM_BUCKETS);
-        const bucket = &self.buckets[bi];
-        const page = bucket.getFreePage() orelse blk: {
-            const p = self.grow(bi) orelse return null;
-            bucket.addFreePage(p);
-            break :blk p;
-        };
-        // `page` is live and was just confirmed to have a free slot
-        // (`getFreePage`'s own check) or was freshly grown (always has free
-        // slots); it is a member of `bucket`'s page list either way.
-        return bucket.alloc(page);
-    }
+        /// Allocates `size` bytes on the bucket path, computing the bucket index from
+        /// `size` directly (used when a prior guard-byte/alignment adjustment already
+        /// produced the final target size — see `realloc`'s HPHA counterpart). Ports
+        /// `allocator::bucket_alloc`.
+        pub fn alloc(self: *Self, size: usize) ?[*]u8 {
+            std.debug.assert(size <= MAX_SMALL_ALLOCATION);
+            const bi = bucketSpacingFunction(size);
+            return self.allocDirect(bi);
+        }
 
-    /// Grows or shrinks a bucket-path allocation in place if the current slot's
-    /// element size can already accommodate `size`; otherwise allocates a new,
-    /// larger slot, copies, and frees the old one. Ports
-    /// `allocator::bucket_realloc`.
-    ///
-    /// `ptr` must be a still-live bucket-path allocation this instance produced.
-    pub fn realloc(self: *Buckets, ptr: [*]u8, size: usize) ?[*]u8 {
-        const page = ptrGetPage(ptr);
-        const elem_size = page.elemSize();
-        if (size <= elem_size) return ptr;
-        const new_ptr = self.alloc(size) orelse return null;
-        // `ptr` is valid for `elem_size` bytes (its slot's own size, an upper
-        // bound on the live payload within it); `new_ptr` was just allocated with
-        // room for at least `size > elem_size` bytes — copying `elem_size` bytes
-        // fits in both.
-        @memcpy(new_ptr[0..elem_size], ptr[0..elem_size]);
-        // `ptr` is a live bucket-path allocation this instance produced (this
-        // function's contract), not used again after this call.
-        self.free(ptr);
-        return new_ptr;
-    }
+        /// Allocates from a pre-computed bucket index. Ports
+        /// `allocator::bucket_alloc_direct`.
+        pub fn allocDirect(self: *Self, bi: usize) ?[*]u8 {
+            std.debug.assert(bi < NUM_BUCKETS);
+            const bucket = &self.buckets[bi];
+            const page = bucket.getFreePage() orelse blk: {
+                const p = self.grow(bi) orelse return null;
+                bucket.addFreePage(p);
+                break :blk p;
+            };
+            // `page` is live and was just confirmed to have a free slot
+            // (`getFreePage`'s own check) or was freshly grown (always has free
+            // slots); it is a member of `bucket`'s page list either way.
+            return bucket.alloc(page);
+        }
 
-    /// Frees a bucket-path allocation, recovering its bucket index from its page.
-    /// Ports `allocator::bucket_free`.
-    ///
-    /// `ptr` must be a still-live bucket-path allocation this instance produced.
-    pub fn free(self: *Buckets, ptr: [*]u8) void {
-        const page = ptrGetPage(ptr);
-        const bi = page.bucketIndex();
-        std.debug.assert(bi < NUM_BUCKETS);
-        const bucket = &self.buckets[bi];
-        bucket.free(page, ptr);
-    }
+        /// Grows or shrinks a bucket-path allocation in place if the current slot's
+        /// element size can already accommodate `size`; otherwise allocates a new,
+        /// larger slot, copies, and frees the old one. Ports
+        /// `allocator::bucket_realloc`.
+        ///
+        /// `ptr` must be a still-live bucket-path allocation this instance produced.
+        pub fn realloc(self: *Self, ptr: [*]u8, size: usize) ?[*]u8 {
+            const page = ptrGetPage(ptr);
+            const elem_size = page.elemSize();
+            if (size <= elem_size) return ptr;
+            const new_ptr = self.alloc(size) orelse return null;
+            // `ptr` is valid for `elem_size` bytes (its slot's own size, an upper
+            // bound on the live payload within it); `new_ptr` was just allocated with
+            // room for at least `size > elem_size` bytes — copying `elem_size` bytes
+            // fits in both.
+            @memcpy(new_ptr[0..elem_size], ptr[0..elem_size]);
+            // `ptr` is a live bucket-path allocation this instance produced (this
+            // function's contract), not used again after this call.
+            self.free(ptr);
+            return new_ptr;
+        }
 
-    /// Frees a bucket-path allocation given its original bucket index directly
-    /// (skipping the page-marker recovery `free` needs) — used when the caller
-    /// already knows the exact original size/alignment. Ports
-    /// `allocator::bucket_free_direct`.
-    ///
-    /// `ptr` must be a still-live allocation this instance produced from bucket `bi`.
-    pub fn freeDirect(self: *Buckets, ptr: [*]u8, bi: usize) void {
-        std.debug.assert(bi < NUM_BUCKETS);
-        const page = ptrGetPage(ptr);
-        // `page` is live; caller guarantees `bi` matches `ptr`'s actual bucket
-        // (mirrors HPHA's own `assert(bi == p->bucket_index())`).
-        std.debug.assert(page.bucketIndex() == bi);
-        const bucket = &self.buckets[bi];
-        bucket.free(page, ptr);
-    }
+        /// Frees a bucket-path allocation, recovering its bucket index from its page.
+        /// Ports `allocator::bucket_free`.
+        ///
+        /// `ptr` must be a still-live bucket-path allocation this instance produced.
+        pub fn free(self: *Self, ptr: [*]u8) void {
+            const page = ptrGetPage(ptr);
+            const bi = page.bucketIndex();
+            std.debug.assert(bi < NUM_BUCKETS);
+            const bucket = &self.buckets[bi];
+            bucket.free(page, ptr);
+        }
 
-    /// Whether `ptr` is a live bucket-path allocation from this instance — the
-    /// page-marker sanity check the pointer-only `free`/`realloc`/`size`
-    /// overloads rely on to dispatch between the bucket and tree paths. Ports
-    /// `allocator::ptr_in_bucket`.
-    ///
-    /// The marker check alone has a documented, HPHA-inherited false-positive
-    /// risk: for a non-bucket pointer, the position `ptrGetPage` computes is not
-    /// really a `Page`, so `bucket_index`/`marker` are just whatever bytes happen
-    /// to sit there — bytes that can, on rare occasion, coincidentally read as a
-    /// small valid-looking index whose recomputed marker matches (not
-    /// hypothetical: it is exactly how a same-page tree allocation can
-    /// occasionally alias a bucket page's marker layout, since both live inside
-    /// `PAGE_SIZE`-sized, `PAGE_SIZE`-aligned OS mappings). HPHA's own
-    /// `ptr_in_bucket` acknowledges this in a comment and compensates with a
-    /// debug-only exhaustive scan of the candidate bucket's real page list,
-    /// asserting the fast path agrees; ported below as a `std.debug.assert` (an
-    /// always-on check would violate this port's hot-path-never-panics rule for a
-    /// check the *release* build — like HPHA's own release build — intentionally
-    /// still skips, relying on the marker check alone once it has been
-    /// debug-verified in test/CI builds).
-    ///
-    /// `ptr` must be a pointer this instance is being asked to classify (i.e.
-    /// either a genuine live allocation from this instance, bucket or tree path,
-    /// or a caller bug being defended against — this function must not be called
-    /// with an arbitrary, unrelated pointer, since `ptrGetPage` unconditionally
-    /// reads memory at a computed offset from it).
-    pub fn ptrInBucket(self: *Buckets, ptr: [*]u8) bool {
-        const page = ptrGetPage(ptr);
-        // `page` is live per this function's contract (every allocation this
-        // instance could have produced has a live Page at this computed
-        // position, whether or not `ptr` truly is a bucket allocation).
-        const bi = page.bucketIndex();
-        if (bi >= NUM_BUCKETS) return false;
-        const bucket = &self.buckets[bi];
-        const mrk = bucket.marker();
-        const result = page.checkMarker(mrk);
-        // "ptrInBucket's marker check disagreed with an exhaustive page-list scan.
-        //  Two causes are possible. A false positive (marker says yes, scan says no)
-        //  is the known, HPHA-inherited one this function's own doc describes. A
-        //  false *negative* (marker says no, scan says yes) is not: it means every
-        //  marker in this bucket was seeded from a different address than the one
-        //  `Bucket.marker` reports now — i.e. the owning `Orisnitsa` has been moved
-        //  since its first use. See `Orisnitsa`'s Address stability doc section."
-        std.debug.assert(result == bucket.pages.contains(&page.link));
-        return result;
-    }
+        /// Frees a bucket-path allocation given its original bucket index directly
+        /// (skipping the page-marker recovery `free` needs) — used when the caller
+        /// already knows the exact original size/alignment. Ports
+        /// `allocator::bucket_free_direct`.
+        ///
+        /// `ptr` must be a still-live allocation this instance produced from bucket `bi`.
+        pub fn freeDirect(self: *Self, ptr: [*]u8, bi: usize) void {
+            std.debug.assert(bi < NUM_BUCKETS);
+            const page = ptrGetPage(ptr);
+            // `page` is live; caller guarantees `bi` matches `ptr`'s actual bucket
+            // (mirrors HPHA's own `assert(bi == p->bucket_index())`).
+            std.debug.assert(page.bucketIndex() == bi);
+            const bucket = &self.buckets[bi];
+            bucket.free(page, ptr);
+        }
 
-    /// Returns every page with zero live allocations back to the OS. Ports
-    /// `allocator::bucket_purge`.
-    ///
-    /// The walk visits the *whole* page list, stopping only at the first **full**
-    /// page — it does not stop at a merely partially-used one. That distinction is
-    /// HPHA's, and it is load-bearing: `Bucket`'s auto-sort only re-orders a page on
-    /// its full↔not-full transition (`Bucket.alloc` pushes to the back on becoming
-    /// full, `Bucket.free` to the front on ceasing to be full), so the ordering
-    /// *among* not-full pages is arbitrary and an empty page can sit behind a
-    /// partially-used one. v0.1.0 broke out of the loop on the first non-empty page
-    /// and so left those unreclaimed; see
-    /// `docs/audits/2026-08-29-pre-v0.2.0-audit.md`.
-    pub fn purge(self: *Buckets) void {
-        for (&self.buckets) |*bucket| {
-            const sentinel = bucket.pages.sentinel();
-            // EXPLICIT: raw link-chase rather than a `front()` loop — the walk must
-            // advance *past* pages it does not free (unlike v0.1.0's head-only
-            // version), and it must latch each node's successor before unlinking it.
-            // `cur` is the state; no higher-level construct can express a traversal
-            // whose current node is spliced out mid-walk.
-            // SAFETY: `sentinel` is live and self-linked (`sentinel()`'s own
-            // guarantee), so its `next` is live.
-            var cur = sentinel.next.?;
-            while (cur != sentinel) {
-                // SAFETY: `cur != sentinel`, so it is a real node's link, and every
-                // node in this list is a `Page` whose `link` field it belongs to.
-                const page: *Page = @fieldParentPtr("link", cur);
-                if (page.isFull()) {
-                    // HPHA's own early-out: a full page means every page after it is
-                    // at least as full, since `Bucket.alloc` moves pages to the back
-                    // exactly when they fill up.
-                    break;
+        /// Whether `ptr` is a live bucket-path allocation from this instance — the
+        /// page-marker sanity check the pointer-only `free`/`realloc`/`size`
+        /// overloads rely on to dispatch between the bucket and tree paths. Ports
+        /// `allocator::ptr_in_bucket`.
+        ///
+        /// The marker check alone has a documented, HPHA-inherited false-positive
+        /// risk: for a non-bucket pointer, the position `ptrGetPage` computes is not
+        /// really a `Page`, so `bucket_index`/`marker` are just whatever bytes happen
+        /// to sit there — bytes that can, on rare occasion, coincidentally read as a
+        /// small valid-looking index whose recomputed marker matches (not
+        /// hypothetical: it is exactly how a same-page tree allocation can
+        /// occasionally alias a bucket page's marker layout, since both live inside
+        /// `PAGE_SIZE`-sized, `PAGE_SIZE`-aligned OS mappings). HPHA's own
+        /// `ptr_in_bucket` acknowledges this in a comment and compensates with a
+        /// debug-only exhaustive scan of the candidate bucket's real page list,
+        /// asserting the fast path agrees; ported below as a `std.debug.assert` (an
+        /// always-on check would violate this port's hot-path-never-panics rule for a
+        /// check the *release* build — like HPHA's own release build — intentionally
+        /// still skips, relying on the marker check alone once it has been
+        /// debug-verified in test/CI builds).
+        ///
+        /// `ptr` must be a pointer this instance is being asked to classify (i.e.
+        /// either a genuine live allocation from this instance, bucket or tree path,
+        /// or a caller bug being defended against — this function must not be called
+        /// with an arbitrary, unrelated pointer, since `ptrGetPage` unconditionally
+        /// reads memory at a computed offset from it).
+        pub fn ptrInBucket(self: *Self, ptr: [*]u8) bool {
+            const page = ptrGetPage(ptr);
+            // `page` is live per this function's contract (every allocation this
+            // instance could have produced has a live Page at this computed
+            // position, whether or not `ptr` truly is a bucket allocation).
+            const bi = page.bucketIndex();
+            if (bi >= NUM_BUCKETS) return false;
+            const bucket = &self.buckets[bi];
+            const mrk = bucket.marker();
+            const result = page.checkMarker(mrk);
+            // "ptrInBucket's marker check disagreed with an exhaustive page-list scan.
+            //  Two causes are possible. A false positive (marker says yes, scan says no)
+            //  is the known, HPHA-inherited one this function's own doc describes. A
+            //  false *negative* (marker says no, scan says yes) is not: it means every
+            //  marker in this bucket was seeded from a different address than the one
+            //  `Bucket.marker` reports now — i.e. the owning `Orisnitsa` has been moved
+            //  since its first use. See `Orisnitsa`'s Address stability doc section."
+            std.debug.assert(result == bucket.pages.contains(&page.link));
+            return result;
+        }
+
+        /// Returns every page with zero live allocations back to the OS. Ports
+        /// `allocator::bucket_purge`.
+        ///
+        /// The walk visits the *whole* page list, stopping only at the first **full**
+        /// page — it does not stop at a merely partially-used one. That distinction is
+        /// HPHA's, and it is load-bearing: `Bucket`'s auto-sort only re-orders a page on
+        /// its full↔not-full transition (`Bucket.alloc` pushes to the back on becoming
+        /// full, `Bucket.free` to the front on ceasing to be full), so the ordering
+        /// *among* not-full pages is arbitrary and an empty page can sit behind a
+        /// partially-used one. v0.1.0 broke out of the loop on the first non-empty page
+        /// and so left those unreclaimed; see
+        /// `docs/audits/2026-08-29-pre-v0.2.0-audit.md`.
+        pub fn purge(self: *Self) void {
+            for (&self.buckets) |*bucket| {
+                const sentinel = bucket.pages.sentinel();
+                // EXPLICIT: raw link-chase rather than a `front()` loop — the walk must
+                // advance *past* pages it does not free (unlike v0.1.0's head-only
+                // version), and it must latch each node's successor before unlinking it.
+                // `cur` is the state; no higher-level construct can express a traversal
+                // whose current node is spliced out mid-walk.
+                // SAFETY: `sentinel` is live and self-linked (`sentinel()`'s own
+                // guarantee), so its `next` is live.
+                var cur = sentinel.next.?;
+                while (cur != sentinel) {
+                    // SAFETY: `cur != sentinel`, so it is a real node's link, and every
+                    // node in this list is a `Page` whose `link` field it belongs to.
+                    const page: *Page = @fieldParentPtr("link", cur);
+                    if (page.isFull()) {
+                        // HPHA's own early-out: a full page means every page after it is
+                        // at least as full, since `Bucket.alloc` moves pages to the back
+                        // exactly when they fill up.
+                        break;
+                    }
+                    // Latched before the unlink below, which rewrites `cur`'s own links.
+                    const next = cur.next.?;
+                    if (page.isEmpty()) {
+                        list.unlinkNode(page);
+                        // ALIGN: `page` is a live `Page`, always
+                        // `PAGE_SIZE - @sizeOf(Page)` bytes into its owning
+                        // PAGE_SIZE-aligned mapping (the type's own invariant); rounding
+                        // its address down recovers that mapping's base.
+                        const page_bytes: [*]u8 = @ptrCast(page);
+                        const mem = align_helpers.alignDown(page_bytes, os.PAGE_SIZE);
+                        // `mem` is the live mapping `page` belongs to (established
+                        // above), not referenced again after this call (the page was just
+                        // unlinked from every structure this module tracks it through,
+                        // and `next` was latched before the unlink).
+                        self.systemFree(mem);
+                    }
+                    cur = next;
                 }
-                // Latched before the unlink below, which rewrites `cur`'s own links.
-                const next = cur.next.?;
-                if (page.isEmpty()) {
-                    list.unlinkNode(page);
-                    // ALIGN: `page` is a live `Page`, always
-                    // `PAGE_SIZE - @sizeOf(Page)` bytes into its owning
-                    // PAGE_SIZE-aligned mapping (the type's own invariant); rounding
-                    // its address down recovers that mapping's base.
-                    const page_bytes: [*]u8 = @ptrCast(page);
-                    const mem = align_helpers.alignDown(page_bytes, os.PAGE_SIZE);
-                    // `mem` is the live mapping `page` belongs to (established
-                    // above), not referenced again after this call (the page was just
-                    // unlinked from every structure this module tracks it through,
-                    // and `next` was latched before the unlink).
-                    self.systemFree(mem);
-                }
-                cur = next;
             }
         }
-    }
-};
+    };
+}
 
 const testing = std.testing;
 
@@ -709,7 +727,7 @@ test "bucket alloc sorts full page behind partial page" {
 // three CI OSes (zig-ci.yml), just like `os.zig`'s own tests.
 
 test "Buckets.allocDirect grows and serves from the same page" {
-    var buckets: Buckets = .init();
+    var buckets: Buckets(.{}) = .init();
     const bi = bucketSpacingFunction(24); // -> the 24-byte class
     const a = buckets.allocDirect(bi) orelse return error.TestUnexpectedResult; // "OS map failed"
     const b = buckets.allocDirect(bi) orelse return error.TestUnexpectedResult; // "OS map failed"
@@ -721,7 +739,7 @@ test "Buckets.allocDirect grows and serves from the same page" {
 }
 
 test "Buckets.free recovers the bucket index from the page" {
-    var buckets: Buckets = .init();
+    var buckets: Buckets(.{}) = .init();
     const ptr = buckets.alloc(40) orelse return error.TestUnexpectedResult; // "OS map failed"
     try testing.expect(buckets.ptrInBucket(ptr));
     buckets.free(ptr);
@@ -730,7 +748,7 @@ test "Buckets.free recovers the bucket index from the page" {
 }
 
 test "Buckets.realloc grows in place within the same class" {
-    var buckets: Buckets = .init();
+    var buckets: Buckets(.{}) = .init();
     const ptr = buckets.alloc(8) orelse return error.TestUnexpectedResult; // "OS map failed"
     const grown = buckets.realloc(ptr, 8) orelse return error.TestUnexpectedResult; // "same-size realloc never fails"
     try testing.expectEqual(ptr, grown); // growing within the same elem_size stays in place
@@ -739,7 +757,7 @@ test "Buckets.realloc grows in place within the same class" {
 }
 
 test "Buckets.realloc moves to a larger class and copies" {
-    var buckets: Buckets = .init();
+    var buckets: Buckets(.{}) = .init();
     const ptr = buckets.alloc(8) orelse return error.TestUnexpectedResult; // "OS map failed"
     @memset(ptr[0..8], 0xAB);
     const grown = buckets.realloc(ptr, 200) orelse return error.TestUnexpectedResult; // "OS map failed"
@@ -750,7 +768,7 @@ test "Buckets.realloc moves to a larger class and copies" {
 }
 
 test "Buckets.purge returns fully empty pages only" {
-    var buckets: Buckets = .init();
+    var buckets: Buckets(.{}) = .init();
     const bi = bucketSpacingFunction(16);
     const a = buckets.allocDirect(bi) orelse return error.TestUnexpectedResult; // "OS map failed"
     const b = buckets.allocDirect(bi) orelse return error.TestUnexpectedResult; // "OS map failed"
@@ -775,7 +793,7 @@ test "Buckets.purge reclaims an empty page behind a partial one" {
     // A — A was full, so it returns to the front, giving `[A partial, B partial]`.
     // Freeing B's only slot leaves `[A partial, B empty]` with no re-sort, since B
     // was never full. v0.1.0 broke out of the loop on A and leaked B's whole page.
-    var buckets: Buckets = .init();
+    var buckets: Buckets(.{}) = .init();
     const elem_size = MAX_SMALL_ALLOCATION; // largest class => fewest slots to fill
     const bi = bucketSpacingFunction(elem_size);
     const slots = (os.PAGE_SIZE - @sizeOf(Page)) / elem_size;

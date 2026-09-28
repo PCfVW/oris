@@ -378,10 +378,18 @@ HPHA's `DEBUG_ALLOCATOR` mode becomes, in Zig, a layered scheme:
 ### `comptime` Toggles
 
 The heavyweight HPHA debug machinery — guard bytes, allocation-record tracking, callstack
-capture, leak detection on `deinit` — is gated behind a `comptime bool` config field (the Zig
-analog of the Rust port's `debug-allocator` Cargo feature). When the bool is `false`, the
-branches are `comptime`-eliminated and the release binary links none of it:
-zero-cost-when-disabled, and parity-guaranteed with the Rust feature gate.
+capture, leak detection on `deinit` — is gated behind a `comptime bool` (the Zig analog of the
+Rust port's `debug-allocator` Cargo feature). A plain runtime-read `bool` field on `self` only
+gives "the optimizer probably folds this branch away" — a hope, not a guarantee, and not
+sufficient here. The enforcement mechanism that *is* a guarantee is a **generic type
+constructor**: `Orisnitsa`/`Buckets`/`Tree` are each `pub fn T(comptime config: Config) type {
+return struct { ... }; }`, exactly the shape of Zig's own `std.heap.DebugAllocator(comptime
+config: Config) type`. `config.debug` is then `comptime`-known at every call site inside the
+returned struct, so an `if (config.debug)` branch is eliminated from `T(.{})`'s compiled code
+entirely — not merely optimized away, but never lowered in the first place — while `T(.{ .debug
+= true })` is a distinct instantiation that actually carries the instrumentation. Parity with the
+Rust port's Cargo feature gate is exact: `orisnitsa.Orisnitsa` (`root.zig`'s public export) is
+`Orisnitsa(.{})`, matching `orisnik` built without `debug-allocator`.
 
 > ```zig
 > pub const Config = struct {
@@ -389,7 +397,26 @@ zero-cost-when-disabled, and parity-guaranteed with the Rust feature gate.
 >     /// is eliminated when false. Parity: `orisnik`'s `debug-allocator` feature.
 >     debug: bool = false,
 > };
+>
+> pub fn Orisnitsa(comptime config: Config) type {
+>     return struct {
+>         const Self = @This();
+>         buckets: Buckets(config) = .init(),
+>         tree: Tree(config) = .init(),
+>         // every method takes `self: *Self`, never a bare `*Orisnitsa`
+>         // (`Orisnitsa` itself is the generic function, not a type) — see
+>         // `orisnitsa.zig`.
+>     };
+> }
 > ```
+>
+> A caller who needs the debug instantiation writes `Orisnitsa(.{ .debug = true })`; every
+> existing caller of the plain `Orisnitsa` type keeps compiling unchanged against
+> `root.zig`'s `Orisnitsa(.{})` re-export. `capi.zig`'s C-ABI is fixed to `Orisnitsa(.{})` — no
+> debug C-ABI surface is planned. Only genericize what the toggle structurally requires: a type
+> that stores no debug-only state of its own in a given phase (`Page`, `Bucket`, `BlockHeader`)
+> stays a plain, non-generic type until a later phase actually needs it to carry `config`-gated
+> fields.
 
 ### The `spomen` Debug Subsystem
 

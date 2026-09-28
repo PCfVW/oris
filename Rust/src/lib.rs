@@ -66,10 +66,20 @@ mod block;
 mod bucket;
 mod capi;
 mod global_alloc;
+// Always compiled — `bucket.rs`/`tree.rs`/`orisnik.rs` reference `guard::MEMORY_GUARD_SIZE`
+// unconditionally (it folds to 0 without `debug-allocator`), unlike `spomen` below, which
+// this feature excludes from the build entirely. See `Rust/CONVENTIONS.md`'s
+// `debug_assert!` Invariants section.
+mod guard;
 mod list;
 mod orisnik;
 mod os;
 mod rbtree;
+// The port of HPHA's `DEBUG_ALLOCATOR` mode (guard-byte verification, allocation-record
+// tracking, callstack capture, leak detection, `check()`/`report()`) — see `spomen`'s own
+// module doc, `INSTALL.md`, and `ROADMAP.md`'s v0.2.0 milestone.
+#[cfg(feature = "debug-allocator")]
+mod spomen;
 mod tag;
 mod tree;
 

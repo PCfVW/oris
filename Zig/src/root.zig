@@ -47,8 +47,11 @@ const orisnitsa_mod = @import("orisnitsa.zig");
 const allocator_mod = @import("allocator.zig");
 
 /// The top-level allocator type — dispatches every request between the bucket
-/// and tree paths. See `orisnitsa.zig`.
-pub const Orisnitsa = orisnitsa_mod.Orisnitsa;
+/// and tree paths. The default, non-debug instantiation of the generic
+/// `orisnitsa_mod.Orisnitsa(comptime config: Config) type` — keeps this public
+/// surface source-compatible with every pre-v0.2.0 consumer. See `orisnitsa.zig`
+/// and `spomen.zig`'s `Config`.
+pub const Orisnitsa = orisnitsa_mod.Orisnitsa(.{});
 /// Hands out a `std.mem.Allocator` backed by an `Orisnitsa` instance. See
 /// `allocator.zig`.
 pub const allocator = allocator_mod.allocator;
@@ -70,6 +73,8 @@ const rbtree = @import("rbtree.zig");
 const block = @import("block.zig");
 const bucket = @import("bucket.zig");
 const tree = @import("tree.zig");
+const spomen = @import("spomen.zig");
+const guard = @import("guard.zig");
 const capi = @import("capi.zig");
 
 test {
@@ -89,6 +94,8 @@ test {
     std.testing.refAllDecls(block);
     std.testing.refAllDecls(bucket);
     std.testing.refAllDecls(tree);
+    std.testing.refAllDecls(spomen);
+    std.testing.refAllDecls(guard);
     std.testing.refAllDecls(orisnitsa_mod);
     std.testing.refAllDecls(allocator_mod);
     std.testing.refAllDecls(capi);

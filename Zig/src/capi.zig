@@ -20,7 +20,10 @@
 const std = @import("std");
 const orisnitsa_mod = @import("orisnitsa.zig");
 
-const Orisnitsa = orisnitsa_mod.Orisnitsa;
+/// The C-ABI's one concrete instantiation: the default, non-debug `Config`. The
+/// debug config has no C-ABI surface planned for this version — see
+/// `spomen.zig`'s `Config` and `Zig/CONVENTIONS.md`'s "`comptime` Toggles" section.
+const Orisnitsa = orisnitsa_mod.Orisnitsa(.{});
 
 /// The allocator `oris_new` uses to allocate the opaque handle itself — distinct
 /// from any `Orisnitsa` instance's own bucket/tree allocation paths (which map OS

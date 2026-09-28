@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//! `spomen` (спомен, "remembrance") — the instrumentation cousin of the allocator
+//! family: guard bytes, allocation-record tracking, callstack capture, leak
+//! detection, and the `check()`/`report()` diagnostics (see
+//! `Zig/CONVENTIONS.md`'s "The `spomen` Debug Subsystem" section). This module
+//! currently defines only `Config`, the `comptime` toggle `Orisnitsa`/`Buckets`/
+//! `Tree` are generic over — the instrumentation itself lands in a later phase of
+//! the v0.2.0 work; this phase only wires the toggle through.
+
+/// The `comptime` configuration `Orisnitsa`/`Buckets`/`Tree` are generic type
+/// constructors over — `Orisnitsa(config)`, not a plain `Orisnitsa` value with a
+/// `config` field. Passing `config` through a generic type constructor, rather
+/// than reading a runtime `bool` field on `self`, is what makes the debug
+/// subsystem's zero-cost-when-disabled property a *compiler guarantee* instead of
+/// an optimizer hope: every `spomen`-only branch a later phase adds lives inside
+/// an `if (config.debug)` whose condition is `comptime`-known at the call site, so
+/// it is eliminated from `Orisnitsa(.{})`'s code entirely, not merely folded when
+/// the optimizer happens to see through it. Matches Zig's own
+/// `std.heap.DebugAllocator(comptime config: Config) type` and `orisnik`'s
+/// `debug-allocator` Cargo feature.
+pub const Config = struct {
+    /// Enables the `spomen` debug subsystem (guard bytes, allocation-record
+    /// tracking, callstack capture, leak detection, check()/report()) — not yet
+    /// implemented; this phase only wires the toggle through. `comptime` so the
+    /// relevant branches are eliminated entirely when `false`, matching
+    /// `orisnik`'s `debug-allocator` Cargo feature and Zig's own
+    /// `std.heap.DebugAllocator(comptime config: Config)`.
+    debug: bool = false,
+};

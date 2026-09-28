@@ -36,7 +36,10 @@ const std = @import("std");
 const block = @import("block.zig");
 const orisnitsa = @import("orisnitsa.zig");
 
-const Orisnitsa = orisnitsa.Orisnitsa;
+/// The concrete, default (non-debug) instantiation `root.zig` exports as
+/// `Orisnitsa` — `allocator()` hands out a `std.mem.Allocator` for exactly this
+/// one, matching `capi.zig`'s identical choice. See `spomen.zig`'s `Config`.
+const Orisnitsa = orisnitsa.Orisnitsa(.{});
 
 /// Hands out a `std.mem.Allocator` backed by `self`. Not a method on `Orisnitsa`
 /// itself (which would need this file to import `orisnitsa.zig` and be imported

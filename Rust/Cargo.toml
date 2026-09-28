@@ -38,6 +38,16 @@ crate-type = ["lib", "cdylib", "staticlib"]
 # section. The default build (`oris_*` + `GlobalAlloc`) needs none of this.
 nightly = []
 
+# Enables `spomen` (src/spomen/), the port of HPHA's `DEBUG_ALLOCATOR` mode: memory
+# guard bytes, allocation-record tracking, callstack capture, leak detection on drop,
+# and the `check()`/`report()` diagnostics. Zero-cost when disabled — `spomen` itself
+# does not exist in a build without this feature, and `src/guard.rs`'s
+# `MEMORY_GUARD_SIZE` constant folds to 0, so every `+`/`- MEMORY_GUARD_SIZE` site in
+# `bucket.rs`/`tree.rs`/`orisnik.rs` becomes dead code the compiler removes. See
+# INSTALL.md, ROADMAP.md's v0.2.0 milestone, and Rust/CONVENTIONS.md's
+# `debug_assert!` Invariants section.
+debug-allocator = []
+
 [target.'cfg(unix)'.dependencies]
 # mmap/munmap and their flag constants (MAP_ANON differs numerically between Linux
 # and macOS/BSD) — hand-rolling these is a well-known source of silent platform bugs,
