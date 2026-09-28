@@ -24,6 +24,17 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Changed
 
+- **`Cpp/ERRATA.md`'s E9 corrected — not a real defect.** While planning v0.2.0's debug
+  allocator, direct re-reading of `hpha.cpp:908-910` (`allocator::debug_replace`'s own
+  `if (!newPtr) return;` guard, one call frame above the snippet E9 quotes) and of
+  `bucket_realloc`/`tree_realloc`'s every branch (`hpha.cpp:256-267`, `:522-587`) showed
+  a failed `realloc` never frees or moves the original block and never reaches
+  `debug_record_map::replace`'s unconditional overwrite with a NULL pointer — so the
+  "lost record for a still-live block" E9 described does not occur in the 2007 source.
+  Porting the 2012 `replace_begin`/`replace_end` split is therefore not required for
+  v0.2.0's correctness (though it remains a reasonable shape on its own merits). See
+  `Cpp/ERRATA.md`'s E9 entry and `Cpp/NOTICE.md` for the full correction.
+  Documentation-only.
 - **F8's remaining note closed.** `Cpp/oracle/README.md`'s build instructions (for
   both `oracle_trace.cpp` and the new `main_c_abi.cpp`) now state explicitly that
   the build must not define `_DEBUG` — `Cpp/hpha.h`'s `MEMORY_GUARD_SIZE` shifts
@@ -160,6 +171,8 @@ requires; findings are numbered as in
   in a 2012 revision (splitting `replace` into `replace_begin`/`replace_end`, guarded by
   `if (ptr)`), which is *not* the source this directory carries. Nothing to fix in
   v0.1.1 — no debug subsystem is ported yet — but v0.2.0 should port the 2012 form.
+  > **Correction (added while planning v0.2.0, 2026-09-28):** this entry is wrong — see
+  > `Cpp/ERRATA.md`'s E9 correction note and the `[Unreleased]` entry below.
 - **F7 — an out-of-memory injection seam, and coverage for every OOM path.** `os::map`
   had no failure seam, so every `?` / `orelse return null` on a `system_alloc` result in
   `Buckets` and `Tree` was unexecuted by any test — the OOM early-outs existed only on

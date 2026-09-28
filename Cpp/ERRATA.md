@@ -279,6 +279,38 @@ live block) is precisely the thing v0.2.0's leak detection exists to catch.
 
 **Trace-visible:** N/A for v0.1.x — nothing in the debug subsystem is ported yet.
 
+> **Correction (added while planning v0.2.0, 2026-09-28).** The analysis above is
+> **wrong** — the described defect does not occur, because the "no null check" claim at
+> the two quoted call sites doesn't hold up against the actual call chain. Re-read
+> directly: `allocator::debug_replace` (`hpha.cpp:908-910`) is
+>
+> ```cpp
+> void allocator::debug_replace(void* ptr, void* newPtr, size_t size, debug_source source) {
+>     if (!newPtr)
+>         return;
+>     ...
+> ```
+>
+> — one call frame **above** `debug_record_map::replace`, the function this entry's code
+> excerpt quotes. `debug_record_map::replace`'s unconditional overwrite is therefore
+> never reached with a NULL `newPtr` from either of the two "plain" `realloc` call
+> sites: `debug_replace` itself no-ops first. And `bucket_realloc` (`hpha.cpp:256-267`)
+> and `tree_realloc` (`hpha.cpp:522-587`, every branch, including the alloc-copy-free
+> fallback at `:579-587`) never free or move the original block before their own new
+> allocation has already succeeded — on failure both return `NULL` with `ptr` fully
+> untouched. So on a failed realloc: `debug_replace` no-ops, and the **original**
+> record — still keyed under the original, still-fully-live `ptr` — is left completely
+> alone. That is correct behaviour, not a lost record.
+>
+> The 2012 `replace_begin`/`replace_end` split is still a perfectly reasonable shape
+> (erase-before-realloc is arguably cleaner than erase-after), but it is not fixing a
+> reachable defect in this source, and porting it is not required for v0.2.0's
+> correctness. What **is** required, and what falls out of ordinary idiomatic Rust/Zig
+> anyway (`Option<NonNull<u8>>`/`?[*]u8` matched before any record mutation): only
+> retarget an allocation record when the new allocation actually succeeded. No
+> `debug_replace`-shaped guard needs inventing — the type system already forces the
+> check at the one call site that matters.
+
 ---
 
 ## Adding an entry

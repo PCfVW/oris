@@ -49,7 +49,12 @@ Any future modification is recorded in this table.
 
 These files are the **2007 source**. A later revision by the author exists, dated 2012-04-21, which is *not* what this directory carries.
 
-The difference is behavioural, not cosmetic, and it falls inside the v0.2.0 debug-allocator milestone: the 2012 revision fixes a case where a failed `realloc` destroys the allocation record of a still-live block. It is recorded as **E9** in [`ERRATA.md`](ERRATA.md), which also carries the recommendation for what v0.2.0 should port.
+The 2012 revision also restructures `debug_replace` into a `replace_begin`/`replace_end`
+split, recorded as **E9** in [`ERRATA.md`](ERRATA.md). E9 originally claimed this fixed a
+case where a failed `realloc` destroys the allocation record of a still-live block; that
+claim did not survive re-verification while planning v0.2.0 (see E9's own correction
+note) — the 2007 source in this directory does not have that defect, so porting the 2012
+split is not required for correctness. E9 records the full analysis.
 
 The default reference for both ports is the source in this directory. Anything ported from the 2012 revision instead must say so explicitly, per-entry, in `ERRATA.md`.
 
