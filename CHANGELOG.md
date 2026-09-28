@@ -10,6 +10,18 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **`Cpp/oracle/main_c_abi.cpp`** — Lazarov's own `main.cpp` benchmark (from the
+  maintainer's archived HPHA copy, not in this repo), mechanically ported onto the
+  `oris_*` C ABI: 512 Ki live allocations at its `r^8`-skewed size distribution,
+  freed in its randomized order, run once manually against both ports' real
+  libraries (audit's "Option A"). Both survive intact — exit 0,
+  `allocated after purge: 0`, including the `realloc(ptr, 0, 0)` call F5 blocked
+  before v0.1.1. See [`Cpp/oracle/README.md`](Cpp/oracle/README.md) for build/run
+  instructions; MSVC/Windows-only and not wired into CI, matching
+  `oracle_trace.cpp`'s existing precedent.
+
 ### Changed
 
 - **F4 closed, no further action.** The pre-v0.2.0 audit's two proposed follow-ups to
