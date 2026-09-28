@@ -24,6 +24,12 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Changed
 
+- **F8's remaining note closed.** `Cpp/oracle/README.md`'s build instructions (for
+  both `oracle_trace.cpp` and the new `main_c_abi.cpp`) now state explicitly that
+  the build must not define `_DEBUG` — `Cpp/hpha.h`'s `MEMORY_GUARD_SIZE` shifts
+  from 0 to 16 the moment it is, which would silently move every size class and
+  split relative to the non-debug allocator being compared against. Documentation
+  only.
 - **F4 closed, no further action.** The pre-v0.2.0 audit's two proposed follow-ups to
   v0.1.1's debug-only move-detection tripwire — a `Pin`-based API, and a
   marker/eager-self-link redesign — were both evaluated and rejected: the former cannot

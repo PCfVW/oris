@@ -29,6 +29,14 @@ cl /EHsc /DWIN32 /I.. oracle_trace.cpp ..\hpha.cpp /Fe:oracle_trace.exe
 `/DWIN32` is required explicitly — `cl` does not define bare `WIN32` on its own, and
 `hpha.h` hard-errors without it.
 
+This build **must not** define `_DEBUG` (e.g. via `/MTd`/`/MDd`, or an explicit
+`/D_DEBUG`) — `../hpha.h:26-29`'s `#ifdef _DEBUG` / `#define DEBUG_ALLOCATOR` turns
+`MEMORY_GUARD_SIZE` from 0 to 16 the moment it is, which shifts every size class and
+every split relative to the non-debug allocator both ports compare against. The
+command above builds clean of it by construction (plain `cl /EHsc`, no debug-CRT
+switch); any other invocation of `oracle_trace.cpp`, and any harness added under
+v0.2.0, must say the same explicitly rather than rely on the same accident.
+
 ## Run and cross-validate
 
 ```sh
@@ -110,6 +118,14 @@ cl /EHsc /O2 /Fe:main_orisnitsa.exe Cpp\oracle\main_c_abi.cpp Zig\zig-out\lib\im
 copy Zig\zig-out\bin\orisnitsa.dll .
 main_orisnitsa.exe
 ```
+
+Same `_DEBUG` caveat as `oracle_trace.cpp` above applies here in spirit, though this
+tool never links `hpha.h`/`hpha.cpp` at all — it only exercises `oris_*`, and
+neither port's v0.1.x non-debug allocator has a `MEMORY_GUARD_SIZE`-equivalent knob
+yet. Once v0.2.0's debug allocator lands behind its own feature flag/`comptime`
+bool, a build of this tool with that layer enabled is a different, separate
+comparison from the one verified below, and should say so explicitly rather than
+silently mix the two.
 
 ### Verified
 
