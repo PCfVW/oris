@@ -77,8 +77,20 @@ pub(crate) const fn is_hpha_alignment(alignment: usize) -> bool {
 /// or a `Box`/`&'static` if it must outlive a scope. Debug builds carry a tripwire
 /// (`Orisnik::debug_assert_not_moved`, private) that panics with a named diagnostic on
 /// the first operation after a move instead of corrupting silently; release builds do
-/// not, so this remains a contract, not an enforced invariant. A `Pin`-based API
-/// that would enforce it is deferred to v0.2.0 (see `ROADMAP.md`).
+/// not, so this remains a contract, not an enforced invariant.
+///
+/// A compile-time-enforced (`Pin`-based) API was evaluated for v0.2.0 and rejected:
+/// it cannot help the `static`/`GlobalAlloc` surface above (already immovable by
+/// construction, and `GlobalAlloc::alloc` has a fixed `&self` signature it cannot
+/// change), and closing the gap on the plain owned-value surface this contract
+/// actually guards would require every inherent method to take `self: Pin<&Self>`,
+/// breaking `Orisnik::new()`'s `const fn` shape and every existing caller for a
+/// misuse pattern the crate does not otherwise encourage. Promoting the tripwire
+/// itself to an always-on `assert!` was also rejected: it sits on the hot path this
+/// crate's own "never `assert!` where `debug_assert!` suffices" rule
+/// (`Rust/CONVENTIONS.md`) is written to forbid. See the pre-v0.2.0 audit's F4 entry
+/// for the full reasoning; the debug-only tripwire above is the accepted, final
+/// mitigation.
 ///
 /// # Thread safety
 /// **`Orisnik` is single-threaded internally** (`Cell`-based state throughout

@@ -10,6 +10,22 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ## [Unreleased]
 
+### Changed
+
+- **F4 closed, no further action.** The pre-v0.2.0 audit's two proposed follow-ups to
+  v0.1.1's debug-only move-detection tripwire — a `Pin`-based API, and a
+  marker/eager-self-link redesign — were both evaluated and rejected: the former cannot
+  help the `static`/`GlobalAlloc` surface (already immovable by construction) or the
+  plain owned-value surface the finding actually reproduces against without breaking
+  `Orisnik::new()`'s `const fn` shape, and the latter is precluded by the same
+  const-fn-constructor constraint that motivates the lazy-sentinel-init design in the
+  first place. Promoting the tripwire to an always-on check was also rejected — it sits
+  on the hot path `Rust/CONVENTIONS.md`'s "never `assert!` where `debug_assert!`
+  suffices" rule forbids. See
+  [`docs/audits/2026-08-29-pre-v0.2.0-audit.md`](docs/audits/2026-08-29-pre-v0.2.0-audit.md#f4)'s
+  resolution note; both ports' `# Address stability` doc sections now record the
+  conclusion directly. Documentation-only — no behavior changes in either port.
+
 ## [0.1.1] - 2026-08-29
 
 A fidelity-and-soundness patch. Every change below either restores agreement with

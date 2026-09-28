@@ -92,7 +92,11 @@ pub fn isHphaAlignment(alignment: usize) bool {
 /// tripwire (`debugAssertNotMoved`) that trips on the first operation after a move
 /// instead of corrupting silently; `ReleaseFast` does not, so this remains a
 /// contract, not an enforced invariant. Mirrors `orisnik`'s `Orisnik`
-/// "Address stability" doc section.
+/// "Address stability" doc section — including its cross-port conclusion that no
+/// compile-time enforcement (Rust `Pin`, an always-on check, or a marker redesign)
+/// closes this gap without either breaking a load-bearing usage pattern or taxing
+/// every release-build call; see the pre-v0.2.0 audit's F4 entry. This tripwire is
+/// the accepted, final mitigation.
 ///
 /// **Single-threaded only** — see the module doc's "`&self` vs `*Self`" section.
 pub const Orisnitsa = struct {
