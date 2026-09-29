@@ -92,14 +92,18 @@ impl RecordStore {
         source: Source,
         guard_byte: u8,
     ) -> bool {
-        debug_assert!(self.find(ptr).is_none(), "address already recorded");
-        let Some(record) = self
-            .book
-            .push_back(Record::new(ptr, size, source, guard_byte))
-        else {
+        self.add_record(Record::new(ptr, size, source, guard_byte))
+    }
+
+    /// [`RecordStore::add`] for an already-built [`Record`] (e.g. one carrying a specific
+    /// callstack). Same contract and return value.
+    #[must_use]
+    pub(crate) fn add_record(&self, record: Record) -> bool {
+        debug_assert!(self.find(record.ptr).is_none(), "address already recorded");
+        let Some(slot) = self.book.push_back(record) else {
             return false;
         };
-        self.tree.insert(record);
+        self.tree.insert(slot);
         true
     }
 
@@ -352,6 +356,53 @@ mod tests {
             store.add(addr(2), 2, Source::Tree, 0),
             "usable after a full purge"
         );
+    }
+
+    /// Real (`force_capture`d, heap-owning) backtraces through every move the store
+    /// performs: swap-remove, replace and update. Runs under Miri too — Miri supports the
+    /// capture itself (only symbolication is unsupported), so this is where a double drop
+    /// or leak of a `Captured` `Backtrace` would surface. Few records, since each real
+    /// capture is slow under Miri.
+    #[test]
+    fn real_backtraces_survive_swap_remove_replace_and_update() {
+        use crate::spomen::record::capture_callstack_with;
+        use std::backtrace::BacktraceStatus;
+        let store = RecordStore::new();
+        for i in 0..4 {
+            let rec =
+                Record::with_callstack(addr(i), i, Source::Tree, 0, capture_callstack_with(true));
+            assert!(store.add_record(rec));
+        }
+        let status = |n: usize| {
+            let rec = store.find(addr(n)).expect("recorded");
+            // SAFETY: `rec` is a live record.
+            unsafe { (*rec.as_ptr()).callstack.status() }
+        };
+        // Removing a non-last record moves the last (captured) record into its slot.
+        assert!(store.remove(addr(0)).is_some());
+        assert_eq!(
+            status(3),
+            BacktraceStatus::Captured,
+            "moved record keeps its trace"
+        );
+        assert_eq!(status(1), BacktraceStatus::Captured);
+        // Replace drops the old trace and installs a fresh one.
+        assert!(
+            store
+                .replace(addr(1), addr(9), 5, Source::Buckets, 1)
+                .is_some()
+        );
+        // Update swaps the trace in place (with the ordinary capture policy, so under Miri
+        // the new trace is the cheap disabled one).
+        assert_eq!(status(2), BacktraceStatus::Captured, "unaffected neighbour");
+        assert!(store.update(addr(2), 7, 2).is_some());
+        if !cfg!(miri) {
+            assert_eq!(status(2), BacktraceStatus::Captured, "recaptured");
+        }
+        // Removing the (now) last record pops without a move.
+        assert!(store.remove(addr(3)).is_some());
+        assert_eq!(store.len(), 2);
+        // Whatever remains is dropped, exactly once, with the store.
     }
 
     #[test]

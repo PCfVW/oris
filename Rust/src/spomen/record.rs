@@ -100,10 +100,19 @@ unsafe impl RbNode for Record {
 /// interpreting the unwinder for every record made record-heavy tests take minutes for
 /// nothing. Native builds always force the capture.
 pub(crate) fn capture_callstack() -> Backtrace {
-    if cfg!(miri) {
-        Backtrace::capture()
-    } else {
+    capture_callstack_with(!cfg!(miri))
+}
+
+/// [`capture_callstack`] with the policy explicit: `force` selects
+/// [`Backtrace::force_capture`] over [`Backtrace::capture`]. Exists so Miri tests can run
+/// the *real* capture (which Miri does support — only symbolication is unsupported, it
+/// needs the filesystem) a few times, to check that a heap-owning `Backtrace` survives
+/// the record book's moves, without paying for it on every record.
+pub(crate) fn capture_callstack_with(force: bool) -> Backtrace {
+    if force {
         Backtrace::force_capture()
+    } else {
+        Backtrace::capture()
     }
 }
 
@@ -115,13 +124,25 @@ impl Record {
     /// `guard_byte`.
     #[must_use]
     pub(crate) fn new(ptr: NonNull<u8>, size: usize, source: Source, guard_byte: u8) -> Self {
+        Self::with_callstack(ptr, size, source, guard_byte, capture_callstack())
+    }
+
+    /// [`Record::new`] with the callstack supplied by the caller.
+    #[must_use]
+    pub(crate) fn with_callstack(
+        ptr: NonNull<u8>,
+        size: usize,
+        source: Source,
+        guard_byte: u8,
+        callstack: Backtrace,
+    ) -> Self {
         Self {
             node: NodeBase::UNLINKED,
             ptr,
             size,
             source,
             guard_byte,
-            callstack: capture_callstack(),
+            callstack,
         }
     }
 
