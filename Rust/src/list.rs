@@ -34,6 +34,15 @@
 //! particular `&self`/`&mut self` borrow) is the standard fix, and is why every method
 //! here takes `&self` rather than `&mut self` — `Rust/CONVENTIONS.md`'s "Layout,
 //! `MaybeUninit`, `UnsafeCell`" section anticipates exactly this pattern.
+//!
+//! # `Drop` and `&mut self`
+//! The `&self`-everywhere rule has one unavoidable exception: `Drop::drop` takes `&mut self`,
+//! and that reference is *protected* for the whole call. Every page/node link already
+//! pointing at the sentinel was derived from an earlier borrow, so a `drop` that unlinks
+//! nodes (a write to the sentinel through one of those older pointers) is a foreign write
+//! to a protected tag — undefined behaviour under Tree Borrows, confirmed by Miri on
+//! `spomen`'s `RecordBook`. An owner's `drop` must therefore only *read* links (walk the
+//! chain and release each node) and never call [`unlink_node`] or the list's mutators.
 
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;

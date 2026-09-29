@@ -101,9 +101,40 @@ pub(crate) unsafe fn check_guard(ptr: NonNull<u8>, requested_size: usize) -> boo
     true
 }
 
+/// Checks that the guard ramp trailing at `ptr + requested_size` is *exactly* the one
+/// [`write_guard`] wrote for `seed` — the strict form of [`check_guard`], possible only
+/// once something remembers the seed (`spomen`'s allocation record does, see
+/// `spomen::record`). Ports `debug_record::check_guard`, which compares every byte
+/// against `mGuardByte++` and early-exits on the first mismatch.
+///
+/// # Safety
+/// `ptr` must be valid for `requested_size + MEMORY_GUARD_SIZE` bytes, readable for at
+/// least the trailing [`MEMORY_GUARD_SIZE`] of them.
+#[must_use]
+pub(crate) unsafe fn check_guard_seeded(ptr: NonNull<u8>, requested_size: usize, seed: u8) -> bool {
+    // SAFETY: `requested_size` is within `ptr`'s valid span (caller's contract).
+    let guard = unsafe { ptr.as_ptr().add(requested_size) };
+    let mut expected = seed;
+    // EXPLICIT: `expected` (the running ramp value) is loop state, mirroring HPHA's own
+    // `guardByte++` walk in `check_guard`.
+    for i in 0..MEMORY_GUARD_SIZE {
+        // SAFETY: `i < MEMORY_GUARD_SIZE`, so this stays within `ptr`'s valid span
+        // (caller's contract).
+        let byte_ptr = unsafe { guard.add(i) };
+        // SAFETY: `byte_ptr` is within `ptr`'s valid span (established above) and
+        // readable for that span (caller's contract).
+        let cur = unsafe { byte_ptr.read() };
+        if cur != expected {
+            return false;
+        }
+        expected = expected.wrapping_add(1);
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{check_guard, write_guard};
+    use super::{check_guard, check_guard_seeded, write_guard};
     use core::ptr::NonNull;
 
     /// A stack buffer big enough for any payload this module's tests use plus a full
@@ -164,5 +195,21 @@ mod tests {
         // SAFETY: same buffer, still exclusively owned, only read.
         let intact = unsafe { check_guard(ptr, requested) };
         assert!(intact);
+    }
+
+    #[test]
+    fn seeded_check_accepts_only_the_written_seed() {
+        let requested = 12;
+        let (_buf, ptr) = buffer(requested + crate::guard::MEMORY_GUARD_SIZE);
+        // SAFETY: `_buf` is `requested + MEMORY_GUARD_SIZE` bytes, exclusively owned.
+        unsafe { write_guard(ptr, requested, 250) };
+        // SAFETY: same buffer, still exclusively owned, only read.
+        assert!(unsafe { check_guard_seeded(ptr, requested, 250) });
+        // A self-consistent ramp with the *wrong* seed is exactly what the unseeded
+        // check cannot catch and this one must.
+        // SAFETY: same buffer, only read.
+        assert!(unsafe { check_guard(ptr, requested) });
+        // SAFETY: same buffer, only read.
+        assert!(!unsafe { check_guard_seeded(ptr, requested, 251) });
     }
 }

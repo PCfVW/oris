@@ -6,8 +6,10 @@
 //! itself defines only `Config`, the `comptime` toggle `Orisnitsa`/`Buckets`/
 //! `Tree` are generic over. The instrumentation lives in sibling files, landing
 //! incrementally across v0.2.0: guard bytes (`guard.zig`, `spomen_guard.zig`) and
-//! payload poisoning (`spomen_poison.zig`) are implemented; allocation-record
-//! tracking, callstack capture and `check()`/`report()` follow in later phases.
+//! payload poisoning (`spomen_poison.zig`) are implemented, as is allocation-record
+//! storage (`spomen_record.zig`, `spomen_book.zig`, `spomen_store.zig`, including
+//! raw callstack capture). Still to come: dispatch wiring, `check()`/`report()`
+//! (with callstack symbol resolution), and leak detection.
 
 /// The `comptime` configuration `Orisnitsa`/`Buckets`/`Tree` are generic type
 /// constructors over — `Orisnitsa(config)`, not a plain `Orisnitsa` value with a

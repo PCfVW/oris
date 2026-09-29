@@ -77,6 +77,9 @@ const spomen = @import("spomen.zig");
 const guard = @import("guard.zig");
 const spomen_guard = @import("spomen_guard.zig");
 const spomen_poison = @import("spomen_poison.zig");
+const spomen_record = @import("spomen_record.zig");
+const spomen_book = @import("spomen_book.zig");
+const spomen_store = @import("spomen_store.zig");
 const rand = @import("rand.zig");
 const capi = @import("capi.zig");
 
@@ -101,6 +104,9 @@ test {
     std.testing.refAllDecls(guard);
     std.testing.refAllDecls(spomen_guard);
     std.testing.refAllDecls(spomen_poison);
+    std.testing.refAllDecls(spomen_record);
+    std.testing.refAllDecls(spomen_book);
+    std.testing.refAllDecls(spomen_store);
     std.testing.refAllDecls(rand);
     std.testing.refAllDecls(orisnitsa_mod);
     std.testing.refAllDecls(allocator_mod);

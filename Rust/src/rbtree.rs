@@ -96,6 +96,16 @@ pub(crate) struct NodeBase {
 const _: () = assert!(size_of::<NodeBase>() == 5 * size_of::<usize>());
 
 impl NodeBase {
+    /// A node in the "never linked" state (every link null). Allocator-owned nodes
+    /// overlay raw memory and never need this; it exists for nodes that are built by
+    /// value and later moved into place (`spomen`'s allocation records), so the stale
+    /// links of a moved-from node are never mistaken for live ones.
+    pub(crate) const UNLINKED: Self = Self {
+        children: [core::ptr::null_mut(); 2],
+        neighbours: [core::ptr::null_mut(); 2],
+        parent: TaggedPtr::null(),
+    };
+
     // ---- primitive field accessors (one raw dereference each) ----
 
     /// # Safety
@@ -772,11 +782,7 @@ impl<T: RbNode> IntrusiveMultiRbTree<T> {
     /// doc.
     pub(crate) const fn new() -> Self {
         Self {
-            head: UnsafeCell::new(NodeBase {
-                children: [core::ptr::null_mut(); 2],
-                neighbours: [core::ptr::null_mut(); 2],
-                parent: TaggedPtr::null(),
-            }),
+            head: UnsafeCell::new(NodeBase::UNLINKED),
             _marker: PhantomData,
         }
     }

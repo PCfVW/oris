@@ -100,6 +100,18 @@ pub const NodeBase = extern struct {
     /// or (for the tree's own sentinel) not yet self-linked.
     parent: usize = 0,
 
+    /// A node in the "never linked" state (`parent == 0`, so not attached, and never
+    /// touched by any tree). Allocator-owned nodes overlay raw memory and never need
+    /// this; it exists for nodes built by value and later moved into place
+    /// (`spomen_record.zig`'s allocation records), so the stale links of a moved-from
+    /// node are never mistaken for live ones. Mirrors `orisnik`'s `NodeBase::UNLINKED`.
+    ///
+    /// Not literally all-null, unlike the Rust constant: `children`/`neighbours` are
+    /// non-optional `*NodeBase` here (see the module doc), so they cannot hold null and
+    /// stay `undefined` until `attachTo`/`linkIntoChain`/the sentinel's self-link first
+    /// writes them. No operation reads them before that, exactly as for Rust's nulls.
+    pub const UNLINKED: NodeBase = .{};
+
     // ---- derived accessors ----
 
     /// `this`'s side-`s` tree child (the tree's sentinel, or `this` itself, if nil —
@@ -505,14 +517,14 @@ pub fn IntrusiveMultiRbTree(comptime T: type) type {
         /// The sentinel node. Not part of any node's on-heap payload — this is the
         /// tree container's own state, not frozen ABI — so it needs no `extern`
         /// layout-lock contract, only the lazy self-link the module doc describes.
-        head: NodeBase = .{},
+        head: NodeBase = NodeBase.UNLINKED,
 
         const Self = @This();
 
         /// Builds an empty tree. The sentinel is **not** self-linked yet — see the
         /// module doc.
         pub fn init() Self {
-            return .{};
+            return .{ .head = NodeBase.UNLINKED };
         }
 
         /// Returns a pointer to this tree's own head sentinel, self-linking it (all
@@ -772,6 +784,12 @@ fn checkNode(node: *NodeBase, lo: i32, hi: i32) u32 {
     const right_h = checkNode(right, lo, hi);
     if (left_h != right_h) @panic("unequal black-height across children");
     return left_h + @intFromBool(!red);
+}
+
+test "UNLINKED is a detached node" {
+    var n: NodeBase = NodeBase.UNLINKED;
+    try testing.expectEqual(@as(usize, 0), n.parent);
+    try testing.expect(!n.isAttached());
 }
 
 test "a new tree is empty" {

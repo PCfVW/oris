@@ -12,6 +12,29 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Added
 
+- **Allocation-record store and callstack capture (v0.2.0, Phase 3).** Behind
+  `debug-allocator`/`Orisnitsa(.{ .debug = true })`: the data structures behind HPHA's
+  `debug_record_map`, not yet wired into the allocator's dispatch (that is Phase 4, so
+  nothing observable changes yet). A `Record` remembers one live allocation — address,
+  the size the caller requested, which sub-allocator served it (`Source`), the seed of
+  its guard ramp, and where it was allocated from. Records live densely in a
+  page-chained `RecordBook` (HPHA's `virtual_book`: push/pop at the back only) and are
+  indexed by address in the existing intrusive red-black tree via a `RecordStore`
+  (`add`/`find`/`remove`/`replace`/`update`); removing from the middle swaps the last
+  record into the hole and re-links it, as HPHA does. The store is pure bookkeeping — it
+  never dereferences the caller's allocation, so poisoning and the guard-ramp assert
+  stay with the dispatch layer. A new strict guard check (`check_guard_seeded`/
+  `checkGuardSeeded`) compares the trailing ramp against the *recorded* seed, closing
+  the self-consistency-only gap the earlier `check_guard` documented. Callstacks:
+  `orisnik` captures a real `std::backtrace::Backtrace` (`force_capture`, so it works
+  regardless of the embedder's `RUST_BACKTRACE`), and `orisnitsa` a fixed 8-frame
+  address buffer via `std.debug.captureCurrentStackTrace` (HPHA's own depth); HPHA's
+  version is a stub. Symbol resolution is deferred to `report()`. Deliberate departure
+  from the plan's sketch: HPHA's dense `virtual_book` is ported faithfully rather than a
+  free-slot `RecordPage`. Found by Miri while building it: `Drop::drop(&mut self)`
+  must not unlink intrusive-list nodes (a foreign write to a protected tag under Tree
+  Borrows); `RecordBook::drop` releases its pages without unlinking, and
+  `list.rs`'s module doc now records the rule for the `Drop for Orisnik` still to come.
 - **Payload poisoning (v0.2.0, Phase 2 — completes this phase).** Behind
   `debug-allocator`/`config.debug`: fresh allocations and freed blocks both get
   filled with a repeating `{0xFF, 0xC0, 0xC0, 0xFF}` pattern (a quiet-NaN bit

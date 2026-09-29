@@ -107,6 +107,32 @@ pub fn checkGuard(comptime config: Config, ptr: [*]u8, requested_size: usize) bo
     return true;
 }
 
+/// Checks that the guard ramp trailing at `ptr + requested_size` is *exactly* the
+/// one `writeGuard` wrote for `seed` — the strict form of `checkGuard`, possible only
+/// once something remembers the seed (`spomen_record.zig`'s `Record` does). Ports
+/// `debug_record::check_guard`, which compares every byte against `mGuardByte++` and
+/// early-exits on the first mismatch. Mirrors `orisnik`'s `check_guard_seeded`.
+///
+/// `ptr` must be valid for `requested_size + memoryGuardSize(config)` bytes,
+/// readable for at least the trailing `memoryGuardSize(config)` of them.
+pub fn checkGuardSeeded(comptime config: Config, ptr: [*]const u8, requested_size: usize, seed: u8) bool {
+    const memory_guard_size = comptime guard.memoryGuardSize(config);
+    comptime std.debug.assert(memory_guard_size > 0);
+    var expected = seed;
+    // EXPLICIT: `expected` (the running ramp value) is loop state, mirroring HPHA's own
+    // `guardByte++` walk in `check_guard`.
+    for (0..memory_guard_size) |i| {
+        // SAFETY: `ptr` is readable for `requested_size + memory_guard_size` bytes
+        // (caller's contract), and `i < memory_guard_size`, so this read stays within
+        // that span.
+        // INDEX: `i < memory_guard_size` (caller's contract, as above).
+        const cur = ptr[requested_size + i];
+        if (cur != expected) return false;
+        expected +%= 1;
+    }
+    return true;
+}
+
 const testing = std.testing;
 
 // Every test below allocates its own scratch buffer through `testing.allocator`
@@ -150,4 +176,16 @@ test "wraps at 255 like HPHA does" {
     // — `checkGuard`'s wrapping addition must agree with `writeGuard`'s.
     writeGuard(debug_config, buf.ptr, requested, 250);
     try testing.expect(checkGuard(debug_config, buf.ptr, requested));
+}
+
+test "seeded check accepts only the written seed" {
+    const requested = 12;
+    const buf = try testing.allocator.alloc(u8, requested + guard.memoryGuardSize(debug_config));
+    defer testing.allocator.free(buf);
+    writeGuard(debug_config, buf.ptr, requested, 250);
+    try testing.expect(checkGuardSeeded(debug_config, buf.ptr, requested, 250));
+    // A self-consistent ramp with the *wrong* seed is exactly what the unseeded
+    // check cannot catch and this one must.
+    try testing.expect(checkGuard(debug_config, buf.ptr, requested));
+    try testing.expect(!checkGuardSeeded(debug_config, buf.ptr, requested, 251));
 }
