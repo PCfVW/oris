@@ -29,10 +29,12 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
   `orisnik` captures a real `std::backtrace::Backtrace` (`force_capture`, so it works
   regardless of the embedder's `RUST_BACKTRACE`), and `orisnitsa` a fixed 8-frame
   address buffer via `std.debug.captureCurrentStackTrace` (HPHA's own depth); HPHA's
-  version is a stub. Symbol resolution is deferred to `report()`. Miri supports the capture itself (only
-  symbolication is unsupported: it needs the filesystem), so one test drives real,
-  heap-owning backtraces through swap-remove, replace, update and drop under Miri; other
-  tests use the cheap no-op capture there, since each real capture costs ~1.5 s. Deliberate departure
+  version is a stub. Symbol resolution is deferred to `report()`. Miri supports both the capture and symbol
+  resolution (the latter only when run with `-Zmiri-isolation-error=warn`, because std
+  asks for the current directory first): one test drives real, heap-owning backtraces
+  through swap-remove, replace, update and drop under Miri, and the name-checking test
+  runs there as an opt-in; other tests use the cheap no-op capture under Miri, since
+  each real capture costs ~1.5 s. Deliberate departure
   from the plan's sketch: HPHA's dense `virtual_book` is ported faithfully rather than a
   free-slot `RecordPage`. Found by Miri while building it: `Drop::drop(&mut self)`
   must not unlink intrusive-list nodes (a foreign write to a protected tag under Tree

@@ -405,20 +405,39 @@ mod tests {
         // Whatever remains is dropped, exactly once, with the store.
     }
 
+    /// Symbol names in a captured trace. Runs natively, and under Miri as an opt-in: Miri
+    /// resolves frames itself (real names *are* available under it), but std's
+    /// symbolication first asks the OS for the current directory, which Miri's default
+    /// isolation aborts on. `-Zmiri-isolation-error=warn` downgrades just that call to a
+    /// warning (isolation otherwise stays on), so the `ignore` below is an opt-in, not a
+    /// capability gap:
+    /// `MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows -Zmiri-isolation-error=warn"
+    /// cargo +nightly miri test --features debug-allocator records_capture -- --ignored`.
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "Miri cannot unwind or symbolicate a real backtrace (a capability gap, not a speed one)"
+        ignore = "opt-in: needs -Zmiri-isolation-error=warn (symbolication reads the current directory)"
     )]
     fn records_capture_the_allocating_callstack() {
+        use crate::spomen::record::capture_callstack_with;
         let store = RecordStore::new();
-        assert!(store.add(addr(1), 8, Source::Buckets, 0));
-        let rec = store.find(addr(1)).expect("recorded");
-        // SAFETY: `rec` is a live record.
-        let trace = unsafe { (*rec.as_ptr()).callstack.to_string() };
-        assert!(
-            trace.contains("records_capture_the_allocating_callstack"),
-            "callstack should name the capturing test, got:\n{trace}"
-        );
+        // Force the real capture in both modes (under Miri the ordinary policy is the
+        // cheap no-op), so this always checks a genuine trace.
+        let rec =
+            Record::with_callstack(addr(1), 8, Source::Buckets, 0, capture_callstack_with(true));
+        assert!(store.add_record(rec));
+        // Natively, also check the ordinary `add` path captures at its call site.
+        if !cfg!(miri) {
+            assert!(store.add(addr(2), 8, Source::Tree, 0));
+        }
+        for n in if cfg!(miri) { 1..2 } else { 1..3 } {
+            let rec = store.find(addr(n)).expect("recorded");
+            // SAFETY: `rec` is a live record.
+            let trace = unsafe { (*rec.as_ptr()).callstack.to_string() };
+            assert!(
+                trace.contains("records_capture_the_allocating_callstack"),
+                "callstack should name the capturing test, got:\n{trace}"
+            );
+        }
     }
 }
