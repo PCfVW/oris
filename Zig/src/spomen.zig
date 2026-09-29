@@ -3,9 +3,11 @@
 //! family: guard bytes, allocation-record tracking, callstack capture, leak
 //! detection, and the `check()`/`report()` diagnostics (see
 //! `Zig/CONVENTIONS.md`'s "The `spomen` Debug Subsystem" section). This module
-//! currently defines only `Config`, the `comptime` toggle `Orisnitsa`/`Buckets`/
-//! `Tree` are generic over — the instrumentation itself lands in a later phase of
-//! the v0.2.0 work; this phase only wires the toggle through.
+//! itself defines only `Config`, the `comptime` toggle `Orisnitsa`/`Buckets`/
+//! `Tree` are generic over. The instrumentation lives in sibling files, landing
+//! incrementally across v0.2.0: guard bytes (`guard.zig`, `spomen_guard.zig`) and
+//! payload poisoning (`spomen_poison.zig`) are implemented; allocation-record
+//! tracking, callstack capture and `check()`/`report()` follow in later phases.
 
 /// The `comptime` configuration `Orisnitsa`/`Buckets`/`Tree` are generic type
 /// constructors over — `Orisnitsa(config)`, not a plain `Orisnitsa` value with a
@@ -20,9 +22,10 @@
 /// `debug-allocator` Cargo feature.
 pub const Config = struct {
     /// Enables the `spomen` debug subsystem (guard bytes, allocation-record
-    /// tracking, callstack capture, leak detection, check()/report()) — not yet
-    /// implemented; this phase only wires the toggle through. `comptime` so the
-    /// relevant branches are eliminated entirely when `false`, matching
+    /// tracking, callstack capture, leak detection, check()/report()) — guard
+    /// bytes and payload poisoning are implemented, the rest is still to come
+    /// (see this module's own doc). `comptime` so the relevant branches are
+    /// eliminated entirely when `false`, matching
     /// `orisnik`'s `debug-allocator` Cargo feature and Zig's own
     /// `std.heap.DebugAllocator(comptime config: Config)`.
     debug: bool = false,

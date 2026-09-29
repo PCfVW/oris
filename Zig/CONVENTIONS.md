@@ -432,7 +432,19 @@ not part of `spomen.zig`: `bucket.zig`/`tree.zig`/`orisnitsa.zig` must call it u
 for their size arithmetic to type-check for every `config`, whereas the rest of `spomen` only
 ever needs to exist for a `config.debug = true` instantiation. It folds to 0 for `.{}`, so every
 site that adds/subtracts it becomes dead code in the default build. Mirrors `orisnik`'s own
-`guard`-vs-`spomen` module split exactly — do not fold `guard.zig` into `spomen.zig`.
+`guard`-vs-`spomen` module split exactly — do not fold `guard.zig` into `spomen.zig`. The
+guard *bytes* (`spomen_guard.zig`) and payload poisoning (`spomen_poison.zig`) are the opposite
+case — inert without `config.debug`, so they are `spomen` siblings, called only from inside an
+`if (config.debug)` branch. `tree.zig` deliberately never mentions any of this: like HPHA's own
+`tree_alloc`, it serves whatever already-inflated size `orisnitsa.zig` hands it. `rand.zig` is
+the CRT `rand()` port that seeds the guard ramp (and the stress-test workload).
+
+**Debug-only state in an otherwise-shared struct** is declared as a field whose *type* depends
+on `config`, defaulted to match: `field: if (config.debug) T else void = if (config.debug)
+initial else {},`. For `Orisnitsa(.{})` the field is `void` — zero size, so the default type's
+layout is unaffected — and any method that touches it (e.g. `nextGuardSeed`) is only reachable
+from inside an `if (config.debug)` branch, so it is never analyzed for the non-debug
+instantiation. `Orisnitsa.guard_rng` is the first use.
 
 ---
 

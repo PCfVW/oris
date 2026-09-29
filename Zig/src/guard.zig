@@ -2,11 +2,18 @@
 //! Extra bytes reserved after every allocation's payload once the `spomen` debug
 //! subsystem is enabled, to detect a write past the end of the block.
 //! Deliberately always compiled (unlike the rest of `spomen`, which stays gated
-//! behind `config.debug` entirely) — `bucket.zig`/`tree.zig`/`orisnitsa.zig` must
-//! reference `memoryGuardSize(config)` unconditionally for their size arithmetic
-//! to type-check in every configuration. Ports `Cpp/hpha.h:936-942`'s
-//! `MEMORY_GUARD_SIZE` constant exactly, including its value (16) and its being 0
-//! outside a debug build.
+//! behind `config.debug` entirely) — `bucket.zig` (`isSmallAllocation`) and
+//! `orisnitsa.zig` (through `inflate`/`deflate`) must reference
+//! `memoryGuardSize(config)` unconditionally for their size arithmetic to
+//! type-check in every configuration. (`tree.zig` never mentions it: like HPHA's
+//! own `tree_alloc`, it just serves whatever already-inflated size it is handed.)
+//! Ports `Cpp/hpha.h:936-942`'s `MEMORY_GUARD_SIZE` constant exactly, including
+//! its value (16) and its being 0 outside a debug build.
+//!
+//! The guard *bytes themselves* — writing and checking the ramp — are `spomen`'s
+//! job (`spomen_guard.zig`), not this module's: this module only holds the size
+//! arithmetic every allocation path needs regardless of whether guard bytes are
+//! ever actually written. Mirrors `orisnik`'s `Rust/src/guard.rs`.
 
 const std = @import("std");
 
@@ -14,10 +21,11 @@ const Config = @import("spomen.zig").Config;
 
 /// Extra bytes reserved after every allocation's payload once the debug subsystem
 /// is enabled, to detect a write past the end of the block. 16 when
-/// `config.debug` is true, 0 otherwise — every `+`/`- memoryGuardSize(config)`
-/// site (added in a later phase) and any loop bounded by it becomes dead code the
-/// compiler removes when it's 0, restoring v0.1.x's exact guard-free behaviour.
-/// Mirrors HPHA's own `MEMORY_GUARD_SIZE` (`Cpp/hpha.h:936-942`).
+/// `config.debug` is true, 0 otherwise — every `inflate`/`deflate` call site in
+/// `orisnitsa.zig` and the threshold in `bucket.isSmallAllocation`, and any loop
+/// bounded by this value, becomes dead code the compiler removes when it's 0,
+/// restoring v0.1.x's exact guard-free behaviour. Mirrors HPHA's own
+/// `MEMORY_GUARD_SIZE` (`Cpp/hpha.h:936-942`).
 pub fn memoryGuardSize(comptime config: Config) usize {
     return if (config.debug) 16 else 0;
 }

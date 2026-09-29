@@ -42,8 +42,9 @@ nightly = []
 # guard bytes, allocation-record tracking, callstack capture, leak detection on drop,
 # and the `check()`/`report()` diagnostics. Zero-cost when disabled — `spomen` itself
 # does not exist in a build without this feature, and `src/guard.rs`'s
-# `MEMORY_GUARD_SIZE` constant folds to 0, so every `+`/`- MEMORY_GUARD_SIZE` site in
-# `bucket.rs`/`tree.rs`/`orisnik.rs` becomes dead code the compiler removes. See
+# `MEMORY_GUARD_SIZE` constant folds to 0, so every `inflate`/`deflate` call site in
+# `orisnik.rs` (and `bucket::is_small_allocation`'s threshold) is an identity the
+# compiler removes. See
 # INSTALL.md, ROADMAP.md's v0.2.0 milestone, and Rust/CONVENTIONS.md's
 # `debug_assert!` Invariants section.
 debug-allocator = []

@@ -133,8 +133,37 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
   instructions; MSVC/Windows-only and not wired into CI, matching
   `oracle_trace.cpp`'s existing precedent.
 
+### Fixed
+
+- **Bucket→tree `realloc` clobbered the new block's guard ramp (v0.2.0 Phase 2, both
+  ports; found by the Phase 2 consistency review, not by a test).** When a
+  guard-enabled `realloc`/`realloc_aligned` promotes a bucket allocation onto the tree
+  path, the port copied the old slot's *whole* inflated `elem_size`, including its
+  trailing guard ramp. HPHA's own `memcpy` copies `elem_size - MEMORY_GUARD_SIZE`
+  (`Cpp/hpha.h:1322`, `:1367`); the port had reasoned that copying the extra bytes was
+  "harmless" because the new block is larger, overlooking that the new block's *own*
+  ramp — already written by `tree_alloc` at `[size, size + MEMORY_GUARD_SIZE)` — lands
+  inside that range whenever `elem_size > size` (a 256-byte slot promoted to a
+  250-byte request), so the old ramp's tail overwrote it. Latent, because nothing
+  checks guards from dispatch yet; it would have become a false corruption report the
+  moment `free`/`realloc` verification is wired in. Both crossovers now copy only the
+  payload (`deflate(elem_size)`, further capped at `size` on the aligned path). Two new
+  regression tests per port (plain and aligned) failed before the fix, in both
+  languages, and pass after it.
+
 ### Changed
 
+- **Phase 2 consistency pass (documentation, annotations, tests).** Applied both
+  `CONVENTIONS.md` files to the Phase 2 code and removed prose the phase had made
+  stale: `// SAFETY:` tags on the Zig guard/poison call sites (the older Zig code in
+  `orisnitsa.zig`/`tree.zig` still justifies raw-memory code without the literal tag —
+  a pre-existing gap this pass deliberately did not rewrite), a mis-used
+  `// PROVENANCE:` and a malformed `// CAST:` in Rust, an unannotated test index,
+  explanations of why the bucket wrappers' `inflate(..).unwrap_or(..)` fallback is
+  unreachable, `INSTALL.md`'s "currently inert" claim, "later phase" wording in
+  `spomen.zig`/`guard.zig`/`orisnitsa.zig`, missing field/`init` docs on
+  `VintageRand` (Zig), and `CONVENTIONS.md` coverage of the `guard`/`spomen` module
+  split, `rand`, and the `if (config.debug) T else void` conditional-field idiom.
 - **`Cpp/ERRATA.md`'s E9 corrected — not a real defect.** While planning v0.2.0's debug
   allocator, direct re-reading of `hpha.cpp:908-910` (`allocator::debug_replace`'s own
   `if (!newPtr) return;` guard, one call frame above the snippet E9 quotes) and of

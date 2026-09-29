@@ -72,7 +72,10 @@ mod tests {
         let ptr = NonNull::new(buf.as_mut_ptr()).expect("stack array is never null");
         // SAFETY: `buf` is 3 bytes, exclusively owned by this test.
         unsafe { fill(ptr, 3) };
-        assert_eq!(buf, [PATTERN[0], PATTERN[1], PATTERN[2]]);
+        // INDEX: `PATTERN.len() == 4 > 2`, so indices 0..=2 are in bounds.
+        #[allow(clippy::indexing_slicing)]
+        let expected = [PATTERN[0], PATTERN[1], PATTERN[2]];
+        assert_eq!(buf, expected);
     }
 
     #[test]

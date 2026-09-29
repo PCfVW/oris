@@ -6,13 +6,13 @@
 //! `orisnik`'s `orisnik.rs` — `MULTITHREADED` (mutex-guarded buckets/tree) is out
 //! of scope until v2.x, see `ROADMAP.md`. `DEBUG_ALLOCATOR` (guard bytes,
 //! allocation records, `check()`/`report()`) is v0.2.0's own milestone, landing
-//! incrementally behind `config.debug` (`guard.zig`, `spomen_guard.zig`): the
-//! tree path's guard bytes were wired in first (`treeAlloc`/`treeAllocAligned`/
-//! `treeRealloc`/`treeReallocAligned`/`treeResize`, and `querySize`'s tree
-//! branch); this phase wires in the bucket path's own choke points
-//! (`bucketAlloc`/`bucketAllocAligned`/`bucketRealloc`/`bucketResize`, and
-//! `querySize`'s bucket branch) — the rest of `spomen` (allocation records,
-//! callstack capture, `check()`/`report()`) follows in a later phase. With
+//! incrementally behind `config.debug` (`guard.zig`, `spomen_guard.zig`,
+//! `spomen_poison.zig`): both paths' guard bytes and payload poisoning are wired
+//! in here (`treeAlloc`/`treeAllocAligned`/`treeRealloc`/`treeReallocAligned`/
+//! `treeResize`/`bucketAlloc`/`bucketAllocAligned`/`bucketRealloc`/
+//! `bucketResize`, and `querySize`/`free`/`freeWithSize`/`freeWithSizeAligned`'s
+//! deflate/poison calls); the rest of `spomen` (allocation records, callstack
+//! capture, `check()`/`report()`) follows in later phases. With
 //! `config.debug` false, `guard.memoryGuardSize(config)` is 0, so every
 //! `+`/`- memoryGuardSize(config)` site below is dead code the compiler removes,
 //! restoring v0.1.x's exact guard-free arithmetic — the same "cancels out and is
@@ -209,8 +209,8 @@ pub fn Orisnitsa(comptime config: Config) type {
             const inflated = guard.inflate(config, size) orelse return null;
             const ptr = self.tree.alloc(inflated) orelse return null;
             if (config.debug) {
-                // `ptr` is valid for `size + memoryGuardSize(config)` bytes (just
-                // allocated with that inflated size above), exclusively owned
+                // SAFETY: `ptr` is valid for `size + memoryGuardSize(config)` bytes
+                // (just allocated with that inflated size above), exclusively owned
                 // (freshly allocated, not yet handed to any other caller).
                 spomen_guard.writeGuard(config, ptr, size, self.nextGuardSeed());
                 // Poisons the payload *after* the guard write, matching HPHA's
@@ -218,9 +218,9 @@ pub fn Orisnitsa(comptime config: Config) type {
                 // `debug_record`'s constructor/`debug_record_map::add` — the two
                 // ranges are disjoint ([0, size) vs
                 // [size, size + memoryGuardSize(config))) so the order has no
-                // functional effect, only fidelity value. `ptr` is valid for
-                // `size` bytes (a subset of the span just established above),
-                // exclusively owned.
+                // functional effect, only fidelity value.
+                // SAFETY: `ptr` is valid for `size` bytes (a subset of the span
+                // just established above), exclusively owned.
                 spomen_poison.fill(ptr, size);
             }
             return ptr;
@@ -232,11 +232,12 @@ pub fn Orisnitsa(comptime config: Config) type {
             const inflated = guard.inflate(config, size) orelse return null;
             const ptr = self.tree.allocAligned(inflated, alignment) orelse return null;
             if (config.debug) {
-                // `ptr` is valid for `size + memoryGuardSize(config)` bytes,
+                // SAFETY: `ptr` is valid for `size + memoryGuardSize(config)` bytes,
                 // aligned to `alignment`, exclusively owned (freshly allocated).
                 spomen_guard.writeGuard(config, ptr, size, self.nextGuardSeed());
-                // See `treeAlloc`'s identical poisoning comment. `ptr` is valid
-                // for `size` bytes (established above), exclusively owned.
+                // See `treeAlloc`'s identical poisoning comment.
+                // SAFETY: `ptr` is valid for `size` bytes (established above),
+                // exclusively owned.
                 spomen_poison.fill(ptr, size);
             }
             return ptr;
@@ -257,11 +258,11 @@ pub fn Orisnitsa(comptime config: Config) type {
             const inflated = guard.inflate(config, size) orelse return null;
             const new_ptr = self.tree.realloc(ptr, inflated) orelse return null;
             if (config.debug) {
-                // `new_ptr` is valid for `size + memoryGuardSize(config)` bytes
-                // (just (re)allocated with that inflated size above); exclusively
-                // owned — even if this is the same address `ptr` was, the
-                // trailing guard region past the new, still-live payload is this
-                // instance's own to write.
+                // SAFETY: `new_ptr` is valid for `size + memoryGuardSize(config)`
+                // bytes (just (re)allocated with that inflated size above);
+                // exclusively owned — even if this is the same address `ptr` was,
+                // the trailing guard region past the new, still-live payload is
+                // this instance's own to write.
                 spomen_guard.writeGuard(config, new_ptr, size, self.nextGuardSeed());
             }
             return new_ptr;
@@ -275,7 +276,7 @@ pub fn Orisnitsa(comptime config: Config) type {
             const inflated = guard.inflate(config, size) orelse return null;
             const new_ptr = self.tree.reallocAligned(ptr, inflated, alignment) orelse return null;
             if (config.debug) {
-                // Same reasoning as `treeRealloc`, aligned.
+                // SAFETY: same reasoning as `treeRealloc`, aligned.
                 spomen_guard.writeGuard(config, new_ptr, size, self.nextGuardSeed());
             }
             return new_ptr;
@@ -311,7 +312,7 @@ pub fn Orisnitsa(comptime config: Config) type {
             // `Tree.resize` doesn't hand that back separately from the
             // *not-grown* case either.
             if (config.debug) {
-                // `ptr` is valid for `real_size == new_size +
+                // SAFETY: `ptr` is valid for `real_size == new_size +
                 // memoryGuardSize(config)` bytes (just reported by `Tree.resize`
                 // above), exclusively owned.
                 spomen_guard.writeGuard(config, ptr, new_size, self.nextGuardSeed());
@@ -329,14 +330,14 @@ pub fn Orisnitsa(comptime config: Config) type {
             const inflated = guard.inflate(config, size) orelse size;
             const ptr = self.buckets.allocDirect(bucket.bucketSpacingFunction(inflated)) orelse return null;
             if (config.debug) {
-                // `ptr` is a slot of at least `inflated == size +
+                // SAFETY: `ptr` is a slot of at least `inflated == size +
                 // memoryGuardSize(config)` bytes (just allocated from that
                 // bucket), exclusively owned (freshly allocated, not yet handed
                 // to any other caller).
                 spomen_guard.writeGuard(config, ptr, size, self.nextGuardSeed());
-                // See `treeAlloc`'s identical poisoning comment. `ptr` is a slot
-                // of at least `size` bytes (established above), exclusively
-                // owned.
+                // See `treeAlloc`'s identical poisoning comment.
+                // SAFETY: `ptr` is a slot of at least `size` bytes (established
+                // above), exclusively owned.
                 spomen_poison.fill(ptr, size);
             }
             return ptr;
@@ -356,13 +357,13 @@ pub fn Orisnitsa(comptime config: Config) type {
                 bucket.bucketSpacingFunction(align_helpers.roundUp(inflated, alignment)),
             ) orelse return null;
             if (config.debug) {
-                // `ptr` is a slot of at least `roundUp(inflated, alignment) >=
-                // size + memoryGuardSize(config)` bytes, aligned to `alignment`,
-                // exclusively owned.
+                // SAFETY: `ptr` is a slot of at least `roundUp(inflated, alignment)
+                // >= size + memoryGuardSize(config)` bytes, aligned to
+                // `alignment`, exclusively owned.
                 spomen_guard.writeGuard(config, ptr, size, self.nextGuardSeed());
-                // See `treeAlloc`'s identical poisoning comment. `ptr` is a slot
-                // of at least `size` bytes (established above), exclusively
-                // owned.
+                // See `treeAlloc`'s identical poisoning comment.
+                // SAFETY: `ptr` is a slot of at least `size` bytes (established
+                // above), exclusively owned.
                 spomen_poison.fill(ptr, size);
             }
             return ptr;
@@ -383,7 +384,7 @@ pub fn Orisnitsa(comptime config: Config) type {
             const inflated = guard.inflate(config, size) orelse size;
             const new_ptr = self.buckets.realloc(ptr, inflated) orelse return null;
             if (config.debug) {
-                // `new_ptr` is a slot of at least `inflated == size +
+                // SAFETY: `new_ptr` is a slot of at least `inflated == size +
                 // memoryGuardSize(config)` bytes, exclusively owned.
                 spomen_guard.writeGuard(config, new_ptr, size, self.nextGuardSeed());
             }
@@ -402,11 +403,14 @@ pub fn Orisnitsa(comptime config: Config) type {
         /// `ptr` must be a still-live bucket-path allocation this instance
         /// produced.
         fn bucketResize(self: *Self, ptr: [*]u8) usize {
+            // SAFETY: `ptr` is a still-live bucket-path allocation this instance
+            // produced (this function's own contract), exactly what
+            // `ptrGetPage` requires; the recovered `page` is therefore live too.
             const page = bucket.ptrGetPage(ptr);
             const real_size = page.elemSize();
             const new_size = guard.deflate(config, real_size);
             if (config.debug) {
-                // `ptr` is valid for `real_size == new_size +
+                // SAFETY: `ptr` is valid for `real_size == new_size +
                 // memoryGuardSize(config)` bytes (the whole slot), exclusively
                 // owned.
                 spomen_guard.writeGuard(config, ptr, new_size, self.nextGuardSeed());
@@ -497,13 +501,21 @@ pub fn Orisnitsa(comptime config: Config) type {
                 const new_ptr = self.treeAlloc(sz) orelse return null;
                 const page = bucket.ptrGetPage(p);
                 const elem_size = page.elemSize();
-                // `new_ptr` was just allocated with room for at least
-                // `sz > MAX_SMALL_ALLOCATION >= elem_size` bytes (`isSmallAllocation`
-                // was just checked `false` above, so `sz > MAX_SMALL_ALLOCATION`, the
-                // same bound every bucket `elem_size` is `<=`); `p` is valid for
-                // `elem_size` bytes (its slot's own size); freshly, independently
-                // allocated, so the two ranges never overlap.
-                @memcpy(new_ptr[0..elem_size], p[0..elem_size]);
+                // Copies the old slot's *payload* only — `elem_size -
+                // memoryGuardSize(config)`, HPHA's own `memcpy` length here
+                // (`Cpp/hpha.h`'s `realloc`). Copying the whole inflated slot would
+                // land the old guard ramp's tail on top of the new block's own ramp
+                // (already written by `treeAlloc`, at `[sz, sz +
+                // memoryGuardSize(config))`) whenever `elem_size > sz`.
+                const payload_len = guard.deflate(config, elem_size);
+                // SAFETY: `new_ptr` is really `treeAlloc`'s own `sz +
+                // memoryGuardSize(config)` bytes, which exceeds `payload_len`:
+                // `isSmallAllocation` was just checked `false` above, i.e. `sz +
+                // memoryGuardSize(config) > MAX_SMALL_ALLOCATION`, the same bound
+                // every bucket `elem_size` is `<=`. `p` is valid for `elem_size >=
+                // payload_len` bytes (its slot's own real size); freshly,
+                // independently allocated, so the two ranges never overlap.
+                @memcpy(new_ptr[0..payload_len], p[0..payload_len]);
                 self.buckets.free(p);
                 return new_ptr;
             }
@@ -581,12 +593,15 @@ pub fn Orisnitsa(comptime config: Config) type {
                 // capping at `size` is a correctness fix, not a cross-port deviation
                 // the invariant cares about (it only changes what stale bytes beyond
                 // the caller's own requested `size` end up copied, never any
-                // tree/bucket state transition). `new_ptr` was just allocated with
-                // room for at least `sz` bytes; `p` is valid for `elem_size` bytes
-                // (its slot's own size), and `@min(elem_size, sz) <= sz` stays
-                // within both; freshly, independently allocated, so the two ranges
-                // never overlap regardless.
-                const copy_len = @min(elem_size, sz);
+                // tree/bucket state transition). The payload length is `elem_size -
+                // memoryGuardSize(config)` (HPHA's own `memcpy` length, see the
+                // plain `realloc` crossover above), capped at `sz` as described.
+                // SAFETY: `new_ptr` was just allocated with room for at least `sz`
+                // bytes; `p` is valid for `elem_size` bytes (its slot's own size),
+                // and `copy_len <= @min(elem_size, sz)` stays within both; freshly,
+                // independently allocated, so the two ranges never overlap
+                // regardless.
+                const copy_len = @min(guard.deflate(config, elem_size), sz);
                 @memcpy(new_ptr[0..copy_len], p[0..copy_len]);
                 self.buckets.free(p);
                 return new_ptr;
@@ -654,26 +669,31 @@ pub fn Orisnitsa(comptime config: Config) type {
                     // on this entry point (unlike `freeWithSize`), so this uses
                     // the slot's own current, deflated usable size rather than
                     // any HPHA-tracked original request (which needs the
-                    // allocation-record store, a later phase, to supply). `p`
-                    // is a live bucket-path allocation; the resulting slot is
-                    // `real_size` bytes, so poisoning its deflated
-                    // (guard-excluded) span stays within it.
+                    // allocation-record store, a later phase, to supply).
+                    // SAFETY: `p` is a live bucket-path allocation this instance
+                    // produced (this function's own contract, and `ptrInBucket`
+                    // just confirmed), so `ptrGetPage` finds its live page.
                     const page = bucket.ptrGetPage(p);
                     const real_size = page.elemSize();
+                    // SAFETY: the slot is `real_size` bytes, so poisoning its
+                    // deflated (guard-excluded) span stays within it; exclusively
+                    // owned by this call (about to be reclaimed).
                     spomen_poison.fill(p, guard.deflate(config, real_size));
                 }
                 self.buckets.free(p);
                 return;
             }
             if (config.debug) {
-                // `p` is a live tree-path allocation this instance produced
-                // (this function's own contract). Same reasoning as the bucket
-                // branch above: no record store yet, so this poisons the
-                // block's own current, deflated usable size. `p` is valid for
-                // `real_size` bytes, so poisoning its deflated span stays
-                // within it.
+                // Same reasoning as the bucket branch above: no record store yet,
+                // so this poisons the block's own current, deflated usable size.
+                // SAFETY: `p` is a live tree-path allocation this instance
+                // produced (this function's own contract), so
+                // `ptrGetBlockHeader` finds its live header.
                 const bl = block.ptrGetBlockHeader(p);
                 const real_size = bl.size();
+                // SAFETY: `p` is valid for `real_size` bytes, so poisoning its
+                // deflated span stays within it; exclusively owned by this call
+                // (about to be reclaimed).
                 spomen_poison.fill(p, guard.deflate(config, real_size));
             }
             // `p` is a live tree-path allocation this instance produced.
@@ -724,9 +744,9 @@ pub fn Orisnitsa(comptime config: Config) type {
                 // asserted equal to this function's own `origSize` parameter in
                 // HPHA's `debug_record_map::remove(ptr, size)` overload)
                 // without needing the allocation-record store this port
-                // doesn't have yet. `p` is a live allocation this instance
-                // produced with `orig_size` bytes (this function's own
-                // contract).
+                // doesn't have yet.
+                // SAFETY: `p` is a live allocation this instance produced with
+                // `orig_size` bytes (this function's own contract).
                 spomen_poison.fill(p, orig_size);
             }
             if (bucket.isSmallAllocation(config, orig_size)) {
@@ -781,9 +801,9 @@ pub fn Orisnitsa(comptime config: Config) type {
                 // alignment-rounded value HPHA's own bucket-index computation
                 // uses; `initial_fill` is always called with the plain
                 // `origSize`, alignment plays no part in it —
-                // `Cpp/hpha.h`'s `free(void*, size_t, size_t)`). `p` is a live
-                // allocation this instance produced with `orig_size` bytes
-                // (this function's own contract).
+                // `Cpp/hpha.h`'s `free(void*, size_t, size_t)`).
+                // SAFETY: `p` is a live allocation this instance produced with
+                // `orig_size` bytes (this function's own contract).
                 spomen_poison.fill(p, orig_size);
             }
             // HPHA computes `round_up(origSize, oldAlignment)` below unconditionally,
@@ -1215,6 +1235,46 @@ test "freeWithSize recomputes the same guard-inflated bucket" {
     // "every block must have been freed into its real bucket, not a
     //  differently-sized neighbour's"
     try testing.expectEqual(@as(usize, 0), orisnitsa.allocated());
+}
+
+test "bucket-to-tree realloc keeps the new guard ramp and the payload" {
+    // A `realloc` promoting a bucket allocation onto the tree path must copy only
+    // the old slot's *payload* (`elem_size - memoryGuardSize(config)`, HPHA's own
+    // `memcpy` length in `Cpp/hpha.h`'s `realloc`), never its trailing guard ramp:
+    // `treeAlloc` has already written the new block's own ramp at
+    // `[size, size + memoryGuardSize(config))`, and copying the whole inflated slot
+    // lands the old ramp's tail bytes on top of it whenever `elem_size > size` — the
+    // window this test picks (a 256-byte slot promoted to a 250-byte request).
+    // Latent until guard-checking is wired into dispatch, when it would surface as
+    // a false corruption report.
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    const old = bucket.MAX_SMALL_ALLOCATION - guard.memoryGuardSize(debug_config); // a full 256-byte slot
+    const new = bucket.MAX_SMALL_ALLOCATION - 6; // 250: no longer fits a bucket once guarded
+    const ptr = orisnitsa.alloc(old) orelse return error.TestUnexpectedResult; // "OS map failed"
+    @memset(ptr[0..old], 0x5A);
+    const moved = orisnitsa.realloc(ptr, new) orelse return error.TestUnexpectedResult; // "OS map failed"
+    // Usable size, not requested size: the tree rounds a block up to a
+    // `BlockHeader`-size multiple, so this may exceed `new` (here 256 vs 250).
+    try testing.expect(orisnitsa.querySize(moved) >= new);
+    try testing.expect(spomen_guard.checkGuard(debug_config, moved, new)); // "old slot's guard bytes must not clobber the new block's ramp"
+    try testing.expect(std.mem.allEqual(u8, moved[0..old], 0x5A)); // "the caller's `old` payload must survive the promotion"
+    orisnitsa.free(moved);
+    orisnitsa.purge();
+}
+
+test "bucket-to-tree realloc-aligned keeps the new guard ramp and the payload" {
+    // `reallocAligned`'s twin of the test above.
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    const alignment = 16;
+    const old = bucket.MAX_SMALL_ALLOCATION - guard.memoryGuardSize(debug_config);
+    const new = bucket.MAX_SMALL_ALLOCATION - 6;
+    const ptr = orisnitsa.allocAligned(old, alignment) orelse return error.TestUnexpectedResult; // "OS map failed"
+    @memset(ptr[0..old], 0x5A);
+    const moved = orisnitsa.reallocAligned(ptr, new, alignment) orelse return error.TestUnexpectedResult; // "OS map failed"
+    try testing.expect(spomen_guard.checkGuard(debug_config, moved, new));
+    try testing.expect(std.mem.allEqual(u8, moved[0..old], 0x5A));
+    orisnitsa.free(moved);
+    orisnitsa.purge();
 }
 
 // ---- v0.2.0 Phase 2: payload poisoning ----

@@ -24,6 +24,8 @@
 pub(crate) struct VintageRand(u32);
 
 impl VintageRand {
+    /// A generator in the state the CRT's `srand(seed)` would leave it in (`holdrand =
+    /// seed`).
     pub(crate) const fn new(seed: u32) -> Self {
         Self(seed)
     }

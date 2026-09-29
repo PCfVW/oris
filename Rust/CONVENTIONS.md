@@ -554,12 +554,17 @@ HPHA's `DEBUG_ALLOCATOR` mode becomes, in Rust, a layered scheme:
   `hypomnesis`'s feature-gated backends, applied to observability rather than FFI.
 
 `MEMORY_GUARD_SIZE` itself lives in the always-compiled `guard` module, not `spomen`:
-`bucket.rs`/`tree.rs`/`orisnik.rs` must reference it unconditionally for their size
-arithmetic to type-check in every configuration, whereas `spomen` is meant to not exist
-at all in a build without the feature. It folds to 0 without `debug-allocator`, so every
-`+`/`- MEMORY_GUARD_SIZE` site becomes dead code the compiler removes. Do not "clean this
-up" into `spomen` — that would make the constant unreachable from the always-compiled
-code that needs it.
+`bucket.rs` (`is_small_allocation`) and `orisnik.rs` (via `guard::inflate`/`deflate`)
+must reference it unconditionally for their size arithmetic to type-check in every
+configuration, whereas `spomen` is meant to not exist at all in a build without the
+feature. It folds to 0 without `debug-allocator`, so every `inflate`/`deflate` call site
+is an identity the compiler removes. Do not "clean this up" into `spomen` — that would
+make the constant unreachable from the always-compiled code that needs it. The guard
+*bytes* (`spomen::guard`) and payload poisoning (`spomen::poison`) are the opposite case:
+inert without the feature, so they live inside `spomen`. `tree.rs` deliberately never
+mentions any of this — like HPHA's own `tree_alloc`, it serves whatever already-inflated
+size `orisnik.rs` hands it. `rand.rs` (the CRT `rand()` port that seeds the guard ramp)
+is compiled for `any(test, feature = "debug-allocator")`.
 
 Never use `assert!` (always-on) on the hot path for an invariant that `debug_assert!` can carry
 — it would tax every release-build allocation.

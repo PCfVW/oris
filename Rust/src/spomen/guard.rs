@@ -35,9 +35,9 @@ const _: () = assert!(MEMORY_GUARD_SIZE > 0);
 /// least the trailing [`MEMORY_GUARD_SIZE`] of them, and exclusively owned for that
 /// span (no other live reference into it).
 pub(crate) unsafe fn write_guard(ptr: NonNull<u8>, requested_size: usize, seed: u8) {
-    // PROVENANCE: `ptr` is a live allocation's own pointer; offsetting within its own
-    // span (caller's contract) preserves that provenance for the writes below.
-    // SAFETY: `requested_size` is within `ptr`'s valid span (caller's contract).
+    // SAFETY: `requested_size` is within `ptr`'s valid span (caller's contract); the
+    // offset stays inside `ptr`'s own allocation, so its provenance is preserved for
+    // the writes below.
     let guard = unsafe { ptr.as_ptr().add(requested_size) };
     let mut byte = seed;
     // EXPLICIT: `byte` (the running ramp value) is state a `for i in 0..N` loop over

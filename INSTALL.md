@@ -17,8 +17,12 @@ Oris is a two-port monorepo; each port builds independently with its own toolcha
 - **`--features debug-allocator`** enables `spomen`, the port of HPHA's
   `DEBUG_ALLOCATOR` mode (guard bytes, allocation-record tracking, leak detection,
   `check()`/`report()`) landing across v0.2.0 (`ROADMAP.md`) — stable, no nightly
-  needed. Currently inert (scaffolding only, nothing it enables does anything yet);
-  build/test instructions land here once it does.
+  needed. Guard bytes and payload poisoning are implemented; allocation records,
+  callstack capture, leak detection and `check()`/`report()` are still to come, so
+  nothing here *reports* a detected overrun yet. Build and test it with
+  `cargo test --features debug-allocator` (Miri:
+  `MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows" cargo +nightly miri test
+  --features debug-allocator`).
 
 ```sh
 cd Rust
@@ -46,7 +50,9 @@ orisnik = "0.1"
 - **`Orisnitsa(.{ .debug = true })`** is the Zig analog of `orisnik`'s
   `debug-allocator` feature — `spomen`, landing across v0.2.0 (`ROADMAP.md`). No
   `zig build` flag needed; the default `orisnitsa.Orisnitsa` export stays the
-  non-debug `Orisnitsa(.{})`. Currently inert, same as the Rust side above.
+  non-debug `Orisnitsa(.{})`. Same status as the Rust side above: guard bytes and
+  payload poisoning are implemented, the rest of `spomen` is still to come. Exercise
+  it with `zig build test` (the debug instantiation is covered by the test suite).
 
 ```sh
 cd Zig

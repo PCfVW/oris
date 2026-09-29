@@ -30,8 +30,12 @@ const Config = spomen.Config;
 /// randomized stress-workload tests (test-only) can reach it via
 /// `@import("rand.zig")`.
 pub const VintageRand = struct {
+    /// The CRT's `holdrand` LCG state — any `u32` is valid; `Orisnitsa`'s
+    /// guard-byte stream starts it at `0` (see that field's doc).
     state: u32,
 
+    /// A generator in the state the CRT's `srand(seed)` would leave it in
+    /// (`holdrand = seed`).
     pub fn init(seed: u32) VintageRand {
         return .{ .state = seed };
     }

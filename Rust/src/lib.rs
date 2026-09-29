@@ -66,18 +66,19 @@ mod block;
 mod bucket;
 mod capi;
 mod global_alloc;
-// Always compiled — `bucket.rs`/`tree.rs`/`orisnik.rs` reference `guard::MEMORY_GUARD_SIZE`
-// unconditionally (it folds to 0 without `debug-allocator`), unlike `spomen` below, which
-// this feature excludes from the build entirely. See `Rust/CONVENTIONS.md`'s
-// `debug_assert!` Invariants section.
+// Always compiled — `bucket.rs` and `orisnik.rs` reference `guard::MEMORY_GUARD_SIZE`
+// (directly, or through `guard::inflate`/`deflate`) unconditionally (it folds to 0
+// without `debug-allocator`), unlike `spomen` below, which this feature excludes from
+// the build entirely. See `Rust/CONVENTIONS.md`'s `debug_assert!` Invariants section.
 mod guard;
 mod list;
 mod orisnik;
 mod os;
 // Two independent consumers, neither the plain shipped library: `spomen`'s guard-byte
 // ramp (see that module's doc), gated on the feature like `spomen` itself; and
-// `orisnik.rs`'s own `#[cfg(test)]` stress workload, unconditionally (it predates and
-// is unrelated to `debug-allocator` — this generator just happens to serve both).
+// `orisnik.rs`'s own `#[cfg(test)]` stress workload, which needs it in every test
+// build (that workload predates `debug-allocator` and is unrelated to it — this
+// generator simply serves both).
 #[cfg(any(test, feature = "debug-allocator"))]
 mod rand;
 mod rbtree;

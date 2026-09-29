@@ -51,6 +51,9 @@ pub fn writeGuard(comptime config: Config, ptr: [*]u8, requested_size: usize, se
         // INDEX: `i < memory_guard_size`, and `ptr` is valid for
         // `requested_size + memory_guard_size` bytes (caller's contract), so
         // `requested_size + i` stays within that span.
+        // SAFETY: the raw write below discharges this function's own contract —
+        // `ptr` writable for that whole span and exclusively owned, so no other
+        // live reference observes the guard byte being written.
         ptr[requested_size + i] = byte;
         byte +%= 1;
     }
@@ -100,12 +103,12 @@ pub fn checkGuard(comptime config: Config, ptr: [*]u8, requested_size: usize) bo
 
 const testing = std.testing;
 
-/// Every test below allocates its own scratch buffer through `testing.allocator`
-/// (leak-detected) rather than touching `os.zig` — `writeGuard`/`checkGuard`
-/// only ever do pointer arithmetic over a caller-supplied span, so no real
-/// allocator page is needed to exercise them. Mirrors `orisnik`'s own
-/// `spomen::guard` tests, which likewise use a plain `Vec<u8>` rather than any
-/// real OS allocation.
+// Every test below allocates its own scratch buffer through `testing.allocator`
+// (leak-detected) rather than touching `os.zig` — `writeGuard`/`checkGuard`
+// only ever do pointer arithmetic over a caller-supplied span, so no real
+// allocator page is needed to exercise them. Mirrors `orisnik`'s own
+// `spomen::guard` tests, which likewise use a plain `Vec<u8>` rather than any
+// real OS allocation.
 const debug_config: Config = .{ .debug = true };
 
 test "round-trips when untouched" {

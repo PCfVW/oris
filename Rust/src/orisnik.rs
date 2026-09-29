@@ -13,7 +13,7 @@
 //! `free_with_size`/`free_with_size_aligned`'s deflate/poison calls); the rest of
 //! `spomen` (allocation records, callstack capture, `check()`/`report()`) follows in
 //! later phases. With the feature off, `crate::guard::MEMORY_GUARD_SIZE` is
-//! 0, so every `+`/`- MEMORY_GUARD_SIZE` site below is dead code the compiler removes,
+//! 0, so every `inflate`/`deflate` call site below is an identity the compiler removes,
 //! restoring v0.1.x's exact guard-free arithmetic — the same "cancels out and is
 //! simply omitted" shape this doc described before this feature existed, now realized
 //! by the compiler rather than by the source never mentioning guard bytes at all.
@@ -180,9 +180,9 @@ impl Orisnik {
     #[cfg(feature = "debug-allocator")]
     fn next_guard_seed(&self) -> u8 {
         let mut rng = self.guard_rng.get();
-        // CAST: HPHA's own `write_guard` does the identical truncation —
-        // `(unsigned char)rand()` — on `rand()`'s `0..=0x7fff` result; only the low
-        // byte seeds the ramp.
+        // CAST: u32 -> u8, truncating deliberately — HPHA's own `write_guard` does the
+        // identical `(unsigned char)rand()` on `rand()`'s `0..=0x7fff` result; only
+        // the low byte seeds the ramp.
         #[allow(clippy::as_conversions, clippy::cast_possible_truncation)]
         let seed = rng.next() as u8;
         self.guard_rng.set(rng);
@@ -365,11 +365,17 @@ impl Orisnik {
 
     /// The bucket path's sole *fresh-allocation* choke point for a plain (unaligned)
     /// request. `size` is the caller-visible, already-clamped request — the guard
-    /// reservation is folded into the bucket-index computation and stripped back off
-    /// nowhere here (bucket "size" is a slot's fixed class, never reported through
-    /// this method; [`Orisnik::size`]/[`Orisnik::resize`] deflate it on their own).
+    /// reservation is folded into the bucket-index computation here, but never
+    /// stripped back off in this method, because it reports no size: a bucket slot's
+    /// size is its fixed class, and [`Orisnik::size`]/[`Orisnik::resize`] deflate that
+    /// on their own.
     #[must_use]
     fn bucket_alloc(&self, size: usize) -> Option<NonNull<u8>> {
+        // `unwrap_or`, not `?`, unlike the tree wrappers: every caller has just
+        // established `is_small_allocation(size)`, i.e. `size + MEMORY_GUARD_SIZE <=
+        // MAX_SMALL_ALLOCATION` (256), so `inflate` can never overflow here and the
+        // fallback is unreachable. The other `bucket_*` wrappers and the sized
+        // `free_with_size*` paths below rely on the same bound.
         let inflated = crate::guard::inflate(size).unwrap_or(size);
         let ptr = self
             .buckets
@@ -402,6 +408,7 @@ impl Orisnik {
     /// not an equivalent-looking alternative.
     #[must_use]
     fn bucket_alloc_aligned(&self, size: usize, alignment: usize) -> Option<NonNull<u8>> {
+        // `unwrap_or` is unreachable-fallback here for the reason `bucket_alloc` gives.
         let inflated = crate::guard::inflate(size).unwrap_or(size);
         let ptr = self
             .buckets
@@ -438,6 +445,8 @@ impl Orisnik {
     /// `ptr` must be a still-live bucket-path allocation this instance produced.
     #[must_use]
     unsafe fn bucket_realloc(&self, ptr: NonNull<u8>, size: usize) -> Option<NonNull<u8>> {
+        // `unwrap_or` is unreachable-fallback here for the reason `bucket_alloc` gives
+        // (both callers checked `is_small_allocation(size)` first).
         let inflated = crate::guard::inflate(size).unwrap_or(size);
         // SAFETY: forwarded from this function's own contract.
         let new_ptr = unsafe { self.buckets.realloc(ptr, inflated) }?;
@@ -577,18 +586,23 @@ impl Orisnik {
             let page = unsafe { bucket::ptr_get_page(ptr.as_ptr()) };
             // SAFETY: `page` is live.
             let elem_size = unsafe { bucket::Page::elem_size(page) };
+            // Copies the old slot's *payload* only — `elem_size - MEMORY_GUARD_SIZE`,
+            // HPHA's own `memcpy` length here (`Cpp/hpha.h`'s `realloc`). Copying the
+            // whole inflated slot would land the old guard ramp's tail on top of the
+            // new block's own ramp (already written by `tree_alloc`, at
+            // `[size, size + MEMORY_GUARD_SIZE)`) whenever `elem_size > size`.
+            let payload_len = crate::guard::deflate(elem_size);
             // SAFETY: `new_ptr` is really `tree_alloc`'s own `size +
-            // MEMORY_GUARD_SIZE` bytes, which exceeds `elem_size`: `is_small_allocation`
-            // was just checked `false` above, i.e. `size + MEMORY_GUARD_SIZE >
-            // MAX_SMALL_ALLOCATION`, the same bound every bucket `elem_size` is `<=`
-            // (guard-inflated or not — a bucket's real slot size never exceeds the
-            // class ceiling). `ptr` is valid for `elem_size` bytes (its slot's own
-            // real size); freshly, independently allocated, so the two ranges never
-            // overlap.
+            // MEMORY_GUARD_SIZE` bytes, which exceeds `payload_len`:
+            // `is_small_allocation` was just checked `false` above, i.e. `size +
+            // MEMORY_GUARD_SIZE > MAX_SMALL_ALLOCATION`, the same bound every bucket
+            // `elem_size` is `<=`. `ptr` is valid for `elem_size >= payload_len` bytes
+            // (its slot's own real size); freshly, independently allocated, so the
+            // two ranges never overlap.
             unsafe {
                 new_ptr
                     .as_ptr()
-                    .copy_from_nonoverlapping(ptr.as_ptr(), elem_size);
+                    .copy_from_nonoverlapping(ptr.as_ptr(), payload_len);
             };
             // SAFETY: `ptr` is a live bucket-path allocation, not used again after
             // this call.
@@ -686,14 +700,18 @@ impl Orisnik {
             // cross-port deviation the invariant cares about (it only changes what
             // stale bytes beyond the caller's own requested `size` end up copied,
             // never any tree/bucket state transition).
+            // The payload length is `elem_size - MEMORY_GUARD_SIZE` (HPHA's own
+            // `memcpy` length, see the plain `realloc` crossover above), capped at
+            // `size` as described.
+            let copy_len = crate::guard::deflate(elem_size).min(size);
             // SAFETY: `new_ptr` was just allocated with room for at least `size`
             // bytes; `ptr` is valid for `elem_size` bytes (its slot's own size), and
-            // `elem_size.min(size) <= size` stays within both; freshly,
+            // `copy_len <= min(elem_size, size)` stays within both; freshly,
             // independently allocated, so the two ranges never overlap regardless.
             unsafe {
                 new_ptr
                     .as_ptr()
-                    .copy_from_nonoverlapping(ptr.as_ptr(), elem_size.min(size));
+                    .copy_from_nonoverlapping(ptr.as_ptr(), copy_len);
             };
             // SAFETY: `ptr` is a live bucket-path allocation, not used again after
             // this call.
@@ -864,7 +882,9 @@ impl Orisnik {
             // *different* bucket under the `debug-allocator` feature and free into
             // the wrong size class's free list. Ports HPHA's own
             // `bucket_spacing_function(origSize + MEMORY_GUARD_SIZE)` here exactly
-            // (`Cpp/hpha.h`'s `free(void*, size_t)`).
+            // (`Cpp/hpha.h`'s `free(void*, size_t)`). `unwrap_or` is
+            // unreachable-fallback here: `is_small_allocation(orig_size)` was just
+            // checked, so `inflate` cannot overflow (see `bucket_alloc`).
             let inflated = crate::guard::inflate(orig_size).unwrap_or(orig_size);
             // SAFETY: `ptr` is a live bucket-path allocation from bucket
             // `bucket_spacing_function(inflated)` — this function's own contract
@@ -947,6 +967,7 @@ impl Orisnik {
             // (inflate, then round) matters, not just that both happen. Ports HPHA's
             // own `bucket_spacing_function(round_up(origSize + MEMORY_GUARD_SIZE,
             // oldAlignment))` exactly (`Cpp/hpha.h`'s `free(void*, size_t, size_t)`).
+            // `unwrap_or` is unreachable-fallback here, as in `free_with_size`.
             let inflated = crate::guard::inflate(orig_size).unwrap_or(orig_size);
             // SAFETY: `ptr` is a live bucket-path allocation from bucket
             // `bucket_spacing_function(round_up(inflated, old_alignment))` — this
@@ -1493,6 +1514,83 @@ mod tests {
             "every block must have been freed into its real bucket, not a \
              differently-sized neighbour's"
         );
+    }
+
+    /// A `realloc` that promotes a bucket allocation onto the tree path must copy only
+    /// the old slot's *payload* (`elem_size - MEMORY_GUARD_SIZE`, HPHA's own
+    /// `memcpy` length in `Cpp/hpha.h`'s `realloc`), never its trailing guard ramp:
+    /// the new tree block has already had *its own* ramp written by `tree_alloc`, at
+    /// `[size, size + MEMORY_GUARD_SIZE)`, and copying the whole inflated slot lands
+    /// the old ramp's tail bytes on top of it whenever `elem_size > size` — the
+    /// window `MAX_SMALL_ALLOCATION - MEMORY_GUARD_SIZE < size < elem_size` this test
+    /// picks (a 256-byte slot promoted to a 250-byte request). Latent until
+    /// guard-checking is wired into dispatch, when it would surface as a false
+    /// corruption report.
+    #[test]
+    #[cfg(feature = "debug-allocator")]
+    fn bucket_to_tree_realloc_keeps_the_new_guard_ramp_and_the_payload() {
+        let orisnik = Orisnik::new();
+        let old = MAX_SMALL_ALLOCATION - crate::guard::MEMORY_GUARD_SIZE; // a full 256-byte slot
+        let new = MAX_SMALL_ALLOCATION - 6; // 250: no longer fits a bucket once guarded
+        let ptr = orisnik.alloc(old).expect("OS map failed");
+        // SAFETY: `ptr` is valid for `old` bytes, exclusively owned by this test.
+        unsafe { ptr.as_ptr().write_bytes(0x5A, old) };
+        // SAFETY: `ptr` is a live bucket-path allocation `orisnik` produced.
+        let moved = unsafe { orisnik.realloc(Some(ptr), new) }.expect("OS map failed");
+        // Usable size, not requested size: the tree rounds a block up to a
+        // `BlockHeader`-size multiple, so this may exceed `new` (here 256 vs 250).
+        // SAFETY: `moved` is a live allocation `orisnik` produced.
+        assert!(unsafe { orisnik.size(Some(moved)) } >= new);
+        // SAFETY: `moved` is a live tree-path allocation of exactly `new` bytes.
+        let ramp_intact = unsafe { crate::spomen::guard::check_guard(moved, new) };
+        assert!(
+            ramp_intact,
+            "copying the old slot's guard bytes must not clobber the new block's ramp"
+        );
+        // SAFETY: `moved` is valid for `new >= old` bytes, exclusively owned.
+        let payload = unsafe { core::slice::from_raw_parts(moved.as_ptr(), old) };
+        assert!(
+            payload.iter().all(|&b| b == 0x5A),
+            "the caller's `old` payload bytes must survive the promotion"
+        );
+        // SAFETY: `moved` is a live allocation `orisnik` produced.
+        unsafe { orisnik.free(Some(moved)) };
+        orisnik.purge();
+    }
+
+    /// [`Orisnik::realloc_aligned`]'s twin of
+    /// `bucket_to_tree_realloc_keeps_the_new_guard_ramp_and_the_payload`.
+    #[test]
+    #[cfg(feature = "debug-allocator")]
+    fn bucket_to_tree_realloc_aligned_keeps_the_new_guard_ramp_and_the_payload() {
+        let orisnik = Orisnik::new();
+        let alignment = 16;
+        let old = MAX_SMALL_ALLOCATION - crate::guard::MEMORY_GUARD_SIZE;
+        let new = MAX_SMALL_ALLOCATION - 6;
+        let ptr = orisnik
+            .alloc_aligned(old, alignment)
+            .expect("OS map failed");
+        // SAFETY: `ptr` is valid for `old` bytes, exclusively owned by this test.
+        unsafe { ptr.as_ptr().write_bytes(0x5A, old) };
+        // SAFETY: `ptr` is a live bucket-path allocation `orisnik` produced, already
+        // aligned to `alignment`.
+        let moved =
+            unsafe { orisnik.realloc_aligned(Some(ptr), new, alignment) }.expect("OS map failed");
+        // SAFETY: `moved` is a live tree-path allocation of exactly `new` bytes.
+        let ramp_intact = unsafe { crate::spomen::guard::check_guard(moved, new) };
+        assert!(
+            ramp_intact,
+            "copying the old slot's guard bytes must not clobber the new block's ramp"
+        );
+        // SAFETY: `moved` is valid for `new >= old` bytes, exclusively owned.
+        let payload = unsafe { core::slice::from_raw_parts(moved.as_ptr(), old) };
+        assert!(
+            payload.iter().all(|&b| b == 0x5A),
+            "the caller's `old` payload bytes must survive the promotion"
+        );
+        // SAFETY: `moved` is a live allocation `orisnik` produced.
+        unsafe { orisnik.free(Some(moved)) };
+        orisnik.purge();
     }
 
     // ---- v0.2.0 Phase 2: payload poisoning ----
