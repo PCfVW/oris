@@ -20,7 +20,8 @@ pub(crate) mod guard;
 pub(crate) mod poison;
 // The allocation-record store is built and tested here but not yet called from the
 // dispatch layer (`orisnik.rs`) — wiring it in is the next phase of v0.2.0 — so every
-// item is dead outside its own tests until then.
+// item is dead outside its own tests until then. Remove these three `allow`s (and the
+// one on `check_guard`) when Phase 4 lands.
 #[allow(dead_code)]
 pub(crate) mod book;
 #[allow(dead_code)]

@@ -53,6 +53,10 @@ const TAIL: usize = @sizeOf(BookPage);
 pub const CAPACITY: usize = (os.PAGE_SIZE - TAIL) / @sizeOf(Record);
 
 comptime {
+    // Layout lock — the whole page tail is the list link (matches `orisnik`'s
+    // `#[repr(C)]` `BookPage`).
+    std.debug.assert(@sizeOf(BookPage) == @sizeOf(list.ListLink));
+    std.debug.assert(@offsetOf(BookPage, "link") == 0);
     std.debug.assert(CAPACITY >= 1); // a page must hold at least one record
     // `os.map` returns `PAGE_SIZE`-aligned memory, so a slot at `i * @sizeOf(Record)`
     // is aligned as long as the size is a multiple of the alignment (always true in
@@ -67,9 +71,13 @@ comptime {
 ///
 /// `page` must be the tail `BookPage` of a live `PAGE_SIZE` mapping.
 fn baseOf(page: *BookPage) [*]u8 {
-    // SAFETY: `page` is at `PAGE_SIZE - TAIL` bytes into its mapping (caller's
-    // contract), so stepping back that far stays inside the same mapping.
+    // SAFETY: `@ptrCast` from `*BookPage` to a byte pointer only widens the view to
+    // bytes; it keeps the same address and the pointee's provenance (`page` is a live
+    // tail slot, caller's contract), and dereferences nothing.
     const at: [*]u8 = @ptrCast(page);
+    // SAFETY: `page` is at `PAGE_SIZE - TAIL` bytes into its mapping (caller's
+    // contract), so stepping back that far lands on the mapping's base, inside the
+    // same allocation.
     return at - (os.PAGE_SIZE - TAIL);
 }
 
@@ -81,11 +89,16 @@ fn slot(page: *BookPage, index: usize) *Record {
     const base = baseOf(page);
     std.debug.assert(index < CAPACITY);
     // SAFETY: `index < CAPACITY`, and `CAPACITY * @sizeOf(Record) <= PAGE_SIZE - TAIL`,
-    // so the slot lies wholly inside the mapping's record area.
+    // so this pointer step stays inside the mapping's record area (`base` is the
+    // start of a live `PAGE_SIZE` mapping, `baseOf`'s contract).
     const at = base + index * @sizeOf(Record);
     // ALIGN: `base` is PAGE_SIZE-aligned (`os.map`'s guarantee) and
     // `index * @sizeOf(Record)` is a multiple of `@alignOf(Record)`, which divides
     // `PAGE_SIZE` (comptime-asserted above).
+    // SAFETY: `at` is the start of slot `index`, wholly inside the live mapping's
+    // record area; `@ptrCast` only retypes it as `*Record`. Whether the slot holds a
+    // live record is each caller's obligation (`pushBack` writes a dead slot,
+    // `back`/`popBack` read a live one).
     return @ptrCast(@alignCast(at));
 }
 
@@ -129,8 +142,10 @@ pub const RecordBook = struct {
         // `page` is live and linked (caller's contract), so its `next` is non-null.
         const nxt = page.link.next.?;
         if (nxt == self.pages.sentinel()) return null;
-        // SAFETY: `nxt` is not the sentinel, so it is the `link` field of a live
+        // `nxt` is not the sentinel, so it is the `link` field of a live
         // `BookPage` (only `grow` links nodes, and only `BookPage`s).
+        // SAFETY: as just established, `nxt` is the `link` field of a live `BookPage`,
+        // so `@fieldParentPtr` recovers that `BookPage`.
         return @fieldParentPtr("link", nxt);
     }
 
@@ -141,8 +156,10 @@ pub const RecordBook = struct {
         // `page` is live and linked (caller's contract), so its `prev` is non-null.
         const prv = page.link.prev.?;
         if (prv == self.pages.sentinel()) return null;
-        // SAFETY: `prv` is not the sentinel, so it is the `link` field of a live
+        // `prv` is not the sentinel, so it is the `link` field of a live
         // `BookPage` (only `grow` links nodes, and only `BookPage`s).
+        // SAFETY: as just established, `prv` is the `link` field of a live `BookPage`,
+        // so `@fieldParentPtr` recovers that `BookPage`.
         return @fieldParentPtr("link", prv);
     }
 
@@ -150,11 +167,14 @@ pub const RecordBook = struct {
     /// refused it.
     fn grow(self: *RecordBook) ?*BookPage {
         const mem = os.map(os.PAGE_SIZE) orelse return null;
-        // SAFETY: `mem` is a live `PAGE_SIZE` mapping (just returned by `os.map`), so
-        // the tail offset is inside it.
+        // SAFETY: `mem` is a live `PAGE_SIZE` mapping (just returned by `os.map`) and
+        // `PAGE_SIZE - TAIL < PAGE_SIZE`, so the tail pointer stays inside it.
         const tail = mem + (os.PAGE_SIZE - TAIL);
         // ALIGN: `mem` is PAGE_SIZE-aligned and `PAGE_SIZE - TAIL` is a multiple of
         // `@alignOf(BookPage)` (comptime-asserted above).
+        // SAFETY: `tail` is the start of the last `@sizeOf(BookPage)` bytes of the fresh
+        // mapping, exclusively owned; `@ptrCast` retypes them as the (about to be
+        // initialised) `BookPage`, and nothing reads it before the write below.
         const page: *BookPage = @ptrCast(@alignCast(tail));
         // SAFETY: `page` is inside the fresh mapping (above), exclusively owned; this is
         // the slot's first write, so no prior value is read.
@@ -173,16 +193,15 @@ pub const RecordBook = struct {
             page = self.cur.?;
             index = self.next;
         } else {
-            // SAFETY: when `cur` is non-null it is a live page of this book.
+            // When `cur` is non-null it is a live page of this book.
             const candidate: ?*BookPage = if (self.cur) |cur| self.nextPage(cur) else null;
             page = candidate orelse (self.grow() orelse return null);
             self.cur = page;
             self.next = 0;
             index = 0;
         }
-        // SAFETY: `page` is a live page of this book and `index < CAPACITY` (the
-        // fill-in-place branch checked `next < CAPACITY`; the fresh/advanced branch uses
-        // slot 0).
+        // `page` is a live page of this book and `index < CAPACITY` (the fill-in-place
+        // branch checked `next < CAPACITY`; the fresh/advanced branch uses slot 0).
         const at = slot(page, index);
         // SAFETY: `at` is the book's next free slot — inside a live mapping, aligned
         // (see `slot`), and holding no live record (slots `>= next` are dead), so this
@@ -199,13 +218,12 @@ pub const RecordBook = struct {
     pub fn back(self: *RecordBook) *Record {
         std.debug.assert(!self.isEmpty());
         if (self.next == 0) {
-            // SAFETY: the book is non-empty with `next == 0`, so `cur` is live and a
-            // full page precedes it (module invariants).
+            // The book is non-empty with `next == 0`, so `cur` is live and a full page
+            // precedes it (module invariants), hence `.?` cannot fail.
             const prev = self.prevPage(self.cur.?).?;
             return slot(prev, CAPACITY - 1);
         }
-        // SAFETY: `cur` is a live page of this book (non-empty book) and
-        // `next - 1 < CAPACITY`.
+        // `cur` is a live page of this book (non-empty book) and `next - 1 < CAPACITY`.
         return slot(self.cur.?, self.next - 1);
     }
 
@@ -217,8 +235,8 @@ pub const RecordBook = struct {
     pub fn popBack(self: *RecordBook) Record {
         std.debug.assert(!self.isEmpty());
         if (self.next == 0) {
-            // SAFETY: non-empty with `next == 0`, so `cur` is live and preceded by a
-            // full page (module invariants).
+            // Non-empty with `next == 0`, so `cur` is live and preceded by a full page
+            // (module invariants).
             const prev = self.prevPage(self.cur.?);
             std.debug.assert(prev != null);
             self.cur = prev;
@@ -227,7 +245,7 @@ pub const RecordBook = struct {
         const index = self.next - 1;
         self.next = index;
         self.len -= 1;
-        // SAFETY: `cur` is a live page of this book and `index < CAPACITY`.
+        // `cur` is a live page of this book and `index < CAPACITY`.
         const at = slot(self.cur.?, index);
         // SAFETY: `at` held the last live record (module invariants); `next` was
         // decremented above so the slot is now dead and the book will never read it
@@ -250,7 +268,7 @@ pub const RecordBook = struct {
         while (page) |p| {
             const after = self.nextPage(p);
             list.unlinkNode(p);
-            // SAFETY: `p` is the tail of a live mapping this book obtained from
+            // `p` is the tail of a live mapping this book obtained from
             // `os.map(PAGE_SIZE)` and has just unlinked; nothing references it now.
             const base = baseOf(p);
             // SAFETY: `base`/`PAGE_SIZE` describe exactly the mapping `grow` obtained

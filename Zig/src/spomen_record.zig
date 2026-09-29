@@ -56,23 +56,32 @@ pub const Source = enum(u8) {
 ///   not own the allocation it describes.
 /// - Records are ordered by `ptr`'s address, and every live allocation's address is
 ///   unique, so the tree never actually chains two records.
+/// - 64-bit layout (locked by the `comptime` block below): `node` 0, `ptr` 40, `size`
+///   48, `source` 56, `guard_byte` 57, `callstack` 64, total 128 bytes. The leading
+///   fields match `orisnik`'s `#[repr(C)]` `Record`; the trailing `callstack` differs
+///   (inline addresses here, an owning `Backtrace` there), so `@sizeOf` — and hence
+///   how many records fit a book page — differs between the ports. That is
+///   debug-only diagnostic storage, outside the cross-port state-transition invariant.
 pub const Record = extern struct {
-    /// This record's tree linkage. Byte offset 0 (required by `IntrusiveMultiRbTree`).
+    /// This record's tree linkage. Byte offset 0, 8-byte aligned (required by
+    /// `IntrusiveMultiRbTree`).
     node: rbtree.NodeBase = rbtree.NodeBase.UNLINKED,
-    /// The payload pointer the allocator handed to the caller. 8-byte aligned in this
-    /// struct.
+    /// The payload pointer the allocator handed to the caller; a non-zero address.
+    /// Byte offset 40, 8-byte aligned. This is the tree key.
     ptr: [*]u8,
-    /// The size the *caller* requested, in bytes — not the (larger) usable size the
-    /// block really has. The guard ramp trails at `ptr + size`.
+    /// The size the *caller* requested, in bytes (any `usize`) — not the (larger)
+    /// usable size the block really has. The guard ramp trails at `ptr + size`. Byte
+    /// offset 48, 8-byte aligned.
     size: usize,
-    /// Which sub-allocator served this allocation.
+    /// Which sub-allocator served this allocation. Byte offset 56, 1-byte aligned.
     source: Source,
     /// The first byte of this allocation's guard ramp — the seed
-    /// `spomen_guard.writeGuard` was given.
+    /// `spomen_guard.writeGuard` was given (any `u8`, the ramp wraps). Byte offset 57.
     guard_byte: u8,
-    /// Where this allocation was made from: up to `MAX_CALLSTACK_DEPTH` return
-    /// addresses, innermost first, with unused trailing entries zero. Addresses only —
-    /// symbols are resolved later, by `report()`.
+    /// Where this allocation was made from: an array of up to `MAX_CALLSTACK_DEPTH`
+    /// raw return addresses (not a `Backtrace`), innermost first, the unused tail
+    /// filled with zero. Addresses only — symbols are resolved later, by `report()`.
+    /// Byte offset 64, 8-byte aligned.
     callstack: [MAX_CALLSTACK_DEPTH]usize,
 
     /// A query key is a bare address: records are looked up by the pointer a caller
@@ -81,24 +90,52 @@ pub const Record = extern struct {
     pub const Key = usize;
 
     /// A fresh, unlinked record for the allocation at `ptr`, capturing the current
-    /// callstack. Ports `debug_record(ptr, size, source)`'s `record_stack()` half; the
-    /// `write_guard()` half stays with the caller, which owns the guard-seed stream
-    /// (see `spomen_guard.writeGuard`) and passes the seed it used as `guard_byte`.
+    /// callstack with `init`'s own caller as the first frame (`@returnAddress()` here
+    /// is a call site inside that caller). Ports `debug_record(ptr, size, source)`'s
+    /// `record_stack()` half; the `write_guard()` half stays with the caller, which
+    /// owns the guard-seed stream (see `spomen_guard.writeGuard`) and passes the seed
+    /// it used as `guard_byte`.
+    ///
+    /// A layer that wants the trace to start further out (as `RecordStore` does, so
+    /// it starts at the store method's caller) uses `initAt` instead.
     pub fn init(ptr: [*]u8, size: usize, source: Source, guard_byte: u8) Record {
+        return initAt(@returnAddress(), ptr, size, source, guard_byte);
+    }
+
+    /// Like `init`, but the callstack starts at `first_address` — a return address
+    /// (typically the `@returnAddress()` of the function whose caller should appear
+    /// first). See `captureCallstack`.
+    pub fn initAt(first_address: usize, ptr: [*]u8, size: usize, source: Source, guard_byte: u8) Record {
+        return withCallstack(ptr, size, source, guard_byte, captureCallstack(first_address));
+    }
+
+    /// A fresh, unlinked record with an explicitly supplied `callstack`, capturing
+    /// nothing. The seam that makes record bookkeeping testable with a deterministic
+    /// callstack. Mirrors `orisnik`'s `Record::with_callstack`.
+    pub fn withCallstack(
+        ptr: [*]u8,
+        size: usize,
+        source: Source,
+        guard_byte: u8,
+        callstack: [MAX_CALLSTACK_DEPTH]usize,
+    ) Record {
         return .{
             .node = rbtree.NodeBase.UNLINKED,
             .ptr = ptr,
             .size = size,
             .source = source,
             .guard_byte = guard_byte,
-            .callstack = captureCallstack(@returnAddress()),
+            .callstack = callstack,
         };
     }
 
-    /// Captures the current callstack, skipping frames up to `first_address` (pass
-    /// `@returnAddress()` from the function whose *caller* should be the first frame).
-    /// The unused tail is zero-filled. The same call `std/heap/debug_allocator.zig`'s
-    /// `collectStackTrace` makes.
+    /// Captures the current callstack. The first recorded frame is the one whose
+    /// return address equals `first_address` — i.e. a call site in the caller of the
+    /// function that took `@returnAddress()` — and that frame is *included*; frames
+    /// before it (the capture machinery, that function) are skipped. The unused tail
+    /// is zero-filled. The same call `std/heap/debug_allocator.zig`'s
+    /// `collectStackTrace` makes. Yields all-zero when stack tracing is unavailable
+    /// (`std.options.allow_stack_tracing == false`, e.g. ReleaseSmall).
     pub fn captureCallstack(first_address: usize) [MAX_CALLSTACK_DEPTH]usize {
         var buf: [MAX_CALLSTACK_DEPTH]usize = undefined;
         const st = std.debug.captureCurrentStackTrace(.{ .first_address = first_address }, &buf);
@@ -112,9 +149,10 @@ pub const Record = extern struct {
     ///
     /// The allocation this record describes must still be live and valid for
     /// `size + memoryGuardSize(config)` bytes, readable for at least the trailing
-    /// `memoryGuardSize(config)` of them. (`config` is a `comptime` parameter here
-    /// because Zig's guard size is per-instantiation, where `orisnik` has one global
-    /// `MEMORY_GUARD_SIZE` constant.)
+    /// `memoryGuardSize(config)` of them. Only instantiate with `config.debug = true`
+    /// (`.{}` is a compile error, see `spomen_guard.checkGuardSeeded`). `config` is a
+    /// `comptime` parameter because Zig's guard size is per-instantiation, where
+    /// `orisnik` has one global `MEMORY_GUARD_SIZE` constant.
     pub fn checkGuard(self: *const Record, comptime config: Config) bool {
         return spomen_guard.checkGuardSeeded(config, self.ptr, self.size, self.guard_byte);
     }
@@ -136,11 +174,19 @@ pub const Record = extern struct {
 
 comptime {
     // Layout lock — `node` must sit at offset 0 for `@fieldParentPtr("node", ...)` to
-    // be an identity and to match `orisnik`'s `#[repr(C)]` `Record`, whose leading
-    // fields are identical (only the trailing `callstack` differs, see the module doc).
+    // be an identity, and the leading fields match `orisnik`'s `#[repr(C)]` `Record`
+    // (see `Record`'s doc for why the trailing `callstack` and total size differ).
     std.debug.assert(@offsetOf(Record, "node") == 0);
     std.debug.assert(@alignOf(Record) == @alignOf(usize));
     std.debug.assert(@sizeOf(Record) % @alignOf(Record) == 0);
+    if (@sizeOf(usize) == 8) { // 64-bit only, like `block.zig`
+        std.debug.assert(@offsetOf(Record, "ptr") == 40);
+        std.debug.assert(@offsetOf(Record, "size") == 48);
+        std.debug.assert(@offsetOf(Record, "source") == 56);
+        std.debug.assert(@offsetOf(Record, "guard_byte") == 57);
+        std.debug.assert(@offsetOf(Record, "callstack") == 64);
+        std.debug.assert(@sizeOf(Record) == 128);
+    }
 }
 
 const testing = std.testing;
@@ -166,7 +212,21 @@ test "checkGuard uses the recorded seed" {
     try testing.expect(!stale.checkGuard(debug_config));
 }
 
+test "withCallstack stores exactly the supplied callstack" {
+    var byte: u8 = 0;
+    const cs = [_]usize{ 1, 2, 3, 4, 5, 6, 7, 8 };
+    const rec = Record.withCallstack(@ptrCast(&byte), 3, .tree, 9, cs);
+    try testing.expectEqual(cs, rec.callstack);
+    try testing.expectEqual(@as(usize, 3), rec.size);
+    try testing.expectEqual(Source.tree, rec.source);
+    try testing.expectEqual(@as(u8, 9), rec.guard_byte);
+}
+
 test "init captures a callstack and zero-fills the unused tail" {
+    // With stack tracing disabled (`strip_debug_info`, the default for ReleaseSmall)
+    // `captureCurrentStackTrace` legitimately returns nothing, so there is no frame to
+    // assert on; the record is still valid (an all-zero callstack).
+    if (!std.options.allow_stack_tracing) return error.SkipZigTest;
     var byte: u8 = 0;
     const rec = Record.init(@ptrCast(&byte), 1, .buckets, 0);
     // Zig cannot cheaply resolve symbols inside a unit test (that is `report()`'s

@@ -58,10 +58,11 @@ pub(crate) unsafe fn write_guard(ptr: NonNull<u8>, requested_size: usize, seed: 
 /// consecutive sequence — each byte one more than the last, wrapping, exactly the
 /// shape [`write_guard`] produces.
 ///
-/// This is a **self-consistency** check only: it does not (yet) compare against the
-/// allocation's originally-recorded seed byte, which needs `spomen`'s allocation-record
-/// store (a later phase of this work) to supply — without it, nothing else remembers
-/// what the first byte was supposed to be. It still catches the overwhelming majority
+/// This is a **self-consistency** check only: it does not compare against the
+/// allocation's originally-recorded seed byte. That comparison is [`check_guard_seeded`]
+/// (used by `Record::check_guard`), which needs the allocation-record store — built, but
+/// not yet wired into dispatch — to supply the seed; this unseeded form is what remains
+/// possible without it. It still catches the overwhelming majority
 /// of real overflow corruption: an overrun almost never happens to also land on a
 /// perfectly incrementing 16-byte sequence starting from whatever the corrupted first
 /// guard byte now reads as. `hpha.cpp`'s own `check_guard` early-exits on the first
@@ -70,10 +71,10 @@ pub(crate) unsafe fn write_guard(ptr: NonNull<u8>, requested_size: usize, seed: 
 /// # Safety
 /// `ptr` must be valid for `requested_size + MEMORY_GUARD_SIZE` bytes, readable for at
 /// least the trailing [`MEMORY_GUARD_SIZE`] of them.
-// Not yet called from any real dispatch path — wiring it into `free`/`realloc`'s
-// pre-reclaim check needs the allocation-record store (a later phase) to supply the
-// true original size a live pointer's usable size can exceed; see this function's own
-// doc. Exercised directly by this module's own tests until then.
+// Not called from any dispatch path: the check that will guard `free`/`realloc` is the
+// seeded one, driven by the allocation-record store (`Record::check_guard`), which
+// supplies the original size and seed once Phase 4 wires it in. Kept as the
+// store-free fallback and exercised by this module's own tests.
 #[allow(dead_code)]
 #[must_use]
 pub(crate) unsafe fn check_guard(ptr: NonNull<u8>, requested_size: usize) -> bool {

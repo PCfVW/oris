@@ -63,25 +63,26 @@ pub fn writeGuard(comptime config: Config, ptr: [*]u8, requested_size: usize, se
 /// valid consecutive sequence — each byte one more than the last, wrapping,
 /// exactly the shape `writeGuard` produces.
 ///
-/// This is a **self-consistency** check only: it does not (yet) compare against
-/// the allocation's originally-recorded seed byte, which needs `spomen`'s
-/// allocation-record store (a later phase of this work) to supply — without it,
-/// nothing else remembers what the first byte was supposed to be. It still
-/// catches the overwhelming majority of real overflow corruption: an overrun
-/// almost never happens to also land on a perfectly incrementing 16-byte
-/// sequence starting from whatever the corrupted first guard byte now reads as.
+/// This is a **self-consistency** check only: it does not compare against the
+/// allocation's originally-recorded seed byte. The strict form is
+/// `checkGuardSeeded` (reached through `Record.checkGuard`), which the
+/// allocation-record store (`spomen_store.zig`) makes possible; this unseeded
+/// form remains the fallback for a caller that has no record. It still catches
+/// the overwhelming majority of real overflow corruption: an overrun almost
+/// never happens to also land on a perfectly incrementing 16-byte sequence
+/// starting from whatever the corrupted first guard byte now reads as.
 /// `hpha.cpp`'s own `check_guard` early-exits on the first mismatch; this does
 /// too.
 ///
-/// Not yet called from any real dispatch path — wiring it into `free`/
-/// `realloc`'s pre-reclaim check needs the allocation-record store (a later
-/// phase) to supply the true original size a live pointer's usable size can
-/// exceed; see this function's own doc. Exercised directly by this module's own
-/// tests (and, indirectly, by `orisnitsa.zig`'s Phase 2 integration tests) until
-/// then.
+/// Not yet called from any real dispatch path: the record store exists but is
+/// not yet wired into `free`/`realloc`'s pre-reclaim check (a later phase).
+/// Exercised directly by this module's own tests (and, indirectly, by
+/// `orisnitsa.zig`'s Phase 2 integration tests) until then.
 ///
-/// `ptr` must be valid for `requested_size + memoryGuardSize(config)` bytes,
-/// readable for at least the trailing `memoryGuardSize(config)` of them.
+/// Only instantiate with `config.debug = true`: `.{}` fails the comptime
+/// `memory_guard_size > 0` assert below. `ptr` must be valid for
+/// `requested_size + memoryGuardSize(config)` bytes, readable for at least the
+/// trailing `memoryGuardSize(config)` of them.
 pub fn checkGuard(comptime config: Config, ptr: [*]u8, requested_size: usize) bool {
     const memory_guard_size = comptime guard.memoryGuardSize(config);
     comptime std.debug.assert(memory_guard_size > 0);
@@ -113,7 +114,8 @@ pub fn checkGuard(comptime config: Config, ptr: [*]u8, requested_size: usize) bo
 /// `debug_record::check_guard`, which compares every byte against `mGuardByte++` and
 /// early-exits on the first mismatch. Mirrors `orisnik`'s `check_guard_seeded`.
 ///
-/// `ptr` must be valid for `requested_size + memoryGuardSize(config)` bytes,
+/// Only instantiate with `config.debug = true`: `.{}` fails the comptime
+/// `memory_guard_size > 0` assert. `ptr` must be valid for `requested_size + memoryGuardSize(config)` bytes,
 /// readable for at least the trailing `memoryGuardSize(config)` of them.
 pub fn checkGuardSeeded(comptime config: Config, ptr: [*]const u8, requested_size: usize, seed: u8) bool {
     const memory_guard_size = comptime guard.memoryGuardSize(config);

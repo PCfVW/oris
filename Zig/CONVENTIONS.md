@@ -434,10 +434,33 @@ ever needs to exist for a `config.debug = true` instantiation. It folds to 0 for
 site that adds/subtracts it becomes dead code in the default build. Mirrors `orisnik`'s own
 `guard`-vs-`spomen` module split exactly — do not fold `guard.zig` into `spomen.zig`. The
 guard *bytes* (`spomen_guard.zig`) and payload poisoning (`spomen_poison.zig`) are the opposite
-case — inert without `config.debug`, so they are `spomen` siblings, called only from inside an
-`if (config.debug)` branch. `tree.zig` deliberately never mentions any of this: like HPHA's own
+case — inert without `config.debug`, so they are `spomen` siblings, meant to be called only from
+inside an `if (config.debug)` branch. `tree.zig` deliberately never mentions any of this: like HPHA's own
 `tree_alloc`, it serves whatever already-inflated size `orisnitsa.zig` hands it. `rand.zig` is
 the CRT `rand()` port that seeds the guard ramp (and the stress-test workload).
+
+**The allocation-record modules** — `spomen_record.zig` (`Record`, `Source`), `spomen_book.zig`
+(`RecordBook`, dense page-chained storage) and `spomen_store.zig` (`RecordStore`, the address-indexed
+map over an `IntrusiveMultiRbTree`) — are the exception to "only reachable inside `if
+(config.debug)`": they are **non-generic and always compiled** (and exercised by `refAllDecls` in
+`root.zig`), but nothing in the allocator reaches them until the dispatch wiring lands in a later
+phase, so they cost `Orisnitsa(.{})` nothing. Contracts to keep:
+
+- `Record` is an `extern struct` with `NodeBase` first (offset 0); its 64-bit layout is locked by
+  `comptime` asserts (`ptr` 40, `size` 48, `source` 56, `guard_byte` 57, `callstack` 64, 128 bytes).
+  The callstack is an inline `[8]usize` of return addresses (Zig has no drop glue), where `orisnik`'s
+  `Record` holds an owning `Backtrace`. `@sizeOf(Record)` therefore differs between the ports, and so
+  does how many records fit a book page — debug-only diagnostic storage, outside the state-transition
+  invariant.
+- Removal from the middle is swap-remove: erase victim, erase last, move last into the hole with its
+  node reset to `NodeBase.UNLINKED`, re-insert, pop. Tree nodes live inside the records, so a moved
+  record must be unlinked before the move and re-linked after.
+- `RecordBook`/`RecordStore` embed self-referential sentinels: **never move one after its first
+  use** (same contract as `IntrusiveList`), and, having no `Drop`, the owner **must call `deinit()`**
+  to return the OS pages.
+- Callstack capture starts at the return address a layer passes down; `RecordStore.add`/`replace`/
+  `update` each take `@returnAddress()` at their own level, so a trace always starts at the store
+  method's caller. Symbol resolution is deferred to `report()`.
 
 **Debug-only state in an otherwise-shared struct** is declared as a field whose *type* depends
 on `config`, defaulted to match: `field: if (config.debug) T else void = if (config.debug)

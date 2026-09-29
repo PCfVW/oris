@@ -52,8 +52,8 @@ orisnik = "0.1"
   `debug-allocator` feature — `spomen`, landing across v0.2.0 (`ROADMAP.md`). No
   `zig build` flag needed; the default `orisnitsa.Orisnitsa` export stays the
   non-debug `Orisnitsa(.{})`. Same status as the Rust side above: guard bytes and
-  payload poisoning and the allocation-record store are implemented, the rest of `spomen`
-  is still to come. Exercise
+  payload poisoning, and the allocation-record store are implemented; the rest of
+  `spomen` is still to come. Exercise
   it with `zig build test` (the debug instantiation is covered by the test suite).
 
 ```sh

@@ -21,6 +21,19 @@
 //! A `Backtrace` owns heap memory (it is not `Copy`, not plain old data), so a `Record`
 //! has drop glue and the record book must move it with `ptr::read`/`ptr::write` and drop
 //! it exactly once — see [`crate::spomen::book`].
+//!
+//! # Re-entrancy (a constraint on the dispatch layer)
+//! [`Backtrace::force_capture`] **allocates** through the global allocator. If an
+//! `Orisnik` with `debug-allocator` is itself installed as `#[global_allocator]`, wiring
+//! this store into `alloc`/`free` makes every capture re-enter the allocator — and, left
+//! unhandled, recurse without bound or observe a half-updated store. The store methods
+//! therefore capture *before* touching any state, but breaking the recursion itself is
+//! the dispatch layer's job (decided when it wires this in): e.g. a re-entrancy guard
+//! that skips recording for allocations made while capturing, or a fixed frame buffer as
+//! `orisnitsa` uses (which never allocates).
+//!
+//! This module also makes `debug-allocator` require `std` (for `std::backtrace`); the
+//! crate is not `no_std`, so nothing else changes.
 
 use crate::rbtree::{NodeBase, RbNode};
 use crate::spomen::guard::check_guard_seeded;
@@ -78,6 +91,8 @@ unsafe impl RbNode for Record {
     type Key = usize;
 
     unsafe fn cmp(this: NonNull<Self>, other: NonNull<Self>) -> Ordering {
+        // PROVENANCE: addresses are read as ordering keys only; never turned back into
+        // pointers.
         // SAFETY: caller guarantees `this` is live.
         let this_addr = unsafe { (*this.as_ptr()).ptr.as_ptr().addr() };
         // SAFETY: caller guarantees `other` is live.
@@ -96,9 +111,9 @@ unsafe impl RbNode for Record {
 /// [`Backtrace::force_capture`].
 ///
 /// Under Miri it degrades to [`Backtrace::capture`] (which honours `RUST_BACKTRACE` and is
-/// a cheap no-op by default): Miri cannot symbolicate a real backtrace at all, and
-/// interpreting the unwinder for every record made record-heavy tests take minutes for
-/// nothing. Native builds always force the capture.
+/// a cheap no-op by default). Miri *can* capture, and can symbolicate with
+/// `-Zmiri-isolation-error=warn`, but a real capture costs ~1.5 s there, so
+/// record-heavy tests took minutes for nothing. Native builds always force the capture.
 pub(crate) fn capture_callstack() -> Backtrace {
     capture_callstack_with(!cfg!(miri))
 }

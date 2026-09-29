@@ -87,9 +87,24 @@ pub const RecordStore = struct {
     /// `ptr` must not already be recorded (HPHA `assert`s this; so does this, in safe
     /// builds).
     pub fn add(self: *RecordStore, ptr: [*]u8, size: usize, source: Source, guard_byte: u8) bool {
-        std.debug.assert(self.find(ptr) == null); // address already recorded
-        const record = self.book.pushBack(Record.init(ptr, size, source, guard_byte)) orelse return false;
-        self.tree.insert(record);
+        // `@returnAddress()` is taken at THIS level so the captured trace starts at
+        // `add`'s caller (the dispatch layer), the same frame `replace` and `update`
+        // start from — not somewhere inside the store.
+        return self.addRecord(Record.initAt(@returnAddress(), ptr, size, source, guard_byte));
+    }
+
+    /// Stores an already-built `record` (its tree linkage is (re)initialised here) and
+    /// indexes it. Returns `false` — recording nothing — if the OS refused a page.
+    /// `add` delegates here; it is also the seam that lets tests supply a
+    /// deterministic callstack via `Record.withCallstack`. Mirrors `orisnik`'s
+    /// `add_record`.
+    ///
+    /// `record.ptr` must not already be recorded (asserted in safe builds).
+    pub fn addRecord(self: *RecordStore, record: Record) bool {
+        std.debug.assert(self.find(record.ptr) == null); // address already recorded
+        const slot = self.book.pushBack(record) orelse return false;
+        slot.node = rbtree.NodeBase.UNLINKED;
+        self.tree.insert(slot);
         return true;
     }
 
@@ -140,7 +155,7 @@ pub const RecordStore = struct {
         // exclusively accessed here; the old value is copied out before the slot holds a
         // fresh, initialized record.
         const old = record.*;
-        record.* = Record.init(new_ptr, size, source, guard_byte);
+        record.* = Record.initAt(@returnAddress(), new_ptr, size, source, guard_byte);
         self.tree.insert(record);
         return .{ .size = old.size, .source = old.source };
     }
@@ -178,6 +193,28 @@ fn addr(n: usize) [*]u8 {
     // SAFETY: never dereferenced.
     // PROVENANCE: no allocation; a bare integer used only as an ordering key.
     return @ptrFromInt(0x1000 + n * 16);
+}
+
+/// A deterministic, non-zero callstack for record `n`, so bookkeeping tests can tell
+/// callstacks apart without any symbol resolution.
+fn sentinel(n: usize) [spomen_record.MAX_CALLSTACK_DEPTH]usize {
+    var cs: [spomen_record.MAX_CALLSTACK_DEPTH]usize = undefined;
+    for (&cs, 0..) |*e, k| e.* = 0xC000 + n * 16 + k;
+    return cs;
+}
+
+/// Distinct per-index guard seed and source, so a mixed-up record is detectable.
+fn tagSeed(n: usize) u8 {
+    return @truncate(n *% 7 +% 3);
+}
+
+fn tagSource(n: usize) Source {
+    return if (n % 2 == 0) .buckets else .tree;
+}
+
+/// The record with every field a pure function of `n` (`size == n`).
+fn tagged(n: usize) Record {
+    return Record.withCallstack(addr(n), n, tagSource(n), tagSeed(n), sentinel(n));
 }
 
 /// Fisher-Yates shuffle of `0..n`, driven by `VintageRand(seed)` — the same shuffle as
@@ -225,7 +262,7 @@ test "forward, backward and shuffled removal keep the index consistent" {
     for (orders) |order| {
         var store: RecordStore = .init();
         defer store.deinit();
-        for (insert_order) |i| try testing.expect(store.add(addr(i), i, .buckets, 0));
+        for (insert_order) |i| try testing.expect(store.addRecord(tagged(i)));
         var model: std.AutoHashMap(usize, usize) = .init(testing.allocator);
         defer model.deinit();
         for (0..n) |i| try model.put(i, i);
@@ -238,6 +275,10 @@ test "forward, backward and shuffled removal keep the index consistent" {
             while (it.next()) |j| {
                 const rec = store.find(addr(j.*)) orelse return error.TestUnexpectedResult; // survivor still indexed
                 try testing.expectEqual(j.*, rec.size);
+                try testing.expectEqual(addr(j.*), rec.ptr);
+                try testing.expectEqual(tagSeed(j.*), rec.guard_byte);
+                try testing.expectEqual(tagSource(j.*), rec.source);
+                try testing.expectEqual(sentinel(j.*), rec.callstack);
             }
             try testing.expect(store.find(addr(i)) == null);
         }
@@ -295,6 +336,9 @@ test "remove last slot and purge release pages" {
 }
 
 test "records capture the allocating callstack" {
+    // See `spomen_record.zig`'s callstack test: no frames exist to assert on when std has
+    // stack tracing disabled (e.g. ReleaseSmall).
+    if (!std.options.allow_stack_tracing) return error.SkipZigTest;
     var store: RecordStore = .init();
     defer store.deinit();
     try testing.expect(store.add(addr(1), 8, .buckets, 0));
@@ -307,4 +351,49 @@ test "records capture the allocating callstack" {
     rec.callstack = [_]usize{0} ** spomen_record.MAX_CALLSTACK_DEPTH;
     _ = store.update(addr(1), 8, 0);
     try testing.expect(rec.callstack[0] != 0);
+}
+
+test "swap-remove moves the last record intact and leaves neighbours alone" {
+    var store: RecordStore = .init();
+    defer store.deinit();
+    for (0..5) |i| try testing.expect(store.addRecord(tagged(i)));
+    // Record 0 sits in slot 0; removing it moves the last record (4) into that slot.
+    const info = store.remove(addr(0)) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(DebugInfo{ .size = 0, .source = tagSource(0) }, info);
+    try testing.expectEqual(@as(usize, 4), store.len());
+    for (1..5) |i| {
+        const rec = store.find(addr(i)) orelse return error.TestUnexpectedResult;
+        try testing.expectEqual(i, rec.size);
+        try testing.expectEqual(addr(i), rec.ptr);
+        try testing.expectEqual(tagSeed(i), rec.guard_byte);
+        try testing.expectEqual(tagSource(i), rec.source);
+        try testing.expectEqual(sentinel(i), rec.callstack); // callstack preserved by the move
+    }
+}
+
+test "replace preserves neighbours and update recaptures only its own record" {
+    var store: RecordStore = .init();
+    defer store.deinit();
+    for (0..4) |i| try testing.expect(store.addRecord(tagged(i)));
+    _ = store.replace(addr(1), addr(9), 300, .tree, 9) orelse return error.TestUnexpectedResult;
+    _ = store.update(addr(2), 64, 5) orelse return error.TestUnexpectedResult;
+    for ([_]usize{ 0, 3 }) |i| { // untouched neighbours
+        const rec = store.find(addr(i)) orelse return error.TestUnexpectedResult;
+        try testing.expectEqual(i, rec.size);
+        try testing.expectEqual(tagSeed(i), rec.guard_byte);
+        try testing.expectEqual(tagSource(i), rec.source);
+        try testing.expectEqual(sentinel(i), rec.callstack);
+    }
+    // `update` changed size/seed and recaptured: the deterministic sentinel is gone (a
+    // fresh capture is never that value, even all-zero when tracing is unavailable).
+    const upd = store.find(addr(2)) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 64), upd.size);
+    try testing.expectEqual(@as(u8, 5), upd.guard_byte);
+    try testing.expectEqual(tagSource(2), upd.source);
+    try testing.expect(!std.mem.eql(usize, &upd.callstack, &sentinel(2)));
+    // `replace` builds a fresh record at the new key.
+    const rep = store.find(addr(9)) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 300), rep.size);
+    try testing.expectEqual(@as(u8, 9), rep.guard_byte);
+    try testing.expectEqual(addr(9), rep.ptr);
 }

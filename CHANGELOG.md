@@ -12,10 +12,11 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Added
 
-- **Allocation-record store and callstack capture (v0.2.0, Phase 3).** Behind
-  `debug-allocator`/`Orisnitsa(.{ .debug = true })`: the data structures behind HPHA's
-  `debug_record_map`, not yet wired into the allocator's dispatch (that is Phase 4, so
-  nothing observable changes yet). A `Record` remembers one live allocation — address,
+- **Allocation-record store and callstack capture (v0.2.0, Phase 3).** The data structures
+  behind HPHA's `debug_record_map`, for `debug-allocator` (Rust: feature-gated) and
+  `Orisnitsa(.{ .debug = true })` (Zig: the record modules are non-generic and always
+  compiled, but reachable from neither config yet). Not wired into the allocator's
+  dispatch — that is Phase 4 — so nothing observable changes. A `Record` remembers one live allocation — address,
   the size the caller requested, which sub-allocator served it (`Source`), the seed of
   its guard ramp, and where it was allocated from. Records live densely in a
   page-chained `RecordBook` (HPHA's `virtual_book`: push/pop at the back only) and are
@@ -29,7 +30,12 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
   `orisnik` captures a real `std::backtrace::Backtrace` (`force_capture`, so it works
   regardless of the embedder's `RUST_BACKTRACE`), and `orisnitsa` a fixed 8-frame
   address buffer via `std.debug.captureCurrentStackTrace` (HPHA's own depth); HPHA's
-  version is a stub. Symbol resolution is deferred to `report()`. Miri supports both the capture and symbol
+  version is a stub. The two ports' records differ in size (`orisnitsa` inlines the 8
+  addresses; `orisnik` holds a `Backtrace`), so the record book's page capacity differs —
+  debug-only diagnostic storage, outside the state-transition invariant. `Backtrace`
+  capture allocates, so Phase 4 must break the re-entrancy when `Orisnik` is its own
+  global allocator (noted in `spomen/record.rs`); the store already captures before it
+  mutates any state. Symbol resolution is deferred to `report()`. Miri supports both the capture and symbol
   resolution (the latter only when run with `-Zmiri-isolation-error=warn`, because std
   asks for the current directory first): one test drives real, heap-owning backtraces
   through swap-remove, replace, update and drop under Miri, and the name-checking test

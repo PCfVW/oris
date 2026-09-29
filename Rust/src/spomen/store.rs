@@ -71,9 +71,12 @@ impl RecordStore {
     /// `find`.
     #[must_use]
     pub(crate) fn find(&self, ptr: NonNull<u8>) -> Option<NonNull<Record>> {
+        // PROVENANCE: address read as the ordering key only; never turned back into a
+        // pointer.
         let key = ptr.as_ptr().addr();
         let candidate = self.tree.lower_bound(&key)?;
         // SAFETY: `candidate` is a live record in this store's tree.
+        // PROVENANCE: as above; comparison only.
         let found = unsafe { (*candidate.as_ptr()).ptr.as_ptr().addr() };
         (found == key).then_some(candidate)
     }
@@ -113,13 +116,15 @@ impl RecordStore {
     /// `debug_record_map::remove`.
     pub(crate) fn remove(&self, ptr: NonNull<u8>) -> Option<DebugInfo> {
         let record = self.find(ptr)?;
+        // A found record implies a non-empty book, so neither `?` below can fire; checking
+        // `back` before touching the tree keeps even that impossible case side-effect free.
+        let last = self.book.back()?;
         self.tree.erase(record);
-        let last = self.book.back();
         let removed = if record == last {
-            self.book.pop_back()
+            self.book.pop_back()?
         } else {
             self.tree.erase(last);
-            let mut moved = self.book.pop_back();
+            let mut moved = self.book.pop_back()?;
             // `moved` was unlinked from the tree above; its copied node fields are
             // stale, so start it from a clean node before it is re-linked.
             moved.node = NodeBase::UNLINKED;
@@ -152,17 +157,16 @@ impl RecordStore {
         guard_byte: u8,
     ) -> Option<DebugInfo> {
         let record = self.find(ptr)?;
+        // Build the replacement (which captures a callstack, allocating) *before* the
+        // record is disturbed: nothing that runs here may observe a half-updated store —
+        // see `spomen::record`'s "Re-entrancy" section.
+        let fresh = Record::new(new_ptr, size, source, guard_byte);
         // The address is the tree key, so the record leaves the tree while it changes.
         self.tree.erase(record);
         // SAFETY: `record` is a live, initialized slot in the book (found above),
         // exclusively accessed here; `replace` moves the old value out, so it is dropped
         // exactly once (below) and the slot holds a fresh, initialized record.
-        let old = unsafe {
-            core::ptr::replace(
-                record.as_ptr(),
-                Record::new(new_ptr, size, source, guard_byte),
-            )
-        };
+        let old = unsafe { core::ptr::replace(record.as_ptr(), fresh) };
         self.tree.insert(record);
         Some(DebugInfo {
             size: old.size,
@@ -182,6 +186,8 @@ impl RecordStore {
         guard_byte: u8,
     ) -> Option<DebugInfo> {
         let record = self.find(ptr)?;
+        // Capture first, before any field is written (see `replace`).
+        let callstack = crate::spomen::record::capture_callstack();
         // SAFETY: `record` is a live, initialized record (found above), exclusively
         // accessed here; only non-key fields are written.
         let old_size = unsafe { (*record.as_ptr()).size };
@@ -193,7 +199,7 @@ impl RecordStore {
         unsafe { (*record.as_ptr()).guard_byte = guard_byte };
         // SAFETY: as above; assignment drops the old `Backtrace` exactly once and
         // stores the new one.
-        unsafe { (*record.as_ptr()).callstack = crate::spomen::record::capture_callstack() };
+        unsafe { (*record.as_ptr()).callstack = callstack };
         Some(DebugInfo {
             size: old_size,
             source,
@@ -216,6 +222,7 @@ mod tests {
     /// A made-up address; the store only ever compares addresses, never dereferences
     /// the allocation a record describes.
     fn addr(n: usize) -> NonNull<u8> {
+        // PROVENANCE: no allocation behind it; the address is only ever compared.
         NonNull::new(core::ptr::without_provenance_mut::<u8>(0x1000 + n * 16))
             .expect("non-zero address")
     }
@@ -254,9 +261,8 @@ mod tests {
 
     #[test]
     fn forward_backward_and_shuffled_removal_keep_the_index_consistent() {
-        // Small enough for Miri, large enough to span a page boundary is covered by
-        // `book`'s own tests; here the point is the swap-the-last-into-the-hole path
-        // and tree re-linking across many removal orders.
+        // Page-boundary spanning is covered by `book`'s own tests; here the point is the
+        // swap-the-last-into-the-hole path and tree re-linking across many removal orders.
         let n = 200;
         let orders: [Vec<usize>; 3] = [(0..n).collect(), (0..n).rev().collect(), shuffled(n, 1234)];
         for order in &orders {

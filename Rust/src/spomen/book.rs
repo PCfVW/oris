@@ -221,13 +221,14 @@ impl RecordBook {
         Some(unsafe { NonNull::new_unchecked(at) })
     }
 
-    /// The most recently pushed live record's address. Ports `virtual_book::back`.
-    ///
-    /// # Panics
-    /// Debug builds assert the book is non-empty.
+    /// The most recently pushed live record's address, or `None` if the book is empty.
+    /// Ports `virtual_book::back` (which asserts non-empty; a checked `Option` keeps this
+    /// safe fn sound in release builds too).
     #[must_use]
-    pub(crate) fn back(&self) -> NonNull<Record> {
-        debug_assert!(!self.is_empty());
+    pub(crate) fn back(&self) -> Option<NonNull<Record>> {
+        if self.is_empty() {
+            return None;
+        }
         let (page, index) = if self.next.get() == 0 {
             // SAFETY: the book is non-empty with `next == 0`, so `cur` is live and a
             // full page precedes it (module invariants).
@@ -239,19 +240,19 @@ impl RecordBook {
         // SAFETY: `page` is a live page of this book and `index < CAPACITY`.
         let at = unsafe { slot(page, index) };
         // SAFETY: `at` is non-null (inside a mapping).
-        unsafe { NonNull::new_unchecked(at) }
+        Some(unsafe { NonNull::new_unchecked(at) })
     }
 
     /// Removes the last record and returns it by value; the caller now owns it (and
     /// its callstack) and must drop it or move it into another slot. Ports
     /// `virtual_book::pop_back`, which ran the destructor in place — ownership
     /// transfer is the by-value equivalent, and lets the record map *move* the last
-    /// record into a vacated slot instead of copying it.
-    ///
-    /// # Panics
-    /// Debug builds assert the book is non-empty.
-    pub(crate) fn pop_back(&self) -> Record {
-        debug_assert!(!self.is_empty());
+    /// record into a vacated slot instead of copying it. Returns `None` if the book is
+    /// empty.
+    pub(crate) fn pop_back(&self) -> Option<Record> {
+        if self.is_empty() {
+            return None;
+        }
         if self.next.get() == 0 {
             // SAFETY: non-empty with `next == 0`, so `cur` is live and preceded by a
             // full page (module invariants).
@@ -268,7 +269,7 @@ impl RecordBook {
         // SAFETY: `at` held the last live record (module invariants); `next` was
         // decremented above so the slot is now dead and will never be read or dropped
         // again by the book — ownership moves to the caller.
-        unsafe { at.read() }
+        Some(unsafe { at.read() })
     }
 
     /// Returns unused pages to the OS: every spare page after `cur`, and — when the
@@ -330,8 +331,8 @@ impl Drop for RecordBook {
     /// book, so unlinking would be wasted work anyway; reads through the old pointers are
     /// permitted.
     fn drop(&mut self) {
-        while !self.is_empty() {
-            drop(self.pop_back());
+        while let Some(record) = self.pop_back() {
+            drop(record);
         }
         let mut page = self
             .pages
@@ -374,11 +375,11 @@ mod tests {
         assert!(book.is_empty());
         for i in 0..5 {
             let at = book.push_back(rec(i)).expect("map");
-            assert_eq!(at, book.back());
+            assert_eq!(Some(at), book.back());
         }
         assert_eq!(book.len(), 5);
         for i in (0..5).rev() {
-            assert_eq!(book.pop_back().size, i);
+            assert_eq!(book.pop_back().expect("non-empty").size, i);
         }
         assert!(book.is_empty());
     }
@@ -393,16 +394,38 @@ mod tests {
         assert_eq!(book.len(), n);
         // Pop back down across a page boundary, then refill: spare page reused, so the
         // page count must not grow (a leak would show as an extra mapping).
+        assert_eq!(page_count(&book), 3);
         for i in (CAPACITY..n).rev() {
-            assert_eq!(book.pop_back().size, i);
+            assert_eq!(book.pop_back().expect("non-empty").size, i);
         }
         assert_eq!(book.len(), CAPACITY);
+        // The now-empty upper pages are kept as spare capacity, not returned.
+        assert_eq!(page_count(&book), 3);
         for i in CAPACITY..n {
             book.push_back(rec(i)).expect("map");
         }
+        assert_eq!(
+            page_count(&book),
+            3,
+            "spare pages were reused, not re-mapped"
+        );
         for i in (0..n).rev() {
-            assert_eq!(book.pop_back().size, i);
+            assert_eq!(book.pop_back().expect("non-empty").size, i);
         }
+    }
+
+    /// Pages currently chained in `book` (test-only observation of the page list).
+    fn page_count(book: &RecordBook) -> usize {
+        let sentinel = book.pages.sentinel();
+        let mut count = 0;
+        // SAFETY: `sentinel` is live and linked (`sentinel()`'s guarantee).
+        let mut cur = unsafe { ListLink::next(sentinel) };
+        while cur != sentinel {
+            count += 1;
+            // SAFETY: `cur` is a live, linked page link (reached from the sentinel).
+            cur = unsafe { ListLink::next(cur) };
+        }
+        count
     }
 
     #[test]
@@ -411,21 +434,32 @@ mod tests {
         for i in 0..=CAPACITY {
             book.push_back(rec(i)).expect("map");
         }
-        // Drain the second page's only record: one spare page remains.
-        assert_eq!(book.pop_back().size, CAPACITY);
+        assert_eq!(page_count(&book), 2);
+        // Popping the second page's only record leaves it empty *but still `cur`*, so
+        // there is no spare page yet and `purge` frees nothing.
+        assert_eq!(book.pop_back().expect("non-empty").size, CAPACITY);
         book.purge();
-        assert_eq!(book.len(), CAPACITY);
-        // Still fully usable after purging the spare.
+        assert_eq!(page_count(&book), 2, "nothing is spare while it is `cur`");
+        // One more pop moves `cur` back to the first page, making the second a real
+        // spare: `purge` must now unmap exactly that one and keep the live page.
+        assert_eq!(book.pop_back().expect("non-empty").size, CAPACITY - 1);
+        book.purge();
+        assert_eq!(page_count(&book), 1, "the spare page was returned");
+        assert_eq!(book.len(), CAPACITY - 1);
+        // Still fully usable: refill across the boundary re-grows a page.
+        book.push_back(rec(CAPACITY - 1)).expect("map");
         book.push_back(rec(CAPACITY)).expect("map");
+        assert_eq!(page_count(&book), 2);
         assert_eq!(
-            book.back().as_ptr().addr() % core::mem::align_of::<Record>(),
+            book.back().expect("non-empty").as_ptr().addr() % core::mem::align_of::<Record>(),
             0
         );
         // Fully drain and purge everything; the book must restart cleanly.
-        while !book.is_empty() {
-            drop(book.pop_back());
+        while let Some(record) = book.pop_back() {
+            drop(record);
         }
         book.purge();
+        assert_eq!(page_count(&book), 0, "an empty book releases every page");
         book.push_back(rec(0)).expect("map");
         assert_eq!(book.len(), 1);
     }
