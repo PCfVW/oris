@@ -14,7 +14,7 @@
 //! Every OS-backed arena this module grows ([`Tree::add_block`]) is bracketed by two
 //! zero-sized, permanently-`used` fence block headers — one before the first real
 //! block (`prev() == null`), one after the last (`size() == 0`). Real blocks'
-//! `prev()`/`next()` walks (in [`coalesce_block`], [`Tree::purge_block`]) terminate at
+//! `prev()`/`next()` walks (in [`Tree::coalesce_block`], [`Tree::purge_block`]) terminate at
 //! these without needing a separate "is this the arena boundary" check: a fence is
 //! simply always `used()`, so coalescing never merges across it, exactly like a real
 //! allocated block.
@@ -157,7 +157,7 @@ unsafe fn shift_block(bl: *mut BlockHeader, offs: usize) -> *mut BlockHeader {
 ///   [`MAX_SMALL_ALLOCATION`]) — never more than one, and never none while unused.
 ///   [`Tree::attach`]/[`Tree::detach`] are the only crossing points between these three.
 /// - No two physically-adjacent blocks are ever both free: every path that frees or
-///   splits a block runs it through [`coalesce_block`] first, so a free block's
+///   splits a block runs it through [`Tree::coalesce_block`] first, so a free block's
 ///   `prev()`/`next()` are always themselves either used or a fence.
 /// - `allocated_bytes` is exactly the sum of `size` arguments passed to
 ///   [`Tree::system_alloc`] minus those passed to [`Tree::system_free`] — the total

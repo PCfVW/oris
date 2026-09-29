@@ -19,7 +19,8 @@
 //! by the compiler rather than by the source never mentioning guard bytes at all.
 //!
 //! `oris_*` ([`crate::capi`]), `GlobalAlloc` ([`crate::global_alloc`]), and the
-//! optional `Allocator` trait ([`crate::allocator_trait`]) are thin shells over the
+//! optional `Allocator` trait (`crate::allocator_trait`, plain backticks: that module
+//! only exists with the `nightly` feature) are thin shells over the
 //! methods on this type — see `Rust/CONVENTIONS.md`'s Idiomatic Surfaces section.
 
 use crate::align::round_up;

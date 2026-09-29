@@ -527,7 +527,7 @@ impl NodeBase {
 
     /// Removes `this` from its equal-key group's chain. Ports `node_base::unlink`
     /// (the chain-unlink overload — distinct from the tree-structural removal in
-    /// [`erase`]).
+    /// [`IntrusiveMultiRbTree::erase`]).
     ///
     /// # Safety
     /// `this` must be live and currently chained ([`NodeBase::chained`]) or
