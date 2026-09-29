@@ -12,8 +12,9 @@
 //! shims (they only fold the guard reservation in and out); the debug *hooks*
 //! (`debugAdd`/`debugRemove`/`debugReplace`/`debugUpdate`/`debugCheck`/`debugPurge`,
 //! HPHA's `debug_*`) own the guard seed, the ramp, the allocation record and the
-//! poisoning, and are called by the public methods at exactly the points HPHA's own
-//! `alloc`/`realloc`/`resize`/`free`/`purge` call them. `check()`/`report()` and leak
+//! poisoning, and are called by the public methods at the points HPHA's own
+//! `alloc`/`realloc`/`resize`/`free`/`purge` call them — except one extra, state-neutral
+//! `debugCheck` in `reallocAligned`'s misaligned-move branch. `check()`/`report()` and leak
 //! detection follow in later phases. With `config.debug` false,
 //! `guard.memoryGuardSize(config)` is 0, so every
 //! `+`/`- memoryGuardSize(config)` site below is dead code the compiler removes,
@@ -388,8 +389,11 @@ pub fn Orisnitsa(comptime config: Config) type {
         //
         // HPHA's `allocator::debug_add`/`debug_remove`/`debug_replace`/`debug_update`/
         // `debug_check`/`debug_purge` (`Cpp/hpha.cpp:863-950`), called by the public
-        // methods below at exactly the points HPHA's own `alloc`/`realloc`/`resize`/
-        // `free`/`purge` call them (`Cpp/hpha.h:1264-1440`). Every call site is inside
+        // methods below at the points HPHA's own `alloc`/`realloc`/`resize`/
+        // `free`/`purge` call them (`Cpp/hpha.h:1264-1440`), except one deliberate,
+        // state-neutral strengthening: `reallocAligned`'s misaligned-move branch runs
+        // `debugCheck` *first*, before it reads the block's page marker/header (HPHA
+        // verifies only later, inside `free`). Every call site is inside
         // an `if (config.debug)` branch, so for `Orisnitsa(.{})` none of these bodies is
         // ever analyzed and no `records`/counter field exists.
         //
@@ -419,8 +423,11 @@ pub fn Orisnitsa(comptime config: Config) type {
         // `std.debug.captureCurrentStackTrace`, a lock-free frame walk into a fixed
         // `[MAX_CALLSTACK_DEPTH]usize` buffer that allocates nothing, and the record
         // store maps its pages through `os.map`, never through an allocator. So there
-        // is no `busy`/`disabled` state and no restriction on where an `Orisnitsa`
-        // may be installed.
+        // is no `busy`/`disabled` state and no re-entrancy rule to follow. (This is
+        // not a claim that a debug instance can be installed anywhere: `allocator.zig`
+        // and `capi.zig` are fixed to `Orisnitsa(.{})`, so in this repo a debug
+        // instance is reachable only through the type's own methods, never through the
+        // `std.mem.Allocator` vtable or the C API.)
         //
         // # Failure
         // Detected corruption ends in `spomen_failure.fail` (`std.debug.panic`).
@@ -816,6 +823,14 @@ pub fn Orisnitsa(comptime config: Config) type {
                 // alignment; the tree path shifts only within a block's own span),
                 // so there is no way to reach the requested alignment without
                 // moving.
+                //
+                // Verify the block before reading anything from it (`querySize`
+                // below reads its page marker or block header). HPHA checks only
+                // later, inside `free`; checking here is a deliberate,
+                // state-neutral strengthening (it changes no bucket/tree/record
+                // state), so it costs no cross-port parity and catches a foreign
+                // pointer before any read. Mirrors `orisnik`'s `realloc_aligned`.
+                if (config.debug) self.debugCheck(p);
                 const new_ptr = self.allocAlignedAt(first_address, size, alignment) orelse return null;
                 // `p` is a live allocation this instance produced (this function's
                 // own contract), exactly what `size` requires.
@@ -1978,12 +1993,14 @@ test "every public operation runs exactly its hooks (dispatch wiring)" {
     try expectStats(&o, .{ .removes = 1 });
 
     // The misaligned move of `reallocAligned`: a fresh aligned allocation and a free of
-    // the old block — one add, one remove — and, exactly like HPHA, no check.
+    // the old block — one add, one remove — preceded by one check, a deliberate
+    // state-neutral strengthening over HPHA (which verifies only later, in `free`) so the
+    // block is verified before `querySize` reads its page marker/header.
     const filler = o.alloc(24) orelse return error.TestUnexpectedResult;
     const odd = try allocMisaligned(&o);
     o.stats = .{};
     const moved = o.reallocAligned(odd, 100, 256) orelse return error.TestUnexpectedResult;
-    try expectStats(&o, .{ .adds = 1, .removes = 1 });
+    try expectStats(&o, .{ .checks = 1, .adds = 1, .removes = 1 });
 
     // freeWithSize / freeWithSizeAligned: one remove *carrying the size*.
     o.freeWithSize(filler, 24);
@@ -2106,9 +2123,102 @@ test "the default instantiation carries no debug state" {
         std.debug.assert(@FieldType(Orisnitsa(.{}), "records") == void);
         std.debug.assert(@FieldType(Orisnitsa(.{}), "requested_buckets") == void);
         std.debug.assert(@FieldType(Orisnitsa(.{}), "requested_tree") == void);
+        std.debug.assert(@FieldType(Orisnitsa(.{}), "stats") == void);
+        std.debug.assert(@FieldType(Orisnitsa(.{}), "guard_rng") == void);
+        // Every remaining field is release state: nothing debug-only is left hiding.
+        std.debug.assert(@sizeOf(Orisnitsa(.{})) ==
+            @sizeOf(bucket.Buckets(.{})) + @sizeOf(tree_mod.Tree(.{})) + @sizeOf(usize));
     }
     var orisnitsa: Orisnitsa(.{}) = .init();
     orisnitsa.deinit(); // a no-op without `config.debug`
+}
+
+fn recordedSize(o: *Orisnitsa(debug_config), p: [*]u8) !usize {
+    return (o.records.find(p) orelse return error.TestUnexpectedResult).size;
+}
+
+fn expectTotals(o: *Orisnitsa(debug_config), buckets: usize, tree: usize) !void {
+    try testing.expectEqual(buckets, o.requested_buckets);
+    try testing.expectEqual(tree, o.requested_tree);
+}
+
+test "counters and sources follow every realloc path" {
+    // Kills a deleted `debugReplace`, or one passed the wrong `Source`, on any realloc
+    // path: the per-source totals and the recorded size/source change with each step.
+    var o: Orisnitsa(debug_config) = .init();
+    defer o.deinit();
+
+    // bucket -> bucket
+    var p = o.alloc(24) orelse return error.TestUnexpectedResult;
+    p = o.realloc(p, 100) orelse return error.TestUnexpectedResult;
+    try expectTotals(&o, 100 + guard_size, 0);
+    _ = try o.verify(p, 100);
+    try testing.expectError(error.SizeMismatch, o.verify(p, 3));
+    o.free(p);
+
+    // tree -> tree, growing and shrinking below the bucket threshold
+    p = o.alloc(3000) orelse return error.TestUnexpectedResult;
+    p = o.realloc(p, 9000) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 9000), try recordedSize(&o, p));
+    try expectTotals(&o, 0, 9000 + guard_size);
+    p = o.realloc(p, 5) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 5), try recordedSize(&o, p));
+    try testing.expectEqual(Source.tree, (o.records.find(p) orelse return error.TestUnexpectedResult).source);
+    _ = try o.verify(p, 5); // a tree record compares raw
+    o.free(p);
+
+    // aligned bucket in place
+    p = o.allocAligned(24, 32) orelse return error.TestUnexpectedResult;
+    p = o.reallocAligned(p, 60, 32) orelse return error.TestUnexpectedResult;
+    try expectTotals(&o, 60 + guard_size, 0);
+    try testing.expectEqual(Source.buckets, (o.records.find(p) orelse return error.TestUnexpectedResult).source);
+    o.free(p);
+
+    // aligned bucket -> tree crossover
+    p = o.allocAligned(24, 32) orelse return error.TestUnexpectedResult;
+    p = o.reallocAligned(p, 5000, 32) orelse return error.TestUnexpectedResult;
+    try expectTotals(&o, 0, 5000 + guard_size);
+    try testing.expectEqual(Source.tree, (o.records.find(p) orelse return error.TestUnexpectedResult).source);
+    o.free(p);
+
+    // aligned tree -> tree, growing and shrinking
+    p = o.allocAligned(3000, 128) orelse return error.TestUnexpectedResult;
+    p = o.reallocAligned(p, 9000, 128) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 9000), try recordedSize(&o, p));
+    try expectTotals(&o, 0, 9000 + guard_size);
+    p = o.reallocAligned(p, 5, 128) orelse return error.TestUnexpectedResult;
+    _ = try o.verify(p, 5); // a tree record compares raw
+    o.free(p);
+
+    try testing.expectEqual(@as(usize, 0), o.requested());
+    o.purge();
+}
+
+test "every realloc path recaptures the record's callstack" {
+    // A sentinel can never be a real capture (a capture is return addresses or, without
+    // stack tracing, all zero), so surviving it means `debugReplace` did not rebuild the
+    // record's callstack.
+    var o: Orisnitsa(debug_config) = .init();
+    defer o.deinit();
+    const sentinel_cs = [_]usize{ 1, 2, 3, 4, 5, 6, 7, 8 };
+    const Step = struct { aligned: bool, from: usize, to: usize, alignment: usize };
+    const steps = [_]Step{
+        .{ .aligned = false, .from = 24, .to = 100, .alignment = 0 }, // bucket -> bucket
+        .{ .aligned = false, .from = 24, .to = 5000, .alignment = 0 }, // crossover
+        .{ .aligned = false, .from = 3000, .to = 9000, .alignment = 0 }, // tree -> tree
+        .{ .aligned = true, .from = 24, .to = 60, .alignment = 32 }, // aligned bucket in place
+        .{ .aligned = true, .from = 24, .to = 5000, .alignment = 32 }, // aligned crossover
+        .{ .aligned = true, .from = 3000, .to = 9000, .alignment = 128 }, // aligned tree
+    };
+    for (steps) |s| {
+        var p = (if (s.aligned) o.allocAligned(s.from, s.alignment) else o.alloc(s.from)) orelse return error.TestUnexpectedResult;
+        (o.records.find(p) orelse return error.TestUnexpectedResult).callstack = sentinel_cs;
+        p = (if (s.aligned) o.reallocAligned(p, s.to, s.alignment) else o.realloc(p, s.to)) orelse return error.TestUnexpectedResult;
+        const record = o.records.find(p) orelse return error.TestUnexpectedResult;
+        try testing.expect(!std.mem.eql(usize, &record.callstack, &sentinel_cs));
+        o.free(p);
+    }
+    o.purge();
 }
 
 // ---- v0.1.1 regression tests (docs/audits/2026-08-29-pre-v0.2.0-audit.md) ----

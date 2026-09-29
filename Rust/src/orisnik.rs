@@ -91,6 +91,8 @@ pub(crate) const fn is_hpha_alignment(alignment: usize) -> bool {
 /// `list.rs`'s "Lazy sentinel initialization" section), and the per-bucket page
 /// marker that `Buckets::ptr_in_bucket` re-derives on every `free`/`realloc`/`size`
 /// call to decide whether a pointer belongs to the bucket or the tree path.
+/// With `debug-allocator` the record store adds two more: its record book's page-list
+/// sentinel and its address index's tree sentinel (`spomen/book.rs`, `spomen/store.rs`).
 ///
 /// Moving the value — `let b = a;`, pushing it into a `Vec`, returning it by value
 /// from a builder — leaves all three pointing at the old address. The sentinels then
@@ -137,6 +139,22 @@ pub(crate) const fn is_hpha_alignment(alignment: usize) -> bool {
 /// `GlobalAlloc` impl or the `nightly`-gated `Allocator` trait impl must guarantee,
 /// themselves, that no more than one OS thread ever calls into a given `Orisnik`
 /// instance.
+///
+/// # With `debug-allocator`
+/// Behind the `debug-allocator` Cargo feature this type becomes HPHA's `DEBUG_ALLOCATOR`
+/// allocator: every allocation is recorded, guarded by trailing bytes and poisoned, and
+/// `free`/`realloc`/`resize` verify the block first. **Detected corruption panics** (a guard
+/// overrun, a double free, a pointer this instance never produced, a sized free whose size
+/// disagrees with the allocation), with a message naming the block and, when available,
+/// where it was allocated. An instance installed as a `#[global_allocator]` must therefore
+/// be built with `panic = "abort"` (unwinding out of a global allocator is undefined
+/// behaviour), and — because capturing a backtrace inside an allocator deadlocks against
+/// application code that is also capturing one — an instance used through `GlobalAlloc`
+/// records **no allocation callstack** (detection is unaffected). A `requested()` method
+/// reports the bytes callers currently have outstanding, each block counted with its guard
+/// reservation. The C-ABI (`oris_*`) is not exempt: built with the feature, a detected
+/// corruption aborts at the `extern "C"` boundary. See `Rust/CONVENTIONS.md` for the
+/// rationale behind each rule.
 pub struct Orisnik {
     /// The small-allocation path — every request `<= MAX_SMALL_ALLOCATION` (after
     /// [`bucket::clamp_small_allocation`]) lands here.
@@ -847,6 +865,11 @@ impl Orisnik {
     /// `realloc`/`resize`'s *current* size is not a safe substitute here, and prefer
     /// [`Orisnik::free`] whenever `ptr`'s allocation history isn't certain to be
     /// realloc-free.
+    ///
+    /// With `debug-allocator`, `orig_size` is additionally checked against the size recorded
+    /// for the allocation, exactly as for [`Orisnik::free_with_size`] (a mismatch panics; the
+    /// comparison follows how the record holds the size — clamped for a bucket record, raw for
+    /// a tree record, `Cpp/ERRATA.md` E10).
     ///
     /// # Safety
     /// `ptr`, if `Some`, must be a still-live allocation this instance produced with

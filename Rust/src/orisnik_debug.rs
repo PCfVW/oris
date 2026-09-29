@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! The `debug-allocator` hooks — HPHA's `allocator::debug_add`/`debug_remove`/
 //! `debug_replace`/`debug_update`/`debug_check`/`debug_purge` (`Cpp/hpha.cpp:863-950`),
-//! called by [`Orisnik`]'s public methods at exactly the points HPHA's own `alloc`/
-//! `realloc`/`resize`/`free`/`purge` call them (`Cpp/hpha.h:1264-1440`). With the feature
+//! called by [`Orisnik`]'s public methods at the points HPHA's own `alloc`/
+//! `realloc`/`resize`/`free`/`purge` call them (`Cpp/hpha.h:1264-1440`). The one deliberate
+//! addition is a `debug_check` at the top of `realloc_aligned`'s misaligned-move branch (HPHA
+//! verifies only later, inside `free`): that branch reads the block's page marker or header
+//! before anything else, so a foreign pointer must be rejected first. It changes no state, so
+//! it costs no parity; both ports carry it. With the feature
 //! off, `orisnik.rs` supplies no-op versions instead, so no call site carries a `cfg`.
 //!
 //! Each hook owns one whole responsibility, so the guard seed, the record and the poison
@@ -683,16 +687,19 @@ mod tests {
         let plain_large = alloc(&orisnik, 3000);
         free_sized(&orisnik, plain_large, 3000);
         assert_eq!(orisnik.records.len(), 0);
-        // A wrong size is still caught on both sources.
+        orisnik.purge();
+        // A wrong size is still caught on both sources (a fresh instance each time: a
+        // detection disables the hooks for good, and re-enabling them would leave a stale
+        // record for the block reclaimed below).
         for size in [24_usize, 3000] {
-            let ptr = alloc(&orisnik, size);
-            let message = panic_message(|| free_sized(&orisnik, ptr, size + 1)).expect("caught");
+            let wrong = Orisnik::new();
+            let ptr = alloc(&wrong, size);
+            let message = panic_message(|| free_sized(&wrong, ptr, size + 1)).expect("caught");
             assert!(message.contains("freed as"), "{message}");
             // The detection disabled the hooks; reclaim for real.
-            free(&orisnik, ptr);
-            orisnik.disabled.set(false);
+            free(&wrong, ptr);
+            wrong.purge();
         }
-        orisnik.purge();
     }
 
     #[test]
@@ -825,5 +832,262 @@ mod tests {
         assert_eq!(global.records.len(), 0);
         assert_eq!(global.requested(), 0);
         global.purge();
+    }
+
+    // ---- tests that pin each hook call site (found by a mutation audit) ----
+    //
+    // Each test below fails if the named call is deleted, or given the wrong source, size or
+    // `orig_size`. The audit ran ~60 such mutants against the suite; these are the ones the
+    // earlier tests let survive.
+
+    fn has_callstack(orisnik: &Orisnik, ptr: NonNull<u8>) -> bool {
+        let record = orisnik.records.find(ptr).expect("recorded");
+        // SAFETY: `record` is a live record.
+        unsafe { (*record.as_ptr()).callstack.is_some() }
+    }
+
+    fn totals(orisnik: &Orisnik) -> (usize, usize) {
+        (
+            orisnik.requested_buckets.get(),
+            orisnik.requested_tree.get(),
+        )
+    }
+
+    #[test]
+    fn counters_and_sources_follow_every_realloc_path() {
+        let orisnik = Orisnik::new();
+        // bucket -> bucket
+        let ptr = alloc(&orisnik, 24);
+        let ptr = realloc(&orisnik, ptr, 100).expect("realloc");
+        assert_eq!(totals(&orisnik), (100 + MEMORY_GUARD_SIZE, 0));
+        assert!(orisnik.verify(ptr, Some(100)).is_ok());
+        assert!(orisnik.verify(ptr, Some(3)).is_err());
+        free(&orisnik, ptr);
+        // tree -> tree, growing and shrinking below the bucket threshold
+        let ptr = alloc(&orisnik, 3000);
+        let ptr = realloc(&orisnik, ptr, 9000).expect("realloc");
+        assert_eq!(recorded_size(&orisnik, ptr), 9000);
+        assert_eq!(totals(&orisnik), (0, 9000 + MEMORY_GUARD_SIZE));
+        let ptr = realloc(&orisnik, ptr, 5).expect("realloc");
+        assert_eq!(recorded_size(&orisnik, ptr), 5);
+        assert!(
+            orisnik.verify(ptr, Some(5)).is_ok(),
+            "a tree record compares raw"
+        );
+        free(&orisnik, ptr);
+        // aligned bucket in place
+        let ptr = orisnik.alloc_aligned(24, 32).expect("alloc");
+        let ptr = realloc_aligned(&orisnik, ptr, 60, 32).expect("realloc");
+        assert_eq!(totals(&orisnik), (60 + MEMORY_GUARD_SIZE, 0));
+        free(&orisnik, ptr);
+        // aligned tree -> tree, growing and shrinking
+        let ptr = orisnik.alloc_aligned(3000, 128).expect("alloc");
+        let ptr = realloc_aligned(&orisnik, ptr, 9000, 128).expect("realloc");
+        assert_eq!(recorded_size(&orisnik, ptr), 9000);
+        assert_eq!(totals(&orisnik), (0, 9000 + MEMORY_GUARD_SIZE));
+        let ptr = realloc_aligned(&orisnik, ptr, 5, 128).expect("realloc");
+        assert!(
+            orisnik.verify(ptr, Some(5)).is_ok(),
+            "a tree record compares raw"
+        );
+        free(&orisnik, ptr);
+        assert_eq!(orisnik.requested(), 0);
+        orisnik.purge();
+    }
+
+    #[test]
+    fn bucket_resize_re_records_the_usable_size() {
+        // `alloc(20)` lands in a 24-byte usable slot, so the recorded size must *change*
+        // (20 -> 24) for a missing `debug_update` to be visible; `alloc(24)` would hide it.
+        let orisnik = Orisnik::new();
+        let ptr = alloc(&orisnik, 20);
+        let usable = resize(&orisnik, ptr, 20);
+        assert_eq!(usable, 24);
+        assert_eq!(recorded_size(&orisnik, ptr), 24);
+        assert_eq!(orisnik.requested_buckets.get(), 24 + MEMORY_GUARD_SIZE);
+        free(&orisnik, ptr);
+        orisnik.purge();
+    }
+
+    #[test]
+    fn realloc_aligned_detects_an_overrun_in_place() {
+        for (size, alignment) in [(40_usize, 32_usize), (3000, 128)] {
+            let orisnik = Orisnik::new();
+            let ptr = orisnik.alloc_aligned(size, alignment).expect("alloc");
+            overrun(ptr, size);
+            let message = panic_message(|| {
+                let _ = realloc_aligned(&orisnik, ptr, size + 8, alignment);
+            })
+            .expect("detected");
+            assert!(message.contains("guard bytes overwritten"), "{message}");
+            free(&orisnik, ptr);
+            orisnik.purge();
+        }
+    }
+
+    #[test]
+    fn a_misaligned_realloc_aligned_verifies_before_moving() {
+        let orisnik = Orisnik::new();
+        let first = alloc(&orisnik, 24);
+        let second = alloc(&orisnik, 24);
+        assert_ne!(
+            second.addr().get() % 64,
+            0,
+            "the test needs a misaligned block"
+        );
+        overrun(second, 24);
+        let message = panic_message(|| {
+            let _ = realloc_aligned(&orisnik, second, 100, 64);
+        })
+        .expect("detected");
+        assert!(message.contains("guard bytes overwritten"), "{message}");
+        // Detection came before the alloc-copy-free: nothing new was allocated.
+        assert_eq!(orisnik.records.len(), 2);
+        free(&orisnik, second);
+        free(&orisnik, first);
+        orisnik.purge();
+    }
+
+    #[test]
+    fn a_sized_aligned_free_detects_a_wrong_size() {
+        let orisnik = Orisnik::new();
+        let ptr = orisnik.alloc_aligned(40, 32).expect("alloc");
+        let message =
+            panic_message(|| free_sized_aligned(&orisnik, ptr, 41, 32)).expect("mismatch");
+        assert!(
+            message.contains("allocated as 40 bytes, freed as 41"),
+            "{message}"
+        );
+        free(&orisnik, ptr);
+        orisnik.purge();
+    }
+
+    #[test]
+    fn purge_returns_the_record_page() {
+        let orisnik = Orisnik::new();
+        let ptr = alloc(&orisnik, 24);
+        free(&orisnik, ptr);
+        orisnik.purge();
+        // The purge released the (now empty) record page, so the next allocation needs a
+        // fresh map for it; refusing the second map (the first serves the bucket page)
+        // makes that observable.
+        let refusal = test_vm::fail_map_after(1);
+        assert!(orisnik.alloc(24).is_none());
+        drop(refusal);
+        let ptr = alloc(&orisnik, 24);
+        free(&orisnik, ptr);
+        orisnik.purge();
+    }
+
+    #[test]
+    fn a_record_store_out_of_memory_frees_every_kind_of_block() {
+        let orisnik = Orisnik::new();
+        for kind in 0..4 {
+            let refusal = test_vm::fail_map_after(1);
+            let refused = match kind {
+                0 => orisnik.alloc(5000),
+                1 => orisnik.alloc_aligned(5000, 128),
+                2 => orisnik.alloc(24),
+                _ => orisnik.alloc_aligned(24, 32),
+            };
+            drop(refusal);
+            assert!(refused.is_none(), "kind {kind}");
+            assert_eq!(
+                (orisnik.requested(), orisnik.records.len()),
+                (0, 0),
+                "kind {kind}"
+            );
+            orisnik.purge();
+            assert_eq!(
+                orisnik.allocated(),
+                0,
+                "kind {kind}: the block was not given back"
+            );
+        }
+    }
+
+    #[test]
+    fn nested_realloc_and_resize_skip_every_hook() {
+        let orisnik = Orisnik::new();
+        let outer = alloc(&orisnik, 24);
+        {
+            let _busy = orisnik.enter_hook().expect("hooks are on");
+            let nested = alloc(&orisnik, 40);
+            let nested = realloc(&orisnik, nested, 60).expect("realloc");
+            let nested = realloc(&orisnik, nested, 3000).expect("realloc");
+            let _ = resize(&orisnik, nested, 3000);
+            let nested = realloc(&orisnik, nested, 3200).expect("realloc");
+            free(&orisnik, nested);
+            assert_eq!(orisnik.records.len(), 1, "only the outer block is recorded");
+        }
+        free(&orisnik, outer);
+        assert_eq!(orisnik.requested(), 0);
+        orisnik.purge();
+    }
+
+    #[test]
+    fn callstacks_follow_replace_and_update_and_the_global_latch() {
+        use core::alloc::{GlobalAlloc, Layout};
+        // An owned instance keeps a callstack through replace and update.
+        let owned = Orisnik::new();
+        let ptr = alloc(&owned, 24);
+        let ptr = realloc(&owned, ptr, 100).expect("realloc");
+        assert!(has_callstack(&owned, ptr));
+        let _ = resize(&owned, ptr, 100);
+        assert!(has_callstack(&owned, ptr));
+        free(&owned, ptr);
+        owned.purge();
+
+        // An instance used through GlobalAlloc records none, whichever entry point latched it.
+        let layout = Layout::from_size_align(24, 8).expect("layout");
+        let via_realloc = Orisnik::new();
+        let ptr = alloc(&via_realloc, 24);
+        // SAFETY: `ptr` is live and was allocated with `layout`'s size.
+        let grown = unsafe { GlobalAlloc::realloc(&via_realloc, ptr.as_ptr(), layout, 100) };
+        let grown = NonNull::new(grown).expect("realloc");
+        assert!(!has_callstack(&via_realloc, grown));
+        free(&via_realloc, grown);
+        via_realloc.purge();
+
+        let via_zeroed = Orisnik::new();
+        // SAFETY: non-zero size.
+        let zeroed = unsafe { GlobalAlloc::alloc_zeroed(&via_zeroed, layout) };
+        let zeroed = NonNull::new(zeroed).expect("alloc_zeroed");
+        assert!(!has_callstack(&via_zeroed, zeroed));
+        free(&via_zeroed, zeroed);
+        via_zeroed.purge();
+    }
+
+    #[test]
+    fn every_globalalloc_entry_point_latches_the_instance() {
+        use core::alloc::{GlobalAlloc, Layout};
+        let layout = Layout::from_size_align(24, 8).expect("layout");
+        for entry in 0..4 {
+            let orisnik = Orisnik::new();
+            let ptr = alloc(&orisnik, 24);
+            assert!(!orisnik.used_as_global.get());
+            let raw = match entry {
+                // SAFETY: non-zero size.
+                0 => unsafe { GlobalAlloc::alloc(&orisnik, layout) },
+                // SAFETY: non-zero size.
+                1 => unsafe { GlobalAlloc::alloc_zeroed(&orisnik, layout) },
+                // SAFETY: `ptr` is a live allocation of `orisnik` made with `layout`'s size; 48
+                // is non-zero.
+                2 => unsafe { GlobalAlloc::realloc(&orisnik, ptr.as_ptr(), layout, 48) },
+                _ => {
+                    // SAFETY: `ptr` is a live allocation of `orisnik` made with `layout`'s size.
+                    unsafe { GlobalAlloc::dealloc(&orisnik, ptr.as_ptr(), layout) };
+                    core::ptr::null_mut()
+                }
+            };
+            assert!(orisnik.used_as_global.get(), "entry point {entry}");
+            if let Some(extra) = NonNull::new(raw) {
+                free(&orisnik, extra);
+            }
+            if entry < 2 {
+                free(&orisnik, ptr);
+            }
+            orisnik.purge();
+        }
     }
 }

@@ -104,8 +104,8 @@ pub(crate) unsafe fn check_guard(ptr: NonNull<u8>, requested_size: usize) -> boo
 }
 
 /// Checks that the guard ramp trailing at `ptr + requested_size` is *exactly* the one
-/// [`write_guard`] wrote for `seed` — the strict form of `check_guard` (test-only, the unseeded self-consistency check), possible only
-/// once something remembers the seed (`spomen`'s allocation record does, see
+/// [`write_guard`] wrote for `seed` — the strict form of `check_guard` (the test-only,
+/// unseeded self-consistency check), possible only once something remembers the seed (`spomen`'s allocation record does, see
 /// `spomen::record`). Ports `debug_record::check_guard`, which compares every byte
 /// against `mGuardByte++` and early-exits on the first mismatch.
 ///

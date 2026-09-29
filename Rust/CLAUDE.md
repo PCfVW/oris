@@ -19,8 +19,13 @@ Every `.rs` file begins with `// SPDX-License-Identifier: MIT OR Apache-2.0` as 
    `allocator_trait.rs` or the `nightly` feature itself changes:
    `cargo +nightly clippy --all-targets --features nightly -- -D warnings` and
    `cargo +nightly test --features nightly`.
+   The opt-in debug subsystem needs its own pass whenever `orisnik.rs`, `orisnik_debug.rs` or
+   anything under `spomen/` changes: `cargo clippy --all-targets --features debug-allocator --
+   -D warnings` and `cargo test --features debug-allocator` (the latter also runs
+   `tests/debug_global_allocator.rs`, a `harness = false` binary that is skipped under Miri).
 3. `cargo test`
-4. `cargo +nightly miri test --features nightly` with `-Zmiri-strict-provenance` and
+4. `cargo +nightly miri test --features nightly` (and, for the debug subsystem, `--features
+   debug-allocator`) with `-Zmiri-strict-provenance` and
    `-Zmiri-tree-borrows` — the soundness gate for the allocator's `unsafe`, provenance, and
    aliasing code, across both the default surface and the `nightly` `Allocator` trait impl. See
    `CONVENTIONS.md` § *Miri: the verification gate*. A new or modified `unsafe` block is

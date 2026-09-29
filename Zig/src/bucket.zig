@@ -401,14 +401,14 @@ pub const Bucket = struct {
 /// `mTotalAllocatedSizeBuckets`, and the free `bucket_*` methods).
 ///
 /// Generic over the `spomen` debug-subsystem `Config` (see `Zig/CONVENTIONS.md`'s
-/// "`comptime` Toggles" section) so a future guard-byte/record-tracking phase can
+/// "`comptime` Toggles" section) so a phase that needs debug-only state here can
 /// specialize this type's layout and methods per instantiation with a
 /// compiler-enforced zero-cost-when-disabled guarantee. Nothing in this type reads
-/// `config` yet: guard bytes and poisoning turned out to live entirely at
+/// `config`: guard bytes, poisoning and the allocation records all live at
 /// `Orisnitsa`'s dispatch layer (mirroring HPHA, where `bucket_alloc` and friends
 /// are guard-oblivious) plus `isSmallAllocation`'s free function, so `Bucket`/`Page`
-/// need no parameterization of their own until a later phase actually stores
-/// debug-only state in them.
+/// need no parameterization of their own unless a later phase stores debug-only
+/// state in them.
 pub fn Buckets(comptime config: Config) type {
     // Not yet read (see the doc above) — kept, rather than dropped, so a later
     // phase that does store debug-only state here need not re-thread it through

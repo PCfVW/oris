@@ -172,14 +172,14 @@ fn shiftBlock(bl: *BlockHeader, offs: usize) *BlockHeader {
 ///   `Tree` currently has mapped from the OS.
 ///
 /// Generic over the `spomen` debug-subsystem `Config` (see `Zig/CONVENTIONS.md`'s
-/// "`comptime` Toggles" section) so a future guard-byte/record-tracking phase can
+/// "`comptime` Toggles" section) so a phase that needs debug-only state here can
 /// specialize this type's methods per instantiation with a compiler-enforced
-/// zero-cost-when-disabled guarantee. Nothing in this type reads `config` yet:
-/// guard bytes and poisoning live entirely at `Orisnitsa`'s dispatch layer
+/// zero-cost-when-disabled guarantee. Nothing in this type reads `config`:
+/// guard bytes, poisoning and the allocation records live entirely at `Orisnitsa`'s dispatch layer
 /// (mirroring HPHA, where `tree_alloc` is guard-oblivious and just serves whatever
 /// already-inflated size it is handed), so `block.zig`'s `BlockHeader`/`FreeNode`/
-/// `SmallFreeNode` need no parameterization of their own until a later phase
-/// actually stores debug-only state in them.
+/// `SmallFreeNode` need no parameterization of their own unless a later phase
+/// stores debug-only state in them.
 pub fn Tree(comptime config: Config) type {
     // Not yet read (see the doc above) — kept, rather than dropped, so a later
     // phase that does store debug-only state here need not re-thread it through

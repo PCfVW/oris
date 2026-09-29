@@ -7,6 +7,12 @@
 //! `allocator`'s own public methods one-to-one, `*mut u8`/null in place of
 //! `Option<NonNull<u8>>`.
 //!
+//! With the `debug-allocator` feature these entry points run the debug hooks, so a detected
+//! corruption (guard overrun, double free, foreign pointer, or an `oris_free_with_size*`
+//! size that disagrees with the allocation) panics — which aborts at the `extern "C"`
+//! boundary — and the handle, being an owned instance, records callstacks. `orisnitsa`'s
+//! C-ABI is fixed to the non-debug configuration and has no debug surface.
+//!
 //! `#[unsafe(no_mangle)]` (edition 2024's unsafe-attribute syntax, `Rust/CONVENTIONS.md`'s
 //! MSRV lint guard note) keeps every symbol name stable for C linkage.
 

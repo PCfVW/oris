@@ -335,6 +335,9 @@ Rust port's annotation on the same loop.
 > Given an identical allocation/deallocation sequence at the public API level, `orisnik` and
 > `orisnitsa` produce **identical internal state transitions** — same bucket-page spawns, same
 > tree-rotation count, same coalescing operations, same final RSS.
+>
+> (Scope: the allocator's own state. Debug-only diagnostic storage — record-book pages, callstack
+> contents — is outside it; see the roadmap's scope note.)
 
 This constrains how Zig code is written, not just what it computes:
 
@@ -424,8 +427,9 @@ Rust port's Cargo feature gate is exact: `orisnitsa.Orisnitsa` (`root.zig`'s pub
 owns guard-byte writing/checking, the allocation record store, leak reporting, and the
 `check()` / `report()` diagnostics. It is the one place error sets and message formatting are
 allowed; the core allocator stays value-returning and panic-free. Its record contents must match
-the Rust port's `debug-allocator` records (modulo platform-specific callstack symbols), per the
-cross-port parity goal in the roadmap.
+the Rust port's `debug-allocator` records (address, requested size, source, guard seed), modulo
+callstack contents (platform-specific symbols; a Rust instance used as `#[global_allocator]` records
+none) and record-page capacity, per the cross-port parity goal in the roadmap.
 
 `guard.zig`'s `memoryGuardSize(comptime config: Config)` is deliberately its own small file,
 not part of `spomen.zig`: `bucket.zig`/`tree.zig`/`orisnitsa.zig` must call it unconditionally
@@ -470,7 +474,11 @@ the points HPHA calls them, and own the whole debug responsibility: the guard se
 write, the record and the poisoning. The `tree*`/`bucket*` methods are pure `inflate`/`deflate`
 shims. Contracts to keep:
 
-- **Order and semantics mirror `orisnik`'s `orisnik_debug.rs` 1:1.** `debugRemove` verifies, poisons
+- **Order and semantics mirror `orisnik`'s `orisnik_debug.rs` 1:1, and HPHA's call points except
+  one check.** That exception is deliberate and state-neutral: `reallocAligned`'s misaligned-move
+  branch runs `debugCheck` *first*, before `querySize` reads the block's page marker/header (HPHA
+  verifies only later, inside `free`). It changes no bucket/tree/record state, so it costs no
+  cross-port parity. The wiring test pins it (`checks = 1, adds = 1, removes = 1`). `debugRemove` verifies, poisons
   at the *recorded* size, retires the record, then decrements the counters; `debugReplace` with a
   null new pointer is a no-op (`Cpp/ERRATA.md` E9); a record-store OOM in `debugAdd` frees the block
   and returns null, as a value.
@@ -485,7 +493,11 @@ shims. Contracts to keep:
 - **No re-entrancy guard, no global-allocator rule** — the contrast with Rust, whose `Backtrace`
   capture allocates. Zig's capture is a lock-free, non-allocating frame walk into a fixed
   `[MAX_CALLSTACK_DEPTH]usize`, and the store maps pages through `os.map`, never an allocator, so a
-  hook can never re-enter the allocator and there is no `busy`/`disabled` state.
+  hook can never re-enter the allocator and there is no `busy`/`disabled` state. That is a statement
+  about re-entrancy only, not about where a debug instance can be installed: `allocator.zig` and
+  `capi.zig` are fixed to `Orisnitsa(.{})`, so in this repo a `config.debug` instance cannot back a
+  `std.mem.Allocator` through the vtable or the C API — it is reachable only through the type's own
+  methods.
 - **`requested()` and `deinit()`.** `requested()` (debug only) is HPHA's `mTotalRequestedSize*`, each
   block counted as `size + memoryGuardSize`. A `config.debug` instance owns the record store's OS
   pages, so its owner must call `deinit()` (a no-op for `Orisnitsa(.{})`); it does not free

@@ -66,8 +66,9 @@ pub fn writeGuard(comptime config: Config, ptr: [*]u8, requested_size: usize, se
 /// This is a **self-consistency** check only: it does not compare against the
 /// allocation's originally-recorded seed byte. The strict form is
 /// `checkGuardSeeded` (reached through `Record.checkGuard`), which the
-/// allocation-record store (`spomen_store.zig`) makes possible; this unseeded
-/// form remains the fallback for a caller that has no record. It still catches
+/// allocation-record store (`spomen_store.zig`) makes possible and dispatch uses via
+/// `verify`; this unseeded form is a test-only oracle (the Rust `check_guard` is
+/// `#[cfg(test)]`). It still catches
 /// the overwhelming majority of real overflow corruption: an overrun almost
 /// never happens to also land on a perfectly incrementing 16-byte sequence
 /// starting from whatever the corrupted first guard byte now reads as.

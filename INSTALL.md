@@ -57,7 +57,7 @@ orisnik = "0.1"
   non-debug `Orisnitsa(.{})`. Same status as the Rust side above: guard bytes and
   payload poisoning, allocation records and the hooks that use them are implemented
   (detected corruption panics); leak detection on `deinit` and `check()`/`report()` are
-  still to come. Exercise
+  still to come. A debug instance must be `deinit()`ed (it owns record pages). Exercise
   it with `zig build test` (the debug instantiation is covered by the test suite).
 
 ```sh

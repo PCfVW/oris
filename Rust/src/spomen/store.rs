@@ -12,8 +12,8 @@
 //! # What this module does *not* do
 //! It is pure bookkeeping. HPHA's `add`/`remove` also poison the payload and assert the
 //! guard ramp; here those stay with the dispatch layer (`orisnik.rs`), which already owns
-//! poisoning (`spomen::poison`) and the guard-seed stream, and will call
-//! [`Record::check_guard`] before retiring a record. Keeping the store free of payload
+//! poisoning (`spomen::poison`) and the guard-seed stream, and calls
+//! [`Record::check_guard`] (through its `verify` step) before retiring a record. Keeping the store free of payload
 //! access means it never dereferences a caller's allocation, so it is testable with
 //! made-up addresses.
 //!

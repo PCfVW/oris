@@ -28,11 +28,14 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
   plain value (`verify`), so it is testable in both ports. `requested()` reports HPHA's
   running total of requested bytes (each block plus its guard reservation); if the record
   store cannot get a page, `alloc` frees the block and returns `None`/`null` — a value, as
-  in HPHA. A failed `realloc` leaves the original allocation *and* its record untouched
+  in HPHA. One deliberate addition to HPHA's check points: `realloc_aligned`'s misaligned-move
+  branch verifies the block *first* (HPHA verifies only later, inside `free`), because that
+  branch reads the block's header before anything else; it changes no state and both ports
+  carry it. A failed `realloc` leaves the original allocation *and* its record untouched
   (the `Cpp/ERRATA.md` E9 correction). Without the feature the hooks are no-ops (Rust:
   `#[inline]` stand-ins the compiler removes; Zig: never analysed).
 
-  Two things in `orisnik` that `orisnitsa` does not need. (1) *Re-entrancy:* a `busy` flag
+  Three things in `orisnik` that `orisnitsa` does not need. (1) *Re-entrancy:* a `busy` flag
   makes nested allocator calls made while a hook runs skip the hooks. No hook allocates
   from its own instance today, so this is an enforced invariant, tested directly, that the
   coming `report()` (which formats strings while iterating the store) will rely on.
@@ -41,10 +44,13 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
   **deadlocks** against application code that is itself capturing one (a panic hook with
   `RUST_BACKTRACE=1`, an explicit `Backtrace::capture`) — found by
   `tests/debug_global_allocator.rs`, which force-captures a backtrace from user code with
-  `Orisnik` as the process's allocator (it hung before this rule). An instance used through `GlobalAlloc` therefore records **no
-  callstack**; every other record field, and so every detection above, still works. Such a
-  program must be built with `panic = "abort"`. `orisnitsa` captures into a fixed buffer
-  with no lock and no allocation, so it has neither concern.
+  `Orisnik` as the process's allocator (it hung before this rule). An instance used
+  through `GlobalAlloc` therefore records **no callstack**; every other record field, and so
+  every detection above, still works. Such a program must be built with `panic = "abort"`.
+  (3) *After a detected corruption* an `Orisnik` sets a `disabled` latch that turns every
+  later hook off for good: the panic message and payload are allocated unrecorded and
+  outlive the hook. `orisnitsa` captures into a fixed buffer with no lock and no allocation
+  and its panic does not unwind, so it has none of these three concerns.
 
   A defect in HPHA's own debug mode is fixed rather than reproduced (`Cpp/ERRATA.md` E10):
   `alloc(5)` records size 8 (it clamps first), but `free(p, 5)` compared the raw 5 against
@@ -64,8 +70,8 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 - **Allocation-record store and callstack capture (v0.2.0, Phase 3).** The data structures
   behind HPHA's `debug_record_map`, for `debug-allocator` (Rust: feature-gated) and
   `Orisnitsa(.{ .debug = true })` (Zig: the record modules are non-generic and always
-  compiled, but reachable from neither config yet). Not wired into the allocator's
-  dispatch — that is Phase 4 — so nothing observable changes. A `Record` remembers one live allocation — address,
+  compiled; unwired when this phase landed — Phase 4, above, wired them into the dispatch
+  layer). A `Record` remembers one live allocation — address,
   the size the caller requested, which sub-allocator served it (`Source`), the seed of
   its guard ramp, and where it was allocated from. Records live densely in a
   page-chained `RecordBook` (HPHA's `virtual_book`: push/pop at the back only) and are
@@ -82,9 +88,10 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
   version is a stub. The two ports' records differ in size (`orisnitsa` inlines the 8
   addresses; `orisnik` holds a `Backtrace`), so the record book's page capacity differs —
   debug-only diagnostic storage, outside the state-transition invariant. `Backtrace`
-  capture allocates, so Phase 4 must break the re-entrancy when `Orisnik` is its own
-  global allocator (noted in `spomen/record.rs`); the store already captures before it
-  mutates any state. Symbol resolution is deferred to `report()`. Miri supports both the capture and symbol
+  capture allocates and takes std's non-reentrant backtrace lock; Phase 4 resolved that by
+  recording no callstack for an `Orisnik` used through `GlobalAlloc` (see the Phase 4 entry
+  above); the store already captures before it mutates any state. Symbol resolution is
+  deferred to `report()`. Miri supports both the capture and symbol
   resolution (the latter only when run with `-Zmiri-isolation-error=warn`, because std
   asks for the current directory first): one test drives real, heap-owning backtraces
   through swap-remove, replace, update and drop under Miri, and the name-checking test
@@ -111,9 +118,9 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
   (`alloc`'s poison, then `calloc`'s own zero-fill, in that order).
 
   `free`'s pointer-only overload has no caller-supplied size, so it poisons the
-  block's own current, deflated usable size (a safe, documented substitute for
-  HPHA's exact allocation-record-tracked original size, pending that record store
-  in a later phase); `free_with_size`/`free_with_size_aligned` already have the
+  block's own current, deflated usable size (a substitute for HPHA's exact
+  allocation-record-tracked original size — *superseded in Phase 4*, which poisons at the
+  recorded size); `free_with_size`/`free_with_size_aligned` already have the
   caller's original size in hand and use it directly, matching HPHA exactly. One
   test deliberately reads a block's payload immediately after `free()` (before
   `purge()`) to confirm the poison — empirically checked under Miri
@@ -167,12 +174,12 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
   (and `orisnitsa`'s equivalents) all route through new private wrapper methods
   (`tree_alloc`/`tree_alloc_aligned`/`tree_realloc`/`tree_realloc_aligned`/
   `tree_resize`) that inflate the real block size by the guard reservation and
-  write/rewrite the ramp on success — invisibly to every caller (`size`/`querySize`
+  write/rewrite the ramp on success (*Phase 4 moved the ramp write into the debug hooks; the
+  wrappers are now plain inflate shims*) — invisibly to every caller (`size`/`querySize`
   report exactly the original request either way). `spomen::guard`/`spomen_guard`
   add a directly-tested, self-consistency-only `check_guard`/`checkGuard`
-  primitive (not yet wired into `free`/`realloc`'s dispatch — that needs the
-  allocation-record store, a later phase, to supply the true original size a
-  live pointer's *usable* size can exceed).
+  primitive (*superseded in Phase 4*: dispatch is now driven by the seeded check on the
+  recorded size, and the unseeded form is test-only).
 
   The existing test-only `VintageRand` (the Microsoft CRT `rand()` port) is
   promoted to production (`Rust/src/rand.rs`, `Zig/src/rand.zig`) and now also
@@ -192,8 +199,9 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
   test`/`clippy -D warnings` with and without `debug-allocator`, incl. `nightly`
   combined; `zig build test` in Debug and ReleaseSafe) pass unchanged, plus Miri
   (`-Zmiri-strict-provenance -Zmiri-tree-borrows`) on the Rust side. The bucket
-  path and the rest of `spomen` (allocation records, callstack capture,
-  `check()`/`report()`) follow in later phases.
+  path followed in this phase's later commits, and the allocation records, callstack
+  capture and dispatch hooks in Phases 3 and 4; leak detection and `check()`/`report()`
+  remain.
 - **The `debug-allocator` / `spomen` toggle scaffolding (v0.2.0, Phase 1).**
   Behavior-inert groundwork for porting HPHA's `DEBUG_ALLOCATOR` mode: `orisnik`
   gains a `debug-allocator` Cargo feature (same shape as the existing `nightly`)

@@ -568,7 +568,9 @@ is compiled for `any(test, feature = "debug-allocator")`.
 
 The `spomen` hooks (`debug_add`/`debug_remove`/`debug_replace`/`debug_update`/`debug_check`/
 `debug_purge`, `Rust/src/orisnik_debug.rs`) mirror HPHA's own and are called by `Orisnik`'s
-*public* methods at exactly the points HPHA calls them; without the feature `orisnik.rs`
+*public* methods at the points HPHA calls them (plus one deliberate extra `debug_check`, in
+`realloc_aligned`'s misaligned-move branch, so a foreign pointer is caught before its page marker
+or block header is read; it changes no state); without the feature `orisnik.rs`
 supplies `#[inline]` no-op stand-ins, so no call site carries a `cfg`. Three rules follow
 from how they behave:
 
@@ -591,7 +593,8 @@ from how they behave:
   **no callstack** (`Record::callstack` is `None`); everything else about the record — and so
   every detection above — still works. Such an instance must also be built with
   `panic = "abort"` (unwinding out of a global allocator is undefined behaviour).
-  `tests/debug_global_allocator.rs` pins both hazards.
+  `tests/debug_global_allocator.rs` pins the deadlock (it hangs without the rule); the
+  `panic = "abort"` requirement cannot be tested in-process and is documentation only.
 
 Never use `assert!` (always-on) on the hot path for an invariant that `debug_assert!` can carry
 — it would tax every release-build allocation.

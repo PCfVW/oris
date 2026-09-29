@@ -13,7 +13,7 @@ conflate and shouldn't be:
 | **[A. Fixed](#a-defects-the-ports-fix)** | HPHA is wrong; the ports deliberately differ |
 | **[B. Preserved](#b-defects-the-ports-preserve)** | HPHA is wrong; the ports reproduce it on purpose |
 | **[C. Unreachable](#c-defects-unreachable-through-the-ports-surface)** | HPHA is wrong; no Oris configuration can reach it |
-| **[D. Upstream's own](#d-upstreams-own-later-revisions)** | Lazarov fixed it himself, after the source in this directory |
+| **[D. Upstream's own](#d-upstreams-own-later-revisions)** | a later refactor by the author, after the source in this directory (see E9's correction) |
 
 Provenance and licensing live in [`NOTICE.md`](NOTICE.md); this file is only about
 behaviour.
@@ -41,8 +41,8 @@ conditions is recorded, so a later reader can check the reasoning rather than tr
 revision by the author exists, dated 2012-04-21, and it is **not** what this directory
 carries. Diffed in full, the two revisions differ in exactly two places: the
 `MULTITHREADED` build toggle (a configuration choice, recorded in `NOTICE.md`) and the
-`debug_replace` change recorded as **E9** below — which is the only *behavioural*
-difference between them. Anything ported from that
+`debug_replace` change recorded as **E9** below — the only *code* difference besides the
+threading toggle (and, per E9's own correction, not an observable behavioural one). Anything ported from that
 later revision must say so explicitly, entry by entry; the default reference is the
 source in this directory.
 
@@ -182,7 +182,16 @@ the allocation was made with), yet the debug build's assertion fires: 5 ≠ 8. A
 below `MIN_ALLOCATION` (1–7 bytes) followed by a sized free trips it. Release builds have
 no such assert, so the same program runs cleanly there.
 
-**Ports:** compare the caller's size the way the record holds it: after the same minimum-size clamp for a bucket-path record, so `free(p, 5)` of an `alloc(5)` passes; raw for a tree-path record, because the tree path never clamps (`alloc_aligned(5, 4096)` records 5, and HPHA's raw compare is correct there — an unconditional clamp would *introduce* a false report). A genuinely wrong size (`free(p, 64)` of an `alloc(100)`) is still detected. See `Orisnik::verify` / `Orisnitsa.verify` (the hooks'
+**Ports:** compare the caller's size the way the record holds it.
+
+- A **bucket-path** record holds the *clamped* size, so the caller's size is clamped before
+  the comparison: `free(p, 5)` of an `alloc(5)` passes.
+- A **tree-path** record holds the *raw* size, because the tree path never clamps — an
+  `alloc_aligned(5, 4096)` (sub-minimum size, alignment past `MAX_SMALL_ALLOCATION`) and a
+  tree-path `realloc(p, 5)` both record 5. HPHA's raw compare is correct there; an
+  unconditional clamp would *introduce* a false report, which is exactly what the ports'
+  first version of this fix did until review caught it.
+- A genuinely wrong size (`free(p, 64)` of an `alloc(100)`) is still detected on both. See `Orisnik::verify` / `Orisnitsa.verify` (the hooks'
 detection step).
 
 **Trace-visible:** **No.** The assertion sits on a debug-only path and changes no
@@ -275,7 +284,7 @@ if (ptr)                                        // <-- only if the alloc succeed
 this->insert(dr);
 ```
 
-**Why the 2007 form is wrong:** two of `realloc`'s three debug call sites pass `newPtr`
+**Superseded — see the correction below. Why the 2007 form was *thought* wrong:** two of `realloc`'s three debug call sites pass `newPtr`
 straight into `debug_replace` with **no null check** —
 
 ```cpp
@@ -295,7 +304,7 @@ lose that block. (The third call site, the bucket→tree path, has its own
 The 2012 split also erases the record *before* the new allocation runs rather than after,
 which is the structural reason the guard is expressible at all.
 
-**Recommendation for v0.2.0:** port the **2012 `replace_begin`/`replace_end` form**, and
+**Superseded — see the correction below. Recommendation originally made for v0.2.0:** port the **2012 `replace_begin`/`replace_end` form**, and
 record that choice here and in `NOTICE.md`. Adopting the 2007 form would mean knowingly
 porting a defect the author had already fixed — and the failure mode (a lost record for a
 live block) is precisely the thing v0.2.0's leak detection exists to catch.

@@ -45,6 +45,10 @@ place, empty, for the next cycle.
 - `cargo +nightly test --features nightly`
 - `cargo +nightly miri test --features nightly` with
   `MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows"`
+- `cargo clippy --all-targets --features debug-allocator -- -D warnings`,
+  `cargo test --features debug-allocator` and
+  `cargo +nightly miri test --features debug-allocator` (same `MIRIFLAGS`) — the opt-in debug
+  subsystem, including the global-allocator integration test
 - `zig fmt --check build.zig build.zig.zon src`
 - `zig build test` and `zig build test -Doptimize=ReleaseSafe`, then
   `zig build -Doptimize=ReleaseFast`

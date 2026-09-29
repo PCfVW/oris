@@ -18,7 +18,7 @@
 /// `config` field. Passing `config` through a generic type constructor, rather
 /// than reading a runtime `bool` field on `self`, is what makes the debug
 /// subsystem's zero-cost-when-disabled property a *compiler guarantee* instead of
-/// an optimizer hope: every `spomen`-only branch a later phase adds lives inside
+/// an optimizer hope: every `spomen`-only branch lives inside
 /// an `if (config.debug)` whose condition is `comptime`-known at the call site, so
 /// it is eliminated from `Orisnitsa(.{})`'s code entirely, not merely folded when
 /// the optimizer happens to see through it. Matches Zig's own
@@ -27,8 +27,8 @@
 pub const Config = struct {
     /// Enables the `spomen` debug subsystem (guard bytes, allocation-record
     /// tracking, callstack capture, leak detection, check()/report()) — guard
-    /// bytes, poisoning and allocation records are implemented, the rest is still to come
-    /// (see this module's own doc). `comptime` so the relevant branches are
+    /// bytes, poisoning, allocation records and the hooks that use them are implemented;
+    /// leak detection and check()/report() are still to come (see this module's own doc). `comptime` so the relevant branches are
     /// eliminated entirely when `false`, matching
     /// `orisnik`'s `debug-allocator` Cargo feature and Zig's own
     /// `std.heap.DebugAllocator(comptime config: Config)`.

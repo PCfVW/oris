@@ -14,7 +14,7 @@
 //! ([`poison`]); the allocation-record store ([`record`], [`book`], [`store`]:
 //! per-allocation records with callstack capture, indexed by address); and the hooks that
 //! wire them into the allocator (`orisnik_debug.rs`), with fail-fast reporting of
-//! detected corruption ([`failure`]). Still to come across v0.2.0's remaining phase:
+//! detected corruption ([`failure`]). Still to come across v0.2.0's remaining phase (Phase 5):
 //! leak detection on drop, `OrisError`, and the `check()`/`report()` diagnostics.
 
 pub(crate) mod book;

@@ -61,7 +61,10 @@ const vtable = std.mem.Allocator.VTable{
 
 /// `VTable.alloc` — see the module doc.
 fn allocImpl(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
-    _ = ret_addr; // spomen's future callstack hook (v0.2.0+); unused for v0.1.0.
+    // Ignored: under `config.debug` the recorded callstack starts inside this shim (see
+    // `orisnitsa.zig`'s "Callstack frame" note); threading `ret_addr` through to the hooks is
+    // a possible refinement.
+    _ = ret_addr;
     // SAFETY: `ctx` is the `.ptr` field of a `std.mem.Allocator` built only by
     // `allocator()` above from a live `*Orisnitsa`, and this vtable is reachable
     // only through such an `Allocator`, so the erased pointee really is a live
