@@ -173,6 +173,9 @@ pub fn Orisnitsa(comptime config: Config) type {
         /// operation is an `assert`, never a bare `if (!cond) unreachable` kept in
         /// release.
         fn debugAssertNotMoved(self: *Self) void {
+            // SAFETY: `self` is a live `*Self` (a valid Zig reference), so
+            // `@intFromPtr` is well-defined; the integer is only compared, never
+            // converted back to a pointer or dereferenced.
             // PROVENANCE: the address is read for its bit pattern only, to compare
             // against a previously latched one — never turned back into a pointer.
             const here = @intFromPtr(self);
@@ -471,7 +474,7 @@ pub fn Orisnitsa(comptime config: Config) type {
             if (product[1] != 0) return null;
             const total = product[0];
             const ptr = self.alloc(total) orelse return null;
-            // `ptr` was just allocated with room for exactly `total` bytes,
+            // SAFETY: `ptr` was just allocated with room for exactly `total` bytes,
             // exclusively owned (freshly allocated, not yet handed to any other
             // caller).
             @memset(ptr[0..total], 0);
@@ -491,7 +494,7 @@ pub fn Orisnitsa(comptime config: Config) type {
                 self.free(p);
                 return null;
             }
-            // `p` is a live allocation this instance produced (this function's own
+            // SAFETY: `p` is a live allocation this instance produced (this function's own
             // contract), exactly what `ptrInBucket` requires.
             if (self.buckets.ptrInBucket(p)) {
                 const sz = bucket.clampSmallAllocation(size);
@@ -499,6 +502,9 @@ pub fn Orisnitsa(comptime config: Config) type {
                     return self.bucketRealloc(p, sz);
                 }
                 const new_ptr = self.treeAlloc(sz) orelse return null;
+                // SAFETY: `p` is a live bucket-path allocation (`ptrInBucket`
+                // just confirmed, above), exactly what `ptrGetPage` requires, so
+                // the recovered page header is live.
                 const page = bucket.ptrGetPage(p);
                 const elem_size = page.elemSize();
                 // Copies the old slot's *payload* only — `elem_size -
@@ -519,7 +525,7 @@ pub fn Orisnitsa(comptime config: Config) type {
                 self.buckets.free(p);
                 return new_ptr;
             }
-            // `p` is a live tree-path allocation this instance produced (not a
+            // SAFETY: `p` is a live tree-path allocation this instance produced (not a
             // bucket pointer, per the `ptrInBucket` check above).
             return self.treeRealloc(p, size);
         }
@@ -543,6 +549,10 @@ pub fn Orisnitsa(comptime config: Config) type {
                 self.free(p);
                 return null;
             }
+            // SAFETY: `p` is a valid `[*]u8` (non-null, from the `orelse` above);
+            // `@intFromPtr` only reads its address for a mask test, never
+            // re-derives a pointer, and `alignment - 1` is a valid mask because
+            // `alignment` is a power of two (`isHphaAlignment`, asserted on entry).
             if (@intFromPtr(p) & (alignment - 1) != 0) {
                 // `p` doesn't already satisfy `alignment` — the in-place paths below
                 // all rely on it already doing so (bucket slots inherit their page's
@@ -553,7 +563,7 @@ pub fn Orisnitsa(comptime config: Config) type {
                 // `p` is a live allocation this instance produced (this function's
                 // own contract), exactly what `size` requires.
                 const count = @min(self.querySize(p), size);
-                // `new_ptr` was just allocated with room for at least `size >=
+                // SAFETY: `new_ptr` was just allocated with room for at least `size >=
                 // count` bytes; `p` is valid for at least `count` bytes (`count <=
                 // self.querySize(p)`); freshly, independently allocated, so the two
                 // ranges never overlap.
@@ -561,7 +571,7 @@ pub fn Orisnitsa(comptime config: Config) type {
                 self.free(p);
                 return new_ptr;
             }
-            // `p` is a live allocation this instance produced.
+            // SAFETY: `p` is a live allocation this instance produced.
             if (self.buckets.ptrInBucket(p)) {
                 const sz = bucket.clampSmallAllocation(size);
                 if (bucket.isSmallAllocation(config, sz) and alignment <= bucket.MAX_SMALL_ALLOCATION) {
@@ -578,6 +588,9 @@ pub fn Orisnitsa(comptime config: Config) type {
                     return self.bucketRealloc(p, sz);
                 }
                 const new_ptr = self.treeAllocAligned(sz, alignment) orelse return null;
+                // SAFETY: `p` is a live bucket-path allocation (`ptrInBucket`
+                // just confirmed, above), exactly what `ptrGetPage` requires, so
+                // the recovered page header is live.
                 const page = bucket.ptrGetPage(p);
                 const elem_size = page.elemSize();
                 // Deliberate deviation from HPHA: the upstream C++ copies
@@ -606,7 +619,7 @@ pub fn Orisnitsa(comptime config: Config) type {
                 self.buckets.free(p);
                 return new_ptr;
             }
-            // `p` is a live tree-path allocation this instance produced.
+            // SAFETY: `p` is a live tree-path allocation this instance produced.
             return self.treeReallocAligned(p, size, alignment);
         }
 
@@ -620,12 +633,12 @@ pub fn Orisnitsa(comptime config: Config) type {
             self.debugAssertNotMoved();
             const p = ptr orelse return 0;
             std.debug.assert(size > 0);
-            // `p` is a live allocation this instance produced (this function's own
+            // SAFETY: `p` is a live allocation this instance produced (this function's own
             // contract).
             if (self.buckets.ptrInBucket(p)) {
                 return self.bucketResize(p);
             }
-            // `p` is a live tree-path allocation this instance produced.
+            // SAFETY: `p` is a live tree-path allocation this instance produced.
             return self.treeResize(p, size);
         }
 
@@ -641,13 +654,13 @@ pub fn Orisnitsa(comptime config: Config) type {
         pub fn querySize(self: *Self, ptr: ?[*]u8) usize {
             self.debugAssertNotMoved();
             const p = ptr orelse return 0;
-            // `p` is a live allocation this instance produced (this function's own
+            // SAFETY: `p` is a live allocation this instance produced (this function's own
             // contract).
             if (self.buckets.ptrInBucket(p)) {
                 const page = bucket.ptrGetPage(p);
                 return guard.deflate(config, page.elemSize());
             }
-            // `p` is a live tree-path allocation this instance produced.
+            // SAFETY: `p` is a live tree-path allocation this instance produced.
             const bl = block.ptrGetBlockHeader(p);
             return guard.deflate(config, bl.size());
         }
@@ -659,7 +672,7 @@ pub fn Orisnitsa(comptime config: Config) type {
         pub fn free(self: *Self, ptr: ?[*]u8) void {
             self.debugAssertNotMoved();
             const p = ptr orelse return;
-            // `p` is a live allocation this instance produced (this function's own
+            // SAFETY: `p` is a live allocation this instance produced (this function's own
             // contract).
             if (self.buckets.ptrInBucket(p)) {
                 if (config.debug) {
@@ -696,7 +709,7 @@ pub fn Orisnitsa(comptime config: Config) type {
                 // (about to be reclaimed).
                 spomen_poison.fill(p, guard.deflate(config, real_size));
             }
-            // `p` is a live tree-path allocation this instance produced.
+            // SAFETY: `p` is a live tree-path allocation this instance produced.
             self.tree.free(p);
         }
 
@@ -759,7 +772,7 @@ pub fn Orisnitsa(comptime config: Config) type {
                 // + MEMORY_GUARD_SIZE)` here exactly (`Cpp/hpha.h`'s
                 // `free(void*, size_t)`).
                 const inflated = guard.inflate(config, orig_size) orelse orig_size;
-                // `p` is a live bucket-path allocation from bucket
+                // SAFETY: `p` is a live bucket-path allocation from bucket
                 // `bucketSpacingFunction(inflated)` — this function's own
                 // contract (`p` was allocated with this exact `orig_size` at
                 // `DEFAULT_ALIGNMENT`) is exactly how `alloc`/`bucketAlloc`
@@ -767,7 +780,7 @@ pub fn Orisnitsa(comptime config: Config) type {
                 self.buckets.freeDirect(p, bucket.bucketSpacingFunction(inflated));
                 return;
             }
-            // `p` is a live tree-path allocation (`orig_size` is not small, this
+            // SAFETY: `p` is a live tree-path allocation (`orig_size` is not small, this
             // function's own contract, matching how `alloc` would have routed it).
             self.tree.free(p);
         }
@@ -828,14 +841,14 @@ pub fn Orisnitsa(comptime config: Config) type {
                 // MEMORY_GUARD_SIZE, oldAlignment))` exactly (`Cpp/hpha.h`'s
                 // `free(void*, size_t, size_t)`).
                 const inflated = guard.inflate(config, orig_size) orelse orig_size;
-                // `p` is a live bucket-path allocation from bucket
+                // SAFETY: `p` is a live bucket-path allocation from bucket
                 // `bucketSpacingFunction(roundUp(inflated, old_alignment))` —
                 // this function's own contract is exactly how
                 // `allocAligned`'s `bucketAllocAligned` picked its bucket.
                 self.buckets.freeDirect(p, bucket.bucketSpacingFunction(align_helpers.roundUp(inflated, alignment)));
                 return;
             }
-            // `p` is a live tree-path allocation, matching how `allocAligned` would
+            // SAFETY: `p` is a live tree-path allocation, matching how `allocAligned` would
             // have routed it.
             self.tree.free(p);
         }

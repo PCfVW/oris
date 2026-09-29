@@ -109,6 +109,10 @@ pub const BlockHeader = extern struct {
     /// `this` must be live, with at least `@sizeOf(BlockHeader)` bytes valid after
     /// it (true for any block header ever installed by `tree.zig`).
     pub fn mem(this: *BlockHeader) [*]u8 {
+        // SAFETY: `this` is a live `*BlockHeader` with at least `@sizeOf(BlockHeader)` bytes
+        // valid (function contract), so the single-item-to-many-item cast is in
+        // bounds and the `+ @sizeOf(BlockHeader)` result is one-past the header, at
+        // most the end of that valid span.
         const base: [*]u8 = @ptrCast(this);
         return base + @sizeOf(BlockHeader);
     }
@@ -119,6 +123,10 @@ pub const BlockHeader = extern struct {
         const m = this.mem();
         const sz = this.size();
         const nxt = m + sz;
+        // SAFETY: the physical chain invariant (struct doc) makes `mem() + size()` the
+        // address of the next live `BlockHeader` (an arena block or the size-0 fence),
+        // so `nxt` lies inside the same arena and points at a valid header; the tree
+        // allocator's single-threaded use means no concurrent mutation.
         // ALIGN: `m` is 8-aligned (`this` is a `BlockHeader`, align 8;
         // `@sizeOf(BlockHeader)` is a multiple of 8) and `sz` is a multiple of 8
         // (caller-contract invariant documented on the struct above), so `nxt` is
@@ -133,6 +141,9 @@ pub const BlockHeader = extern struct {
     /// `target` must be at or after `this.mem()`.
     pub fn setNext(this: *BlockHeader, target: *BlockHeader) void {
         const m = this.mem();
+        // SAFETY: `@intFromPtr` on two valid pointers is total; nothing is dereferenced or
+        // rebuilt into a pointer here, and `target >= this.mem()` (function contract,
+        // asserted below) keeps the subtraction from underflowing.
         // PROVENANCE: both addresses are read only for the byte distance between
         // them, never reconstructed into a pointer here — `setSize` stores that
         // distance as a plain integer, and a later `next()` call is what re-derives
@@ -211,6 +222,9 @@ comptime {
 /// `ptr == header.mem()` for some live `header`).
 pub fn ptrGetBlockHeader(ptr: [*]u8) *BlockHeader {
     const header = ptr - @sizeOf(BlockHeader);
+    // SAFETY: `ptr == header.mem()` for a live header (function contract), so stepping
+    // back `@sizeOf(BlockHeader)` bytes lands on that live, initialised
+    // `BlockHeader` inside the same arena.
     // ALIGN: `ptr` is `header.mem()` for some live `header` (this function's
     // contract), which is 8-aligned (`mem` = `this + 16`, `this` already
     // 8-aligned); stepping back the same 16 bytes recovers that 8-aligned address.
@@ -232,6 +246,9 @@ pub const FreeNode = extern struct {
     /// stepping back `@sizeOf(BlockHeader)` bytes from it is a live, unused
     /// `BlockHeader`).
     pub fn getBlock(this: *FreeNode) *BlockHeader {
+        // SAFETY: `this` is a live free block's embedded `FreeNode` at `block.mem()`
+        // (function contract), so the byte view is in bounds and stepping back
+        // `@sizeOf(BlockHeader)` bytes lands on that block's live `BlockHeader`.
         const base: [*]u8 = @ptrCast(this);
         const header = base - @sizeOf(BlockHeader);
         // ALIGN: `this` is `block.mem()` for some live `block` (this function's
@@ -285,6 +302,9 @@ const Arena = struct {
     /// or otherwise chosen to be 8-aligned.
     fn headerAt(self: *Arena, offset: usize) *BlockHeader {
         std.debug.assert(offset % @alignOf(BlockHeader) == 0);
+        // SAFETY: test-only; `offset` is within the arena's `buf` (every call site uses
+        // offsets inside the allocated size) and `BlockHeader` is an `extern struct` of
+        // plain integers/pointers, so any zeroed 16 bytes is a valid header.
         const base: [*]u8 = @ptrCast(self.buf.ptr);
         const byte_ptr = base + offset;
         // ALIGN: `self.buf` is `[]u64`-backed (8-aligned by the type system);
@@ -330,6 +350,8 @@ test "next is computed from mem plus size" {
     installBlock(h, null, 64);
     const mem = h.mem();
     const nxt = h.next();
+    // SAFETY: test-only; `nxt` is a live `*BlockHeader` inside the arena, viewed as bytes
+    // only to compare its address.
     const nxt_bytes: [*]u8 = @ptrCast(nxt);
     try testing.expectEqual(@intFromPtr(mem) + 64, @intFromPtr(nxt_bytes));
 }
@@ -407,6 +429,9 @@ test "free node orders by owning block size" {
 
     var tree: rbtree.IntrusiveMultiRbTree(FreeNode) = .init();
     for (headers) |h| {
+        // SAFETY: test-only; `h.mem()` is 8-aligned (16 past an 8-aligned header) with
+        // >= 200 bytes of zeroed arena after it, ample for a `FreeNode`, which is
+        // valid for any zeroed bytes and is only ever used through the tree.
         const node: *FreeNode = @ptrCast(@alignCast(h.mem()));
         tree.insert(node);
     }
@@ -418,6 +443,7 @@ test "free node orders by owning block size" {
     try testing.expectEqual(@as(usize, 96), found.getBlock().size());
 
     for (headers) |h| {
+        // SAFETY: test-only; same node placement as the insert loop above, still live.
         const node: *FreeNode = @ptrCast(@alignCast(h.mem()));
         tree.erase(node);
     }

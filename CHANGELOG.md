@@ -153,11 +153,17 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Changed
 
+- **Zig `// SAFETY:` coverage and Rust rustdoc links (pre-existing gaps closed).** The
+  pre-v0.2.0 Zig code (`tree`, `block`, `bucket`, `align`, `os`, `rbtree`, `orisnitsa`,
+  `allocator`, `list`) justified raw-pointer operations without the literal
+  `// SAFETY:` tag `Zig/CONVENTIONS.md` requires; every such site now carries one
+  (comment-only change, no behavior difference). In Rust, four broken intra-doc links
+  reported by `cargo doc --document-private-items` (`tree.rs`, `rbtree.rs`,
+  `orisnik.rs`) are fixed.
 - **Phase 2 consistency pass (documentation, annotations, tests).** Applied both
   `CONVENTIONS.md` files to the Phase 2 code and removed prose the phase had made
-  stale: `// SAFETY:` tags on the Zig guard/poison call sites (the older Zig code in
-  `orisnitsa.zig`/`tree.zig` still justifies raw-memory code without the literal tag —
-  a pre-existing gap this pass deliberately did not rewrite), a mis-used
+  stale: `// SAFETY:` tags on the Zig guard/poison call sites (the older Zig code was
+  brought into line in the separate entry below), a mis-used
   `// PROVENANCE:` and a malformed `// CAST:` in Rust, an unannotated test index,
   explanations of why the bucket wrappers' `inflate(..).unwrap_or(..)` fallback is
   unreachable, `INSTALL.md`'s "currently inert" claim, "later phase" wording in

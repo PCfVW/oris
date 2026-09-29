@@ -85,6 +85,9 @@ pub fn writeGuard(comptime config: Config, ptr: [*]u8, requested_size: usize, se
 pub fn checkGuard(comptime config: Config, ptr: [*]u8, requested_size: usize) bool {
     const memory_guard_size = comptime guard.memoryGuardSize(config);
     comptime std.debug.assert(memory_guard_size > 0);
+    // SAFETY: `ptr` is valid and readable for `requested_size +
+    // memory_guard_size` bytes (this function's caller contract), so reading
+    // the byte at `requested_size` stays within that span.
     // INDEX: offset 0 is within `ptr`'s valid span (caller's contract: valid
     // for at least `memory_guard_size` trailing bytes, and the comptime assert
     // above guarantees that span is non-empty).
@@ -93,6 +96,9 @@ pub fn checkGuard(comptime config: Config, ptr: [*]u8, requested_size: usize) bo
     // reads carries most plainly as a local `var`, one comparison per
     // iteration — mirrors `check_guard`'s own `guardByte++` walk.
     for (1..memory_guard_size) |i| {
+        // SAFETY: `ptr` is readable for `requested_size + memory_guard_size`
+        // bytes (caller's contract), and `i < memory_guard_size`, so this read
+        // stays within that span.
         // INDEX: `i < memory_guard_size` (caller's contract, as above).
         const cur = ptr[requested_size + i];
         if (cur != prev +% 1) return false;

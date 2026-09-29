@@ -62,6 +62,12 @@ const vtable = std.mem.Allocator.VTable{
 /// `VTable.alloc` — see the module doc.
 fn allocImpl(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
     _ = ret_addr; // spomen's future callstack hook (v0.2.0+); unused for v0.1.0.
+    // SAFETY: `ctx` is the `.ptr` field of a `std.mem.Allocator` built only by
+    // `allocator()` above from a live `*Orisnitsa`, and this vtable is reachable
+    // only through such an `Allocator`, so the erased pointee really is a live
+    // `Orisnitsa`; the caller keeps that instance alive and unmoved (`Orisnitsa`'s
+    // address-stability contract), and the single-threaded contract rules out
+    // concurrent access.
     // ALIGN: `ctx` is always exactly the `*Orisnitsa` `allocator()` stored as
     // `.ptr` — a live, `@alignOf(Orisnitsa)`-aligned value before it was
     // type-erased to `*anyopaque`; `@alignCast` only re-establishes what the
@@ -82,6 +88,7 @@ fn resizeImpl(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_l
     // bucket `elemSize` query, neither of which takes an alignment parameter.
     _ = alignment;
     _ = ret_addr;
+    // SAFETY: `ctx` is a live `*Orisnitsa` from `allocator()`, as in `allocImpl`.
     // ALIGN: see `allocImpl`'s identical cast for why this is sound.
     const self: *Orisnitsa = @ptrCast(@alignCast(ctx));
     // `Orisnitsa.resize` asserts `size > 0` (as HPHA's own `resize` does), and a
@@ -97,6 +104,7 @@ fn resizeImpl(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_l
 /// `VTable.remap` — see the module doc's "`resize` vs `remap`" section.
 fn remapImpl(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
     _ = ret_addr;
+    // SAFETY: `ctx` is a live `*Orisnitsa` from `allocator()`, as in `allocImpl`.
     // ALIGN: see `allocImpl`'s identical cast for why this is sound.
     const self: *Orisnitsa = @ptrCast(@alignCast(ctx));
     if (new_len == 0) {
@@ -130,8 +138,12 @@ fn freeImpl(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_add
     // choice for the identical reason.
     _ = alignment;
     _ = ret_addr;
+    // SAFETY: `ctx` is a live `*Orisnitsa` from `allocator()`, as in `allocImpl`.
     // ALIGN: see `allocImpl`'s identical cast for why this is sound.
     const self: *Orisnitsa = @ptrCast(@alignCast(ctx));
+    // SAFETY: `memory` was returned by this vtable's `alloc`/`remap` (the
+    // `std.mem.Allocator.free` contract), so `memory.ptr` is a still-live
+    // allocation this instance produced, which is what `Orisnitsa.free` requires.
     self.free(memory.ptr);
 }
 

@@ -103,8 +103,14 @@ fn normalizeSize(size: usize) ?usize {
 /// being a multiple of `@sizeOf(BlockHeader)`).
 fn splitBlock(bl: *BlockHeader, size: usize) void {
     std.debug.assert(size % @sizeOf(BlockHeader) == 0);
+    // SAFETY: `bl` is a live header (function contract), so viewing it as its own
+    // first byte is valid; `split_point` stays inside `bl`'s span because
+    // `size + SPLIT_REMAINDER_MIN <= bl.size()` (function contract), leaving room for a
+    // whole `BlockHeader` there, exclusively owned (single-threaded).
     const bl_bytes: [*]u8 = @ptrCast(bl);
     const split_point = bl_bytes + (size + @sizeOf(BlockHeader));
+    // SAFETY: cast target is inside the span just established; alignment is proven by
+    // the ALIGN note below.
     // ALIGN: `bl` is a live `BlockHeader`, hence 8-aligned; `size` is a multiple of
     // `@sizeOf(BlockHeader)` (16) per this function's contract, and so is
     // `@sizeOf(BlockHeader)` itself, so `split_point` stays 8-aligned.
@@ -126,8 +132,13 @@ fn shiftBlock(bl: *BlockHeader, offs: usize) *BlockHeader {
     std.debug.assert(offs > 0);
     const prv = bl.prev.?;
     bl.unlink();
+    // SAFETY: `bl` is live (function contract); `offs <= bl.size()` (function
+    // contract) keeps `shifted` within `bl`'s own span, which the caller owns exclusively.
     const bl_bytes: [*]u8 = @ptrCast(bl);
     const shifted = bl_bytes + offs;
+    // SAFETY: `shifted` lies in the span above, and `bl` was just unlinked, so its
+    // header bytes are being relocated, not aliased by a live header; alignment per
+    // the ALIGN note below.
     // ALIGN: `bl` is 8-aligned; every alignment-offset call site in this module
     // only ever shifts by a multiple of `@sizeOf(BlockHeader)` (see `splitBlock`'s
     // contract doc for why every block's `mem()` is always `BlockHeader`-aligned,
@@ -259,6 +270,8 @@ pub fn Tree(comptime config: Config) type {
         fn addBlock(self: *Self, mem: [*]u8, size: usize) *BlockHeader {
             std.debug.assert(size % @sizeOf(BlockHeader) == 0);
             std.debug.assert(size >= 3 * @sizeOf(BlockHeader));
+            // SAFETY: `mem` is valid, exclusively owned for `size >= 3 * @sizeOf(BlockHeader)`
+            // bytes (function contract, asserted above), so a header fits at offset 0.
             // ALIGN: `mem` is `os.map`'s result, PAGE_SIZE-aligned, hence 8-aligned.
             const fence0: *BlockHeader = @ptrCast(@alignCast(mem));
             fence0.prev = null;
@@ -266,6 +279,8 @@ pub fn Tree(comptime config: Config) type {
             fence0.setUsed();
 
             const real_front_bytes = fence0.mem();
+            // SAFETY: `real_front_bytes` is at offset 16, and `size >= 48` (asserted above)
+            // leaves room for a second header there, disjoint from `fence0` and the end fence.
             // ALIGN: `fence0` is 8-aligned; `BlockHeader.mem` adds
             // `@sizeOf(BlockHeader)` (a multiple of 8), so `real_front_bytes` stays
             // 8-aligned.
@@ -275,6 +290,9 @@ pub fn Tree(comptime config: Config) type {
             real_front.setUsed();
 
             const end_fence_bytes = mem + (size - @sizeOf(BlockHeader));
+            // SAFETY: `end_fence_bytes` is the last `@sizeOf(BlockHeader)` bytes of the
+            // `size`-byte arena (function contract), disjoint from the front headers
+            // since `size >= 3 * @sizeOf(BlockHeader)`.
             // ALIGN: `mem` is 8-aligned; `size` and `@sizeOf(BlockHeader)` are both
             // multiples of 8, so `end_fence_bytes` stays 8-aligned.
             const end_fence: *BlockHeader = @ptrCast(@alignCast(end_fence_bytes));
@@ -330,6 +348,7 @@ pub fn Tree(comptime config: Config) type {
         fn extractAligned(self: *Self, size: usize, alignment: usize) ?*BlockHeader {
             if (self.mr_free_block) |best| {
                 const m = best.mem();
+                // SAFETY: address-arithmetic only; no pointer is formed or dereferenced.
                 // PROVENANCE: both addresses are read only for the byte distance
                 // between them, never reconstructed into a pointer here.
                 const alignment_offs = @intFromPtr(align_helpers.alignUp(m, alignment)) - @intFromPtr(m);
@@ -361,6 +380,8 @@ pub fn Tree(comptime config: Config) type {
                     // being checked *before* the loop body).
                     break;
                 }
+                // SAFETY: address-arithmetic only; `node` is a live tree node (from
+                // `lowerBound`/`succ`) and is not dereferenced through the integer.
                 // PROVENANCE: `node`'s address is read only for its bit pattern (fed
                 // into the same rounding arithmetic `align.roundUp` uses elsewhere),
                 // never reconstructed into a pointer — `node` itself is what's used
@@ -398,6 +419,9 @@ pub fn Tree(comptime config: Config) type {
                 // normalized to at least that), so a `FreeNode`/`SmallFreeNode` fits.
                 const mem = last.mem();
                 if (size > bucket.MAX_SMALL_ALLOCATION) {
+                    // SAFETY: `mem` is `last`'s free payload, at least `MIN_BLOCK_SIZE`
+                    // (>= `@sizeOf(FreeNode)`) bytes (see above), so a `FreeNode` fits and
+                    // nothing else references it while `last` is free.
                     // ALIGN: `mem` is `@sizeOf(BlockHeader)`-aligned (every block's
                     // `mem()` is, per `splitBlock`'s contract doc), hence 8-aligned —
                     // matches `FreeNode`'s alignment (its only field is `NodeBase`,
@@ -405,6 +429,8 @@ pub fn Tree(comptime config: Config) type {
                     const node: *FreeNode = @ptrCast(@alignCast(mem));
                     self.free_tree.insert(node);
                 } else {
+                    // SAFETY: same payload-size argument as the `FreeNode` cast above
+                    // (`SmallFreeNode` is no larger); `last` is free, so the payload is unused.
                     // ALIGN: same reasoning as the `FreeNode` cast above;
                     // `SmallFreeNode` is likewise align-8 (its only field is
                     // `ListLink`, align 8).
@@ -425,10 +451,16 @@ pub fn Tree(comptime config: Config) type {
             const size = bl.size();
             const mem = bl.mem();
             if (size > bucket.MAX_SMALL_ALLOCATION) {
+                // SAFETY: `bl` is a live free block indexed in the tree (size above
+                // `MAX_SMALL_ALLOCATION`, not the MR block), so its `mem()` holds the
+                // `FreeNode` written by `attach`.
                 // ALIGN: see `attach`'s identical cast for why this is 8-aligned.
                 const node: *FreeNode = @ptrCast(@alignCast(mem));
                 self.free_tree.erase(node);
             } else {
+                // SAFETY: `bl` is a live free block indexed in the small list (size at most
+                // `MAX_SMALL_ALLOCATION`, not the MR block), so its `mem()` holds the
+                // `SmallFreeNode` written by `attach`.
                 // ALIGN: see `attach`'s identical cast for why this is 8-aligned.
                 const node: *SmallFreeNode = @ptrCast(@alignCast(mem));
                 list.unlinkNode(node);
@@ -463,6 +495,7 @@ pub fn Tree(comptime config: Config) type {
             const new_bl_size = new_bl.size();
             std.debug.assert(new_bl_size >= sz);
             const mem = new_bl.mem();
+            // SAFETY: address-arithmetic only; no pointer is formed or dereferenced.
             // PROVENANCE: both addresses are read only for the byte distance between
             // them, never reconstructed into a pointer here.
             const alignment_offs = @intFromPtr(align_helpers.alignUp(mem, alignment)) - @intFromPtr(mem);
@@ -494,6 +527,7 @@ pub fn Tree(comptime config: Config) type {
             }
             new_bl.setUsed();
             const mem_out = new_bl.mem();
+            // SAFETY: address read for the alignment assert only; nothing is dereferenced.
             std.debug.assert(@intFromPtr(mem_out) % alignment == 0);
             return mem_out;
         }
@@ -549,6 +583,8 @@ pub fn Tree(comptime config: Config) type {
                 const merged_size_now = merged.size();
                 std.debug.assert(merged_size_now >= sz);
                 const new_ptr = merged.mem();
+                // SAFETY: both slices are within live, exclusively owned payloads: `ptr`
+                // (caller contract of `realloc`) and `new_ptr` (`merged`, size >= sz > bl_size).
                 // `ptr` is valid for `bl_size` bytes (its own pre-move size); `new_ptr`
                 // is `merged`'s own fresh payload start, with room for at least
                 // `bl_size` bytes (`merged`'s new size is `>= sz > bl_size`); the two
@@ -565,6 +601,8 @@ pub fn Tree(comptime config: Config) type {
             // Fall back: no physical neighbour can absorb the growth; allocate fresh,
             // copy, free the old block.
             const new_ptr = self.alloc(sz) orelse return null;
+            // SAFETY: `new_ptr` is a fresh `alloc(sz)` result (`sz > bl_size`) and `ptr`
+            // is live for `bl_size` bytes (caller contract of `realloc`); disjoint.
             // `new_ptr` was just allocated with room for at least `sz > bl_size`
             // bytes; `ptr` is valid for `bl_size` bytes; the two allocations never
             // overlap (freshly, independently allocated).
@@ -579,6 +617,7 @@ pub fn Tree(comptime config: Config) type {
         /// `ptr` must be a still-live tree-path allocation this instance produced,
         /// itself already aligned to `alignment`.
         pub fn reallocAligned(self: *Self, ptr: [*]u8, size: usize, alignment: usize) ?[*]u8 {
+            // SAFETY: address read for the alignment assert only; nothing is dereferenced.
             std.debug.assert(@intFromPtr(ptr) % alignment == 0);
             const sz = normalizeSize(size) orelse return null;
             // Same headroom requirement as `allocAligned`, which this falls back to.
@@ -613,6 +652,7 @@ pub fn Tree(comptime config: Config) type {
             const prev_size: usize = if (prev_used) 0 else prev.size() + @sizeOf(BlockHeader);
             const alignment_offs: usize = if (prev_used) 0 else blk: {
                 const prev_mem = prev.mem();
+                // SAFETY: address-arithmetic only; no pointer is formed or dereferenced.
                 // PROVENANCE: both addresses are read only for the byte distance
                 // between them, never reconstructed into a pointer here.
                 break :blk @intFromPtr(align_helpers.alignUp(prev_mem, alignment)) - @intFromPtr(prev_mem);
@@ -654,7 +694,11 @@ pub fn Tree(comptime config: Config) type {
                 const merged_size_now = merged.size();
                 std.debug.assert(merged_size_now >= sz);
                 const new_ptr = merged.mem();
+                // SAFETY: address read for the alignment assert only; nothing is dereferenced.
                 std.debug.assert(@intFromPtr(new_ptr) % alignment == 0);
+                // SAFETY: `ptr` is live for `bl_size` bytes (caller contract of
+                // `reallocAligned`); `new_ptr` is `merged`'s payload, size >= sz > bl_size,
+                // exclusively owned; overlap is handled by `@memmove`.
                 // `ptr` is valid for `bl_size` bytes; `new_ptr` has room for at least
                 // `bl_size` bytes; the ranges may overlap (growing in place).
                 @memmove(new_ptr[0..bl_size], ptr[0..bl_size]);
@@ -665,6 +709,8 @@ pub fn Tree(comptime config: Config) type {
                 return new_ptr;
             }
             const new_ptr = self.allocAligned(sz, alignment) orelse return null;
+            // SAFETY: `new_ptr` is a fresh `allocAligned(sz)` result (`sz > bl_size`) and
+            // `ptr` is live for `bl_size` bytes (caller contract); the two are disjoint.
             // `new_ptr` was just allocated with room for at least `bl_size` bytes;
             // `ptr` is valid for `bl_size` bytes; freshly, independently allocated,
             // so never overlapping.
@@ -743,6 +789,8 @@ pub fn Tree(comptime config: Config) type {
             const next_size = next.size();
             if (prev_prev == null and next_size == 0) {
                 self.detach(bl);
+                // SAFETY: `prev` is the live opening fence, the first bytes of the arena
+                // `addBlock` mapped (`prev_prev == null` above); viewing it as bytes is valid.
                 const mem_start: [*]u8 = @ptrCast(prev);
                 const bl_mem = bl.mem();
                 const bl_size = bl.size();
@@ -753,9 +801,12 @@ pub fn Tree(comptime config: Config) type {
                 // `bl.next()` by definition), live (established above);
                 // `@sizeOf(BlockHeader)` bytes past it stays within `next`'s own span.
                 const mem_end = past_payload + @sizeOf(BlockHeader);
+                // SAFETY: address-arithmetic only; `mem_start`/`mem_end` bound one arena
+                // (opening fence to closing fence), and no pointer is formed from the result.
                 // PROVENANCE: both addresses are read only for the byte distance
                 // between them, never reconstructed into a pointer here.
                 const size = @intFromPtr(mem_end) - @intFromPtr(mem_start);
+                // SAFETY: address read for the page-alignment assert only.
                 std.debug.assert(@intFromPtr(mem_start) % os.PAGE_SIZE == 0);
                 std.debug.assert(size % os.PAGE_SIZE == 0);
                 // `mem_start`/`size` describe exactly the arena `addBlock` originally
@@ -820,6 +871,8 @@ const FakeArena = struct {
     }
 
     fn ptr(self: *FakeArena) [*]u8 {
+        // SAFETY: `buf` is a live `[]u64` owned by this arena; reinterpreting its
+        // start as bytes only loosens alignment and stays within `buf`'s allocation.
         return @ptrCast(self.buf.ptr);
     }
 };

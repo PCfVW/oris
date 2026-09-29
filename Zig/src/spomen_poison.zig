@@ -54,6 +54,9 @@ pub fn fill(ptr: [*]u8, len: usize) void {
     // `for (s = 0; s < size; s++) p[s] = sFiller[s % 4];` loop, not a
     // functionally-equivalent rewrite.
     for (0..len) |i| {
+        // SAFETY: `ptr` is valid, writable and exclusively owned for `len` bytes
+        // (this function's caller contract) and `i < len`, so the raw write stays
+        // in bounds and races with no other live reference.
         // INDEX: `i < len`, so this stays within `ptr`'s valid span (caller's
         // contract: valid, writable and exclusively owned for `len` bytes).
         ptr[i] = byteAt(i);

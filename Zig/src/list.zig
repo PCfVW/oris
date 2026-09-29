@@ -172,7 +172,10 @@ pub fn IntrusiveList(comptime T: type) type {
             const head = self.headPtr();
             const first = head.next.?;
             if (first == head) return null;
-            // `first != head`, so it is a real node's link, not the sentinel.
+            // SAFETY: `first != head`, so it is a real node's link, not the sentinel;
+            // every non-sentinel link in this list is the embedded `link` field of a
+            // live `T` (`pushFront`/`pushBack` only ever link `*T` nodes), so
+            // `@fieldParentPtr` recovers that `T`.
             return @fieldParentPtr("link", first);
         }
     };

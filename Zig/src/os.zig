@@ -141,6 +141,9 @@ fn mapWindows(size: usize) ?[*]u8 {
     // VirtualAlloc returns null on failure and otherwise a pointer that aliases no
     // live allocation this program already made (it is fresh OS-backed memory).
     const raw = VirtualAlloc(null, size, MEM_COMMIT, PAGE_READWRITE) orelse return null;
+    // SAFETY: `raw` is non-null (checked by `orelse` above) and points at `size` freshly
+    // committed bytes; `*anyopaque` -> `[*]u8` only changes the pointee type, and
+    // `u8` has alignment 1, so no alignment requirement can be violated.
     const bytes: [*]u8 = @ptrCast(raw);
     // Windows' allocation granularity is documented as 64 KiB, matching PAGE_SIZE;
     // this holds unconditionally (`std.debug.assert`, present in Debug/ReleaseSafe,
@@ -186,11 +189,18 @@ fn mapUnix(size: usize) ?[*]u8 {
     // mmap's result is a raw byte-addressable region; `@ptrCast` reinterprets the
     // pointee type without touching the address (no alignment change: `u8` has the
     // loosest possible alignment requirement).
+    // SAFETY: `raw` is not `MAP_FAILED` (early return above), so it addresses `request`
+    // valid mapped bytes; the cast only changes the pointee type to align-1 `u8`.
     const base: [*]u8 = @ptrCast(raw);
+    // SAFETY: `base` is the start of a live `request`-byte mapping with `request >= size +
+    // PAGE_SIZE`, so rounding up by less than PAGE_SIZE keeps `aligned` and the
+    // following `size` bytes inside the mapping; only address arithmetic, no deref.
     // ALIGN: round the mapping's base address up to PAGE_SIZE — mmap only
     // guarantees native-page alignment, not PAGE_SIZE (64 KiB) alignment.
     const aligned = align_helpers.alignUp(base, PAGE_SIZE);
 
+    // SAFETY: `@intFromPtr` is total, and `aligned >= base` (`alignUp` never rounds
+    // down), so the subtraction cannot underflow.
     const head_len = @intFromPtr(aligned) - @intFromPtr(base);
     if (head_len > 0) {
         // ALIGN: `std.c.munmap` requires its pointer aligned to (at least) the
@@ -208,6 +218,8 @@ fn mapUnix(size: usize) ?[*]u8 {
     if (tail_len > 0) {
         // ALIGN: `aligned + size` is the end of the window being returned to the
         // caller; everything after it up to the mapping's end is unused slack.
+        // SAFETY: `aligned + size <= base + request` (`tail_len > 0` here), so `tail` is
+        // at most one-past-the-end of the live mapping and stays inside it.
         const tail = aligned + size;
         // ALIGN: `tail` is `aligned + size` — `aligned` is PAGE_SIZE-aligned (by
         // construction, via `alignUp` above) and `size` is a multiple of PAGE_SIZE
@@ -255,6 +267,8 @@ test "a multi-page region is writable end to end" {
     const size = PAGE_SIZE * 3;
     const ptr = map(size) orelse return error.TestUnexpectedResult; // "OS map failed"
     try std.testing.expectEqual(@as(usize, 0), @intFromPtr(ptr) % PAGE_SIZE);
+    // SAFETY: test-only; `ptr` is a live `map(size)` result, valid and writable for
+    // exactly `size` bytes until the `unmap` below.
     const slice = ptr[0..size];
     @memset(slice, 0xAB);
     try std.testing.expect(std.mem.allEqual(u8, slice, 0xAB));

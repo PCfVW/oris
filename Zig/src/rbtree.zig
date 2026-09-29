@@ -124,6 +124,9 @@ pub const NodeBase = extern struct {
 
     /// The node's parent, or `null` if it is a chained, non-attached duplicate.
     pub fn parentPtr(this: *NodeBase) ?*NodeBase {
+        // SAFETY: a nonzero `addr` is a live, 8-aligned `*NodeBase` address; this
+        // field is only written via `setParentPtr` (from `@intFromPtr` of a live node)
+        // or the sentinel's self-link, and `untagLink` strips exactly the tag bits.
         // PROVENANCE: `addr` is either `0` (see `isAttached`) or was produced by
         // `@intFromPtr` on a live `*NodeBase` in `setParentPtr` — the only writer of
         // this field — so reconstructing it here is always sound.
@@ -171,6 +174,8 @@ pub const NodeBase = extern struct {
     /// Replaces the parent pointer (possibly `null`), preserving the current
     /// colour/side tag.
     fn setParentPtr(this: *NodeBase, val: ?*NodeBase) void {
+        // SAFETY: pure address read of a typed, live `*NodeBase` (`val`'s contract);
+        // nothing is dereferenced or reconstructed here, and `setLink` preserves the tag bits.
         // PROVENANCE: `v` is a live `*NodeBase` (the new parent, or the tree's own
         // sentinel); its address is read only to store in the tagged `parent` field,
         // reconstructed later via `parentPtr`'s `@ptrFromInt`.
@@ -520,6 +525,8 @@ pub fn IntrusiveMultiRbTree(comptime T: type) type {
                 self.head.children[1] = &self.head;
                 self.head.neighbours[0] = &self.head;
                 self.head.neighbours[1] = &self.head;
+                // SAFETY: address read of `self.head`, a field of the live `*Self` the
+                // caller holds; the untagged address is what `parentPtr` later inverts.
                 // PROVENANCE: `&self.head` is the tree's own sentinel field, live for
                 // as long as `self` is; self-referential address, reconstructed via
                 // `parentPtr`'s `@ptrFromInt` like any other node's parent link.

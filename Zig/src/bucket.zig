@@ -182,6 +182,8 @@ pub const Page = extern struct {
     /// this page's own stored, address-mixed marker. Ports `page::check_marker`.
     pub fn checkMarker(this: *Page, marker: u32) bool {
         const stored = this.marker;
+        // SAFETY: `this` is a valid `*Page` (a live reference), so `@intFromPtr` is
+        // total; the address is only truncated into a marker, never dereferenced.
         // PROVENANCE: address read for its bit pattern only, never turned back
         // into a pointer — no provenance is created or consumed here.
         // CAST: usize -> u32, truncating `this`'s own address — mirrors how the
@@ -204,11 +206,17 @@ comptime {
 /// `Buckets.grow`, which maps the page via `systemAlloc` and then calls
 /// `initPageAt` on it) previously initialized.
 pub fn ptrGetPage(ptr: [*]u8) *Page {
+    // SAFETY: `ptr` points into a page initialized by `initPageAt` (function contract),
+    // i.e. inside a live PAGE_SIZE-aligned, PAGE_SIZE-byte mapping, so rounding down
+    // yields that mapping's base and the tail offset below stays in the mapping.
     // ALIGN: round down to the PAGE_SIZE-aligned mapping base (`os.map`'s
     // guarantee, relied on transitively via this function's own contract), then
     // step forward to the Page struct's fixed tail position.
     const page_base = align_helpers.alignDown(ptr, os.PAGE_SIZE);
     const page = page_base + (os.PAGE_SIZE - @sizeOf(Page));
+    // SAFETY: `page` is the tail slot `initPageAt` wrote a fully initialized `Page` into
+    // (function contract), in bounds of the mapping and not aliased by any slot
+    // (slots occupy only `usable` bytes); single-threaded, so no concurrent access.
     // ALIGN: `page_base` is PAGE_SIZE-aligned (hence 8-aligned) and
     // `PAGE_SIZE - @sizeOf(Page)` is a multiple of 8 (PAGE_SIZE is, @sizeOf(Page)
     // is), so `page` is 8-aligned — matches `@alignOf(Page)`.
@@ -224,6 +232,7 @@ pub fn ptrGetPage(ptr: [*]u8) *Page {
 /// concurrently accessed. `elem_size` must be a bucket size class
 /// (`bucketSpacingFunctionInverse` of some index `< NUM_BUCKETS`).
 fn initPageAt(mem: [*]u8, elem_size: usize, marker: u32) *Page {
+    // SAFETY: `@intFromPtr` is total; this only checks the caller-contract alignment.
     std.debug.assert(@intFromPtr(mem) % os.PAGE_SIZE == 0);
     std.debug.assert(elem_size > 0);
     // The largest multiple of elem_size that leaves room for a trailing Page.
@@ -236,6 +245,10 @@ fn initPageAt(mem: [*]u8, elem_size: usize, marker: u32) *Page {
     // `i` is the state (byte offset of the slot being linked), not expressible as
     // an iterator over raw, uninitialized-until-written memory.
     while (i < n - elem_size) {
+        // SAFETY: `i < n - elem_size` and `n <= usable = PAGE_SIZE - @sizeOf(Page)`, so
+        // both `slot` and `next_slot` lie wholly inside the `PAGE_SIZE` bytes `mem` is
+        // valid for (function contract); the memory is uninitialized, so the
+        // `FreeLink` is only written, never read, before `slot_link.next` is set.
         const slot = mem + i;
         // ALIGN: `mem` is PAGE_SIZE-aligned (this function's contract, >= 8); `i`
         // is a multiple of `elem_size`, itself always a multiple of
@@ -249,6 +262,9 @@ fn initPageAt(mem: [*]u8, elem_size: usize, marker: u32) *Page {
         slot_link.next = next_link;
         i += elem_size;
     }
+    // SAFETY: the loop exits with `i == n - elem_size`, so the last slot is entirely
+    // within `usable` bytes of the page (`mem` valid for PAGE_SIZE, function contract)
+    // and does not overlap the tail `Page`.
     const last_slot = mem + i;
     // ALIGN: same reasoning as `slot` above (`i` is a multiple of 8).
     const last_link: *FreeLink = @ptrCast(@alignCast(last_slot));
@@ -258,6 +274,8 @@ fn initPageAt(mem: [*]u8, elem_size: usize, marker: u32) *Page {
     // ALIGN: `mem` is PAGE_SIZE-aligned and valid for PAGE_SIZE bytes (this
     // function's contract), so `ptrGetPage` finds the correct, in-bounds tail slot.
     const page = ptrGetPage(mem);
+    // SAFETY: `page` is a valid pointer to the (still uninitialized) tail slot; only its
+    // address is read, so nothing uninitialized is touched.
     // PROVENANCE: address read for its bit pattern only, never turned back into a
     // pointer — no provenance is created or consumed here.
     // CAST: usize -> u32, truncating the page's own address to mix into its
@@ -267,6 +285,8 @@ fn initPageAt(mem: [*]u8, elem_size: usize, marker: u32) *Page {
     // CAST: usize -> u16, checked — `bucketSpacingFunctionAligned` always returns
     // a value < NUM_BUCKETS (32), which fits comfortably in u16.
     const bucket_index: u16 = @intCast(bucketSpacingFunctionAligned(elem_size));
+    // SAFETY: slot 0 starts at `mem`, which is valid for PAGE_SIZE bytes and was just
+    // threaded above as a `FreeLink`, so it is the initialized head of the free list.
     // ALIGN: `mem` is PAGE_SIZE-aligned (this function's contract), hence 8-aligned.
     const free_list: *FreeLink = @ptrCast(@alignCast(mem));
     page.* = .{
@@ -300,6 +320,8 @@ pub const Bucket = struct {
     /// `Page.checkMarker`'s sanity check (never state-transition logic), so this
     /// substitution doesn't touch the cross-port invariant. Ports `bucket::marker`.
     pub fn marker(self: *Bucket) u32 {
+        // SAFETY: `self` is a valid `*Bucket`, so `@intFromPtr` is total; the address is
+        // truncated into a marker and never dereferenced.
         // PROVENANCE: address read for its bit pattern only, never turned back
         // into a pointer — no provenance is created or consumed here.
         // CAST: usize -> u32, truncating this bucket's own address (matches
@@ -343,6 +365,9 @@ pub const Bucket = struct {
             list.unlinkNode(page);
             self.pages.pushBack(page);
         }
+        // SAFETY: `free_head` is non-null (asserted above, page not full per function
+        // contract) and points at a slot of `page` at least 8 bytes large; the
+        // slot leaves the free list here, so the caller becomes its sole owner.
         return @ptrCast(free_head.?);
     }
 
@@ -353,6 +378,10 @@ pub const Bucket = struct {
     /// `alloc`, not currently free.
     fn free(self: *Bucket, page: *Page, ptr: [*]u8) void {
         const free_head = page.free_list;
+        // SAFETY: `ptr` is a slot this bucket handed out from `page` and is not currently
+        // free (function contract), so it is valid for a `FreeLink` (slots are >= 8
+        // bytes) and no live user reference aliases it once it is being freed.
+        // ALIGN: slots are 8-aligned (established in `initPageAt`).
         const link: *FreeLink = @ptrCast(@alignCast(ptr));
         link.next = free_head;
         page.free_list = link;
@@ -477,10 +506,12 @@ pub fn Buckets(comptime config: Config) type {
             const elem_size = page.elemSize();
             if (size <= elem_size) return ptr;
             const new_ptr = self.alloc(size) orelse return null;
-            // `ptr` is valid for `elem_size` bytes (its slot's own size, an upper
+            // SAFETY: `ptr` is valid for `elem_size` bytes (its slot's own size, an upper
             // bound on the live payload within it); `new_ptr` was just allocated with
             // room for at least `size > elem_size` bytes — copying `elem_size` bytes
             // fits in both.
+            // (Slices are formed over raw slot memory; the two slots are distinct, so
+            // the ranges cannot overlap as `@memcpy` requires.)
             @memcpy(new_ptr[0..elem_size], ptr[0..elem_size]);
             // `ptr` is a live bucket-path allocation this instance produced (this
             // function's contract), not used again after this call.
@@ -604,6 +635,9 @@ pub fn Buckets(comptime config: Config) type {
                         // `PAGE_SIZE - @sizeOf(Page)` bytes into its owning
                         // PAGE_SIZE-aligned mapping (the type's own invariant); rounding
                         // its address down recovers that mapping's base.
+                        // SAFETY: `page` is a live `*Page` (just unlinked, not yet freed),
+                        // so viewing it as a byte pointer is in bounds; the mapping is
+                        // only released below, after this address is consumed.
                         const page_bytes: [*]u8 = @ptrCast(page);
                         const mem = align_helpers.alignDown(page_bytes, os.PAGE_SIZE);
                         // `mem` is the live mapping `page` belongs to (established
@@ -638,6 +672,8 @@ const FakePage = struct {
     }
 
     fn ptr(self: *FakePage) [*]u8 {
+        // SAFETY: test-only; `buf` is a live, PAGE_SIZE-aligned, PAGE_SIZE-byte heap
+        // allocation until `deinit`, satisfying `initPageAt`'s `mem` contract.
         return self.buf.ptr;
     }
 };
@@ -778,9 +814,11 @@ test "Buckets.realloc grows in place within the same class" {
 test "Buckets.realloc moves to a larger class and copies" {
     var buckets: Buckets(.{}) = .init();
     const ptr = buckets.alloc(8) orelse return error.TestUnexpectedResult; // "OS map failed"
+    // SAFETY: test-only; `ptr` is a live 8-byte-class slot (`alloc(8)`), valid for 8 bytes.
     @memset(ptr[0..8], 0xAB);
     const grown = buckets.realloc(ptr, 200) orelse return error.TestUnexpectedResult; // "OS map failed"
     try testing.expect(ptr != grown); // 200 bytes needs a different size class
+    // SAFETY: test-only; `grown` is a live slot from a >= 200-byte class, valid for 8 bytes.
     try testing.expect(std.mem.allEqual(u8, grown[0..8], 0xAB)); // realloc must preserve payload bytes
     buckets.free(grown);
     buckets.purge();
