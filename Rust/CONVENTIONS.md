@@ -582,10 +582,11 @@ from how they behave:
   themselves off for good (the panic message and payload are allocated unrecorded).
 - **Re-entrancy.** While a hook runs, `busy` makes nested `alloc`/`free`/`realloc` calls skip
   every hook; everything a hook allocates must also be freed inside a hook, so an unrecorded
-  block is never freed by a non-busy call. No hook allocates from its own instance today
-  (see the next rule), so this is the enforced invariant rather than a live hazard; anything
-  new that does allocate inside a hook (`report()`'s formatting while iterating the store)
-  must run under the same flag.
+  block is never freed by a non-busy call. No hook allocates from its own instance (see the
+  next rule), so for the hooks proper this is an enforced invariant rather than a live hazard;
+  `report()`/`write_report` are where it earns its keep — their formatting can allocate while
+  the record tree is walked — and hold the flag. Anything new that allocates while iterating
+  the store must do the same.
 - **`#[global_allocator]`.** std's backtrace lock is process-wide and non-reentrant, and std
   allocates while holding it, so an allocator that captures a backtrace inside `alloc`
   deadlocks against application code that is itself capturing one (a panic hook with
@@ -595,6 +596,22 @@ from how they behave:
   `panic = "abort"` (unwinding out of a global allocator is undefined behaviour).
   `tests/debug_global_allocator.rs` pins the deadlock (it hangs without the rule); the
   `panic = "abort"` requirement cannot be tested in-process and is documentation only.
+
+**Teardown (`Drop for Orisnik`).** Dropping releases every fully-idle bucket page and tree
+arena in *every* build (HPHA's destructor begins with `purge()`); with `debug-allocator` it
+first audits and reports any still-live allocation (a leak), releases the idle memory, and then
+panics (skipped while the thread is already unwinding, where a second panic would abort). It
+must **not** call `purge()`: `drop` receives a protected `&mut self`, and purging rewrites the
+free tree and page lists through pointers derived earlier. Beyond that, Miri established three
+rules that apply to *any* teardown of an intrusive structure (see `list.rs`'s "`Drop` and
+`&mut self`" section): write into `self` (flags, counters) **first, or not at all** — a write
+after a foreign read is undefined; **never dereference a sentinel through a pointer stored in a
+node** (the red-black tree's `succ`/`is_nil` do; teardown uses `visit_all_readonly`, which
+compares against the sentinel by address); and remember that **a `Box` retags** — for an
+allocator moved into a `Box` (`oris_destroy`) every pointer stored before the move is foreign,
+so one foreign read makes the box's deallocation undefined. Consequently the debug leak audit
+walks the record *book* (storage order), while the public `report()` walks the record tree
+(address order). `orisnitsa` has no aliasing model, so its `deinit` just calls `purge`.
 
 Never use `assert!` (always-on) on the hot path for an invariant that `debug_assert!` can carry
 — it would tax every release-build allocation.

@@ -50,13 +50,16 @@ export fn oris_new() *Orisnitsa {
 ///
 /// `handle` must be a still-live result of `oris_new` (or `null`, in which case
 /// this is a no-op), not yet destroyed, and not used again after this call — by
-/// this function or any other `oris_*` call. Every allocation made through
-/// `handle` should already be freed or intentionally leaked first: destroying the
-/// instance does not return its outstanding OS pages/arenas (matching HPHA, which
-/// never returns memory to the OS except via an explicit `purge()`) — call
-/// `oris_purge` beforehand if reclaiming that memory matters.
+/// this function or any other `oris_*` call. Destroying the instance returns every
+/// idle OS page/arena it still holds (HPHA's destructor begins with `purge()`, and
+/// `Orisnitsa.deinit` does the same), so a C caller gets the memory back without a
+/// separate `oris_purge`. Pages that still hold a live block stay mapped: a block
+/// not freed before this call leaks its page. The C-ABI is fixed to the default,
+/// non-debug `Orisnitsa`, so there is no leak audit and nothing is printed or
+/// panicked.
 export fn oris_destroy(handle: ?*Orisnitsa) void {
     const h = handle orelse return;
+    h.deinit();
     handle_allocator.destroy(h);
 }
 
@@ -217,4 +220,20 @@ test "C-ABI aligned alloc and free-with-size" {
 
 test "oris_destroy on a null handle is a no-op" {
     oris_destroy(null);
+}
+
+test "oris_destroy returns idle memory without a prior oris_purge" {
+    // Kills: dropping `h.deinit()` from `oris_destroy` (the bucket page and tree arena
+    // would stay mapped, so the live-mapping count would not return to its start). The
+    // handle itself comes from `page_allocator`, not `os.map`, so it is not counted.
+    const os = @import("os.zig");
+    const before = os.test_vm.liveMappings();
+    const handle = oris_new();
+    const big = oris_alloc(handle, 5000) orelse return error.TestUnexpectedResult;
+    const small = oris_alloc(handle, 100) orelse return error.TestUnexpectedResult;
+    try testing.expect(os.test_vm.liveMappings() > before);
+    oris_free(handle, big);
+    oris_free(handle, small);
+    oris_destroy(handle); // deliberately no oris_purge first
+    try testing.expectEqual(before, os.test_vm.liveMappings());
 }

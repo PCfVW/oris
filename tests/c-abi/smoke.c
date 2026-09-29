@@ -71,5 +71,17 @@ int main(void) {
     oris_destroy(NULL);
 
     oris_destroy(h);
+
+    /* A second instance, allocated from and freed, is destroyed WITHOUT a purge:
+     * oris_destroy itself returns the idle pages/arenas (HPHA's destructor begins
+     * with purge()), and must neither crash nor complain. */
+    OrisAllocator *h2 = oris_new();
+    assert(h2 != NULL);
+    void *a2 = oris_alloc(h2, 5000);
+    void *b2 = oris_alloc(h2, 100);
+    assert(a2 != NULL && b2 != NULL);
+    oris_free(h2, a2);
+    oris_free(h2, b2);
+    oris_destroy(h2);
     return 0;
 }

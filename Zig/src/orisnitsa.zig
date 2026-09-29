@@ -14,8 +14,9 @@
 //! HPHA's `debug_*`) own the guard seed, the ramp, the allocation record and the
 //! poisoning, and are called by the public methods at the points HPHA's own
 //! `alloc`/`realloc`/`resize`/`free`/`purge` call them — except one extra, state-neutral
-//! `debugCheck` in `reallocAligned`'s misaligned-move branch. `check()`/`report()` and leak
-//! detection follow in later phases. With `config.debug` false,
+//! `debugCheck` in `reallocAligned`'s misaligned-move branch. `check()`, `report()` and leak
+//! detection are here too: `deinit()` returns all idle memory in every build and, with
+//! `config.debug`, audits and reports live blocks then fails on the leak. With `config.debug` false,
 //! `guard.memoryGuardSize(config)` is 0, so every
 //! `+`/`- memoryGuardSize(config)` site below is dead code the compiler removes,
 //! restoring v0.1.x's exact guard-free arithmetic — the same "cancels out and is
@@ -59,12 +60,13 @@ const Record = spomen_record.Record;
 const Source = spomen_record.Source;
 const Corruption = spomen_failure.Corruption;
 const VerifyError = spomen_failure.VerifyError;
+const OrisError = spomen_failure.OrisError;
 
 /// How many times each debug hook has run — a plain-counter seam that lets tests prove
 /// the hooks are actually wired into dispatch at HPHA's call sites. Zig cannot catch a
 /// panic, so a deleted hook call would otherwise change nothing observable. The seam
 /// counts hook *invocations* only; it never lets dispatch continue past a detected
-/// corruption (see `Zig/CONVENTIONS.md`). Phase 5's `report()` is expected to reuse it.
+/// corruption (see `Zig/CONVENTIONS.md`). `report()` does not use it: it exists for the wiring tests.
 /// Counted at the point a hook does real work: `adds`/`replaces` skip a null pointer
 /// (a failed allocation/realloc is not an add/replace).
 pub const HookStats = struct {
@@ -153,9 +155,13 @@ pub fn isHphaAlignment(alignment: usize) bool {
 ///
 /// **Single-threaded only** — see the module doc's "`&self` vs `*Self`" section.
 ///
-/// **A `config.debug` instance must be `deinit`ed.** It owns the record store's OS
-/// pages, which nothing else returns: skipping `deinit()` leaks them (`purge` only
-/// returns the *spare* ones). `Orisnitsa(.{})` owns nothing `deinit` releases.
+/// **`deinit` must be called**, in every build: it returns every idle bucket page and tree
+/// arena to the OS (HPHA's destructor begins with `purge()`), and with `config.debug` it
+/// also returns the record store's pages (which nothing else does — `purge` only returns
+/// the *spare* ones) and audits for leaks: any allocation still live is reported to stderr
+/// and then fails the teardown with a panic, after everything else has been released
+/// (HPHA's destructor asserts). Pages that still hold a live block stay mapped. Without
+/// `config.debug` nothing is checked or printed.
 ///
 /// Generic over the `spomen` debug-subsystem `Config` (see `Zig/CONVENTIONS.md`'s
 /// "`comptime` Toggles" section): `Orisnitsa(config)`, not a plain `Orisnitsa`
@@ -219,14 +225,37 @@ pub fn Orisnitsa(comptime config: Config) type {
             return .{};
         }
 
-        /// Releases the debug record store's OS pages (`records.deinit()`) when
-        /// `config.debug`; a no-op otherwise. Zig has no `Drop`, so a debug
-        /// instance's owner must call this (the `Orisnitsa(.{})` default owns nothing
-        /// that needs it). It does **not** free outstanding allocations or return the
-        /// bucket/tree pages — `purge` does the latter, once everything is freed. The
-        /// instance must not be used afterwards.
+        /// Tears the allocator down: returns every fully-idle bucket page and tree
+        /// arena to the OS — in **every** build (HPHA's `~allocator` begins with
+        /// `purge()`) — and, with `config.debug`, first audits and reports any
+        /// allocation still live, then fails on a leak once everything else has been
+        /// released (HPHA's destructor asserts). Pages that still hold a live block stay
+        /// mapped. Zig has no `Drop`, so the owner must call this; the instance must not
+        /// be used afterwards. Without `config.debug` nothing is checked or printed.
+        ///
+        /// Order (debug): (1) if `records.len() > 0`, print to stderr a summary line, the
+        /// first problem the audit finds and the report (head, one line per live record,
+        /// foot), before the record store is released — mirroring HPHA's check-then-report.
+        /// Unlike the public `check` (address order), this audit and the report walk the
+        /// records in *storage* order, so the "first problem" is the first in storage order
+        /// (see `debugTeardownTo`); (2) `purge()`; (3) `records.deinit()`;
+        /// (4) if anything leaked, `std.debug.panic`. Zig panics do not unwind, so there is
+        /// no "already panicking" case to skip and no `disabled` latch. The non-panicking
+        /// part is `deinitReturningLeaks`, which the tests call.
         pub fn deinit(self: *Self) void {
+            const leaked = self.deinitReturningLeaks();
+            if (config.debug and leaked > 0) spomen_failure.failOnLeak(leaked);
+        }
+
+        /// `deinit` without the final panic: audits and reports leaks (debug), releases
+        /// all idle memory and the record store, and returns how many allocations were
+        /// still live (always `0` without `config.debug`). Exists so a test can observe a
+        /// leaking teardown, which `deinit` itself ends in a panic no Zig test can catch.
+        fn deinitReturningLeaks(self: *Self) usize {
+            const leaked = if (config.debug) self.debugTeardown() else 0;
+            self.purge();
             if (config.debug) self.records.deinit();
+            return leaked;
         }
 
         /// Latches this instance's address on first use and, on every later call,
@@ -637,6 +666,168 @@ pub fn Orisnitsa(comptime config: Config) type {
         fn debugPurge(self: *Self) void {
             self.stats.purges += 1;
             self.records.purge();
+        }
+
+        // ---- check(), report() and leak detection ----------------------------------
+
+        /// The problem with one live allocation, if any: its recorded size must fit the
+        /// block and its guard ramp must be intact. Ports the per-record assertions of
+        /// `allocator::check`.
+        fn auditRecord(self: *Self, record: *Record) ?Corruption {
+            // SAFETY: `record.ptr` is a live allocation this instance produced (it has a
+            // record), exactly what `querySize` requires.
+            const usable = self.querySize(record.ptr);
+            if (record.size > usable) return .{ .oversized = usable };
+            // SAFETY: `record.ptr` is valid for `record.size + memoryGuardSize(config)`
+            // bytes (its recorded size fits the block, checked just above).
+            if (!record.checkGuard(config)) return .guard_overrun;
+            return null;
+        }
+
+        /// Audits every live allocation and returns the first problem found, without
+        /// changing anything and without panicking. Ports `allocator::check` (which
+        /// `assert`s each record's size against the block's size and its guard ramp): for
+        /// every record, in *address* order, the recorded size must fit the block and the
+        /// trailing guard ramp must still be intact. Stops at the first mismatch, like
+        /// HPHA. Only available when `config.debug`.
+        ///
+        /// A hook-detected corruption panics; this is the way to *ask* instead, e.g. from a
+        /// test or a periodic self-check. If `diagnostic` is non-null it receives the
+        /// human-readable description of the problem (block address, sizes, and where the
+        /// block was allocated, as raw return addresses); no allocation happens either way.
+        ///
+        /// Returns `error.Corruption` for the first record found overrun or inconsistent.
+        /// (`error.Os` is reserved and never returned yet.)
+        pub fn check(self: *Self, diagnostic: ?*spomen_failure.Diagnostic) OrisError!void {
+            comptime std.debug.assert(config.debug);
+            self.debugAssertNotMoved();
+            // A reused `Diagnostic` must not keep a stale message after a clean audit.
+            if (diagnostic) |d| d.len = 0;
+            var cursor = self.records.first();
+            // EXPLICIT: address-order tree walk; `cursor` is the state (the successor is
+            // re-derived from the tree each step), not expressible as an iterator.
+            while (cursor) |record| {
+                // Latched first: nothing below changes the store, but this keeps the walk
+                // robust should a future caller interleave allocations.
+                cursor = self.records.next(record);
+                if (self.auditRecord(record)) |problem| {
+                    if (diagnostic) |d| d.set(problem, record.ptr, record);
+                    return error.Corruption;
+                }
+            }
+        }
+
+        /// Writes a report of the allocator's state to `writer`: total requested and
+        /// allocated bytes, then one entry per live allocation in *address* order (address,
+        /// requested size, and where it was allocated as raw return addresses). Ports
+        /// `allocator::report`, which `printf`s the same content to stdout. Only available
+        /// when `config.debug`. It allocates nothing itself, and cannot re-enter the
+        /// allocator: the store maps its pages through `os.map`, never an allocator.
+        pub fn report(self: *Self, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+            comptime std.debug.assert(config.debug);
+            try self.writeReportHead(writer);
+            var cursor = self.records.first();
+            // EXPLICIT: address-order tree walk; `cursor` is the state, as in `check`.
+            while (cursor) |record| {
+                cursor = self.records.next(record);
+                try writeRecordLine(record, writer);
+            }
+            try writeReportFoot(writer);
+        }
+
+        /// `report`, written to standard error (best effort: a failed write has nowhere to
+        /// be reported).
+        pub fn reportToStderr(self: *Self) void {
+            comptime std.debug.assert(config.debug);
+            var buffer: [512]u8 = undefined;
+            const stderr = std.debug.lockStderr(&buffer);
+            defer std.debug.unlockStderr();
+            const writer = &stderr.file_writer.interface;
+            self.report(writer) catch {};
+            writer.flush() catch {};
+        }
+
+        fn writeReportHead(self: *Self, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+            try writer.writeAll("REPORT =================================================\n");
+            try writer.print("Total requested size={d} bytes\n", .{self.requested()});
+            try writer.print("Total allocated size={d} bytes\n", .{self.allocated()});
+            try writer.writeAll("Currently allocated blocks:\n");
+        }
+
+        fn writeReportFoot(writer: *std.Io.Writer) std.Io.Writer.Error!void {
+            try writer.writeAll("===========================================================\n");
+        }
+
+        /// One live allocation's entry in the report: address, requested size, and the
+        /// allocation callstack as raw return addresses (none if none was captured).
+        fn writeRecordLine(record: *const Record, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+            // PROVENANCE: address read for its bit pattern only (it is printed).
+            try writer.print("ptr=0x{x}, size={d}", .{ @intFromPtr(record.ptr), record.size });
+            for (record.callstack) |frame| {
+                if (frame == 0) break; // the unused tail is zero-filled
+                try writer.print("\n  0x{x}", .{frame});
+            }
+            try writer.writeByte('\n');
+        }
+
+        /// The leak half of `deinit`, run first (before the record store is released): if
+        /// any allocation is still live, audits it and prints the report to stderr — HPHA's
+        /// `~allocator`'s `check(); report();`. Returns how many allocations leaked. The
+        /// stderr wrapper around `debugTeardownTo`, which holds the logic (and is what the
+        /// tests read).
+        fn debugTeardown(self: *Self) usize {
+            if (self.records.len() == 0) return 0;
+            var buffer: [512]u8 = undefined;
+            const stderr = std.debug.lockStderr(&buffer);
+            defer std.debug.unlockStderr();
+            const writer = &stderr.file_writer.interface;
+            defer writer.flush() catch {};
+            return self.debugTeardownTo(writer);
+        }
+
+        /// `debugTeardown`'s content, written to `writer`; returns the leak count and
+        /// writes nothing when there is none. In order: a summary line
+        /// (`orisnitsa: N allocation(s) were still live when the allocator was dropped`),
+        /// then — if any block is overrun or has an oversized record — one
+        /// `orisnitsa: <description>` line for the first such block, then the report head,
+        /// one `ptr=0x…, size=N` entry per live record, and the foot.
+        ///
+        /// Both the audit and the listing walk the record book in *storage* order (the order
+        /// the records sit in the book, which a removal from the middle perturbs), so the two
+        /// ports' leak reports list blocks alike — `orisnik` needs that for an aliasing
+        /// reason Zig does not have. The public `check`/`report` use address order.
+        fn debugTeardownTo(self: *Self, writer: *std.Io.Writer) usize {
+            const leaked = self.records.len();
+            if (leaked == 0) return 0;
+            const Probe = struct {
+                orisnitsa: *Self,
+                diagnostic: spomen_failure.Diagnostic = .{},
+                found: bool = false,
+                writer: *std.Io.Writer,
+
+                fn audit(probe: *@This(), record: *Record) void {
+                    if (probe.found) return;
+                    if (probe.orisnitsa.auditRecord(record)) |problem| {
+                        probe.found = true;
+                        probe.diagnostic.set(problem, record.ptr, record);
+                    }
+                }
+
+                fn line(probe: *@This(), record: *Record) void {
+                    writeRecordLine(record, probe.writer) catch {};
+                }
+            };
+            var probe: Probe = .{ .orisnitsa = self, .writer = writer };
+            writer.print(
+                "orisnitsa: {d} allocation(s) were still live when the allocator was dropped\n",
+                .{leaked},
+            ) catch {};
+            self.records.forEachLive(&probe, Probe.audit);
+            if (probe.found) writer.print("orisnitsa: {s}\n", .{probe.diagnostic.message()}) catch {};
+            self.writeReportHead(writer) catch {};
+            self.records.forEachLive(&probe, Probe.line);
+            writeReportFoot(writer) catch {};
+            return leaked;
         }
 
         /// Allocates `size` bytes at `block.DEFAULT_ALIGNMENT`. `size == 0` returns
@@ -1299,7 +1490,9 @@ test "Orisnitsa(.{ .debug = true }) round-trips identically to the default insta
     // still match the default instantiation exactly, even though the two
     // internally claim different bucket size classes for this request.
     var orisnitsa: Orisnitsa(.{ .debug = true }) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     const ptr = orisnitsa.alloc(64) orelse return error.TestUnexpectedResult; // "OS map failed"
     @memset(ptr[0..64], 0xAB);
     try testing.expectEqual(@as(usize, 64), orisnitsa.querySize(ptr));
@@ -1312,6 +1505,17 @@ test "Orisnitsa(.{ .debug = true }) round-trips identically to the default insta
 // `spomen_guard`'s own unit tests) ----
 
 const debug_config: Config = .{ .debug = true };
+
+/// The deferred teardown of a debug-instance test. `deinit` ends a leaking teardown with a
+/// panic, which would kill the whole test runner (exit code 3) and bury the assertion that
+/// really failed. So this tears down quietly (`deinitReturningLeaks`) and only escalates a
+/// leak to the panic when the test body otherwise *succeeded* (`failed` is set by an
+/// `errdefer`, which runs first). Use:
+/// `var failed = false; errdefer failed = true; defer finishDebug(&o, &failed);`.
+fn finishDebug(o: *Orisnitsa(debug_config), failed: *const bool) void {
+    const leaked = o.deinitReturningLeaks();
+    if (leaked > 0 and !failed.*) spomen_failure.failOnLeak(leaked);
+}
 
 /// Rewrites `ptr`'s guard ramp with the seed its record remembers, undoing a
 /// deliberate corruption so the block can be freed without tripping the debug check.
@@ -1326,7 +1530,9 @@ test "treeAlloc hides the guard reservation from the caller" {
     // memoryGuardSize(config)`) must be completely invisible from the caller's
     // side of `querySize`/`alloc`.
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     const requested = bucket.MAX_SMALL_ALLOCATION + 4096;
     const ptr = orisnitsa.alloc(requested) orelse return error.TestUnexpectedResult; // "OS map failed"
     try testing.expectEqual(requested, orisnitsa.querySize(ptr));
@@ -1347,7 +1553,9 @@ test "treeAlloc ramp corruption is actually detectable" {
     // property `spomen_guard`'s own tests pin at the primitive level, exercised
     // here through the real dispatch instead of a synthetic buffer.
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     const requested = bucket.MAX_SMALL_ALLOCATION + 4096;
     const ptr = orisnitsa.alloc(requested) orelse return error.TestUnexpectedResult; // "OS map failed"
     // INDEX: `requested < requested + memoryGuardSize(debug_config)`, and
@@ -1370,7 +1578,9 @@ test "treeRealloc rewrites the guard ramp at the new size" {
     // growth, neighbour merge, or allocate-copy-free) — `treeRealloc`'s own doc
     // argues this from `Tree.realloc`'s contract; this exercises it for real.
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     const small = bucket.MAX_SMALL_ALLOCATION + 64;
     const big = bucket.MAX_SMALL_ALLOCATION + 8192;
     const ptr = orisnitsa.alloc(small) orelse return error.TestUnexpectedResult; // "OS map failed"
@@ -1396,7 +1606,9 @@ test "treeResize rewrites the guard ramp on growth" {
     // (16-byte-aligned) target rather than the whole merged block — mirroring
     // `orisnik`'s identical test setup, which pins the same real behaviour.
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     const small = bucket.MAX_SMALL_ALLOCATION + 64;
     const ptr = orisnitsa.alloc(small) orelse return error.TestUnexpectedResult; // "OS map failed"
     // Free the immediately-following block first so `resize` has room to grow
@@ -1425,7 +1637,9 @@ test "bucketAlloc hides the guard reservation from the caller" {
     // `isSmallAllocation` boundary — see that function's own doc) is the
     // largest request that still stays on the bucket path under this config.
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     const requested = bucket.MAX_SMALL_ALLOCATION - guard.memoryGuardSize(debug_config);
     const ptr = orisnitsa.alloc(requested) orelse return error.TestUnexpectedResult; // "OS map failed"
     try testing.expectEqual(requested, orisnitsa.querySize(ptr));
@@ -1443,7 +1657,9 @@ test "bucketAlloc ramp corruption is actually detectable" {
     // through entirely separate code (`bucketAlloc` vs `treeAlloc`), so each
     // earns its own real-dispatch test.
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     const requested = bucket.MAX_SMALL_ALLOCATION - guard.memoryGuardSize(debug_config);
     const ptr = orisnitsa.alloc(requested) orelse return error.TestUnexpectedResult; // "OS map failed"
     // INDEX: `requested < requested + memoryGuardSize(debug_config)`, and the
@@ -1465,7 +1681,9 @@ test "bucketRealloc rewrites the guard ramp at the new size" {
     // including the "moves to a larger class" path (`Buckets.realloc`'s own
     // internal alloc-copy-free).
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     const small = 8;
     const big = 200;
     const ptr = orisnitsa.alloc(small) orelse return error.TestUnexpectedResult; // "OS map failed"
@@ -1485,7 +1703,9 @@ test "bucketResize rewrites the guard ramp at the same position" {
     // this confirms the ramp survives a `resize` call intact (rewritten at the
     // same, unchanged position) rather than merely never having been disturbed.
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     const ptr = orisnitsa.alloc(8) orelse return error.TestUnexpectedResult; // "OS map failed"
     const reported = orisnitsa.querySize(ptr);
     const new_size = orisnitsa.resize(ptr, 8);
@@ -1507,7 +1727,9 @@ test "freeWithSize recomputes the same guard-inflated bucket" {
     // the bucket alloc used"'s exhaustive style for the analogous non-guard
     // invariant.
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     var size: usize = 1;
     while (size <= bucket.MAX_SMALL_ALLOCATION - guard.memoryGuardSize(debug_config)) : (size += 1) {
         const a = orisnitsa.alloc(size) orelse return error.TestUnexpectedResult; // "OS map failed"
@@ -1537,7 +1759,9 @@ test "bucket-to-tree realloc keeps the new guard ramp and the payload" {
     // Latent until guard-checking is wired into dispatch, when it would surface as
     // a false corruption report.
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     const old = bucket.MAX_SMALL_ALLOCATION - guard.memoryGuardSize(debug_config); // a full 256-byte slot
     const new = bucket.MAX_SMALL_ALLOCATION - 6; // 250: no longer fits a bucket once guarded
     const ptr = orisnitsa.alloc(old) orelse return error.TestUnexpectedResult; // "OS map failed"
@@ -1555,7 +1779,9 @@ test "bucket-to-tree realloc keeps the new guard ramp and the payload" {
 test "bucket-to-tree realloc-aligned keeps the new guard ramp and the payload" {
     // `reallocAligned`'s twin of the test above.
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     const alignment = 16;
     const old = bucket.MAX_SMALL_ALLOCATION - guard.memoryGuardSize(debug_config);
     const new = bucket.MAX_SMALL_ALLOCATION - 6;
@@ -1576,7 +1802,9 @@ test "treeAlloc poisons the fresh payload" {
     // called `spomen_poison.fill` somewhere," verified end to end through the
     // real dispatch.
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     const size = bucket.MAX_SMALL_ALLOCATION + 4096;
     const ptr = orisnitsa.alloc(size) orelse return error.TestUnexpectedResult; // "OS map failed"
     for (0..size) |i| {
@@ -1591,7 +1819,9 @@ test "bucketAlloc poisons the fresh payload" {
     // path — wired through entirely separate dispatch (`bucketAlloc`, not
     // `treeAlloc`), so it earns its own real-dispatch test.
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     const size = bucket.MAX_SMALL_ALLOCATION - guard.memoryGuardSize(debug_config);
     const ptr = orisnitsa.alloc(size) orelse return error.TestUnexpectedResult; // "OS map failed"
     for (0..size) |i| {
@@ -1615,7 +1845,9 @@ test "free poisons the payload before reclaim" {
     // it), and this test is the sole observer of it, before and after the
     // `free` call.
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     const size = bucket.MAX_SMALL_ALLOCATION + 4096;
     const ptr = orisnitsa.alloc(size) orelse return error.TestUnexpectedResult; // "OS map failed"
     @memset(ptr[0..size], 0xAB);
@@ -1632,7 +1864,9 @@ test "calloc zero-fill overwrites the poison" {
     // it — no special-casing either way, so the caller sees zeros, never
     // poison.
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     const count = 4;
     const size = 64;
     const ptr = orisnitsa.calloc(count, size) orelse return error.TestUnexpectedResult; // "OS map failed"
@@ -1663,7 +1897,9 @@ const guard_size = guard.memoryGuardSize(debug_config);
 
 test "every allocation is recorded and free retires it" {
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     const small = orisnitsa.alloc(24) orelse return error.TestUnexpectedResult;
     const large = orisnitsa.alloc(1000) orelse return error.TestUnexpectedResult;
     const aligned_small = orisnitsa.allocAligned(24, 32) orelse return error.TestUnexpectedResult;
@@ -1680,7 +1916,9 @@ test "every allocation is recorded and free retires it" {
 
 test "requested counts size plus guard and follows realloc and resize" {
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     const first = orisnitsa.alloc(24) orelse return error.TestUnexpectedResult;
     try testing.expectEqual(24 + guard_size, orisnitsa.requested());
     const second = orisnitsa.alloc(1000) orelse return error.TestUnexpectedResult;
@@ -1702,7 +1940,9 @@ test "a bucket resize re-records the slot's real usable size" {
     // `alloc(20)` lands in a 40-byte slot (20 + 16 guard, rounded up to the 8-byte
     // spacing), so `resize` reports 24 usable bytes and the record follows.
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     const ptr = orisnitsa.alloc(20) orelse return error.TestUnexpectedResult;
     try testing.expectEqual(20 + guard_size, orisnitsa.requested());
     const new_size = orisnitsa.resize(ptr, 20);
@@ -1721,7 +1961,9 @@ test "sub-minimum requests are recorded clamped and a sized free accepts them" {
     // compares the raw size; this port compares after the clamp, so the legal call
     // passes (an HPHA debug-mode bug deliberately not reproduced).
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     const ptr = orisnitsa.alloc(5) orelse return error.TestUnexpectedResult;
     const record = orisnitsa.records.find(ptr) orelse return error.TestUnexpectedResult;
     try testing.expectEqual(bucket.MIN_ALLOCATION, record.size);
@@ -1732,7 +1974,9 @@ test "sub-minimum requests are recorded clamped and a sized free accepts them" {
 
 test "realloc rekeys the record across every path" {
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     // bucket -> bucket
     var ptr = orisnitsa.alloc(24) orelse return error.TestUnexpectedResult;
     ptr = orisnitsa.realloc(ptr, 100) orelse return error.TestUnexpectedResult;
@@ -1760,7 +2004,9 @@ test "realloc rekeys the record across every path" {
 test "a failed realloc leaves the original allocation and record intact" {
     // `Cpp/ERRATA.md` E9: the replace hook only ever runs on success.
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     const ptr = orisnitsa.alloc(24) orelse return error.TestUnexpectedResult;
     // The bucket -> tree crossover needs a fresh arena; refuse the OS.
     os.test_vm.failMapAfter(0);
@@ -1778,7 +2024,9 @@ test "a failed realloc leaves the original allocation and record intact" {
 test "a record store out of memory frees the block and returns null" {
     // The first map serves the bucket page; the second (the record page) is refused.
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     os.test_vm.failMapAfter(1);
     defer os.test_vm.clearFailure();
     try testing.expect(orisnitsa.alloc(24) == null);
@@ -1796,7 +2044,9 @@ test "a record store out of memory frees the block and returns null" {
 
 test "the same OOM on the tree path frees the block and returns null" {
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     os.test_vm.failMapAfter(1); // the arena maps; the record page is refused
     defer os.test_vm.clearFailure();
     try testing.expect(orisnitsa.alloc(5000) == null);
@@ -1808,7 +2058,9 @@ test "the same OOM on the tree path frees the block and returns null" {
 
 test "verify reports each corruption kind as a value" {
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
 
     // Guard overrun, on both paths.
     for ([_]usize{ 24, 1000 }) |size| {
@@ -1892,7 +2144,9 @@ fn expectStartsAt(record: *const Record, ret: usize) !void {
 test "callstacks start at the caller on every entry point" {
     if (!std.options.allow_stack_tracing) return error.SkipZigTest;
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     var ret: usize = 0;
     for ([_]Entry{ .alloc, .calloc, .alloc_aligned }) |entry| {
         const p = callThroughHelper(&orisnitsa, entry, null, &ret) orelse return error.TestUnexpectedResult;
@@ -1918,7 +2172,9 @@ test "callstacks start at the caller on every entry point" {
 
 test "purge returns the record store's spare pages" {
     var orisnitsa: Orisnitsa(debug_config) = .init();
-    defer orisnitsa.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&orisnitsa, &failed);
     const ptr = orisnitsa.alloc(24) orelse return error.TestUnexpectedResult;
     orisnitsa.free(ptr);
     // The freed record leaves an empty-but-mapped book page behind ...
@@ -1944,7 +2200,9 @@ test "every public operation runs exactly its hooks (dispatch wiring)" {
     // the wiring is pinned by counting hook invocations after each operation, at the
     // call sites HPHA has (`Cpp/hpha.h:1264-1440`).
     var o: Orisnitsa(debug_config) = .init();
-    defer o.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&o, &failed);
 
     // alloc / calloc / allocAligned (all four routes): one add each, nothing else.
     const a = o.alloc(24) orelse return error.TestUnexpectedResult;
@@ -2026,7 +2284,9 @@ test "every public operation runs exactly its hooks (dispatch wiring)" {
 
 test "a failed realloc runs the check but never the replace hook" {
     var o: Orisnitsa(debug_config) = .init();
-    defer o.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&o, &failed);
     const p = o.alloc(24) orelse return error.TestUnexpectedResult;
     o.stats = .{};
     os.test_vm.failMapAfter(0);
@@ -2040,7 +2300,9 @@ test "a failed realloc runs the check but never the replace hook" {
 
 test "E9 on the tree path: a failed tree realloc keeps the original and its record" {
     var o: Orisnitsa(debug_config) = .init();
-    defer o.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&o, &failed);
     const p = o.alloc(5000) orelse return error.TestUnexpectedResult;
     const q = o.allocAligned(5000, 128) orelse return error.TestUnexpectedResult;
     o.stats = .{};
@@ -2068,7 +2330,9 @@ test "E9 on the tree path: a failed tree realloc keeps the original and its reco
 
 test "the record-store OOM path also frees an aligned block" {
     var o: Orisnitsa(debug_config) = .init();
-    defer o.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&o, &failed);
     // Bucket path: the first map serves the page, the second (the record page) fails.
     os.test_vm.failMapAfter(1);
     defer os.test_vm.clearFailure();
@@ -2086,7 +2350,9 @@ test "the record-store OOM path also frees an aligned block" {
 
 test "verify compares a tree-path record raw and a bucket-path record clamped" {
     var o: Orisnitsa(debug_config) = .init();
-    defer o.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&o, &failed);
 
     // Tree path via a large alignment records the RAW size, even below the minimum:
     // clamping the caller's size there would falsely report a mismatch.
@@ -2130,7 +2396,7 @@ test "the default instantiation carries no debug state" {
             @sizeOf(bucket.Buckets(.{})) + @sizeOf(tree_mod.Tree(.{})) + @sizeOf(usize));
     }
     var orisnitsa: Orisnitsa(.{}) = .init();
-    orisnitsa.deinit(); // a no-op without `config.debug`
+    orisnitsa.deinit(); // nothing to release, and nothing to report, for an unused default instance
 }
 
 fn recordedSize(o: *Orisnitsa(debug_config), p: [*]u8) !usize {
@@ -2146,7 +2412,9 @@ test "counters and sources follow every realloc path" {
     // Kills a deleted `debugReplace`, or one passed the wrong `Source`, on any realloc
     // path: the per-source totals and the recorded size/source change with each step.
     var o: Orisnitsa(debug_config) = .init();
-    defer o.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&o, &failed);
 
     // bucket -> bucket
     var p = o.alloc(24) orelse return error.TestUnexpectedResult;
@@ -2199,7 +2467,9 @@ test "every realloc path recaptures the record's callstack" {
     // stack tracing, all zero), so surviving it means `debugReplace` did not rebuild the
     // record's callstack.
     var o: Orisnitsa(debug_config) = .init();
-    defer o.deinit();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&o, &failed);
     const sentinel_cs = [_]usize{ 1, 2, 3, 4, 5, 6, 7, 8 };
     const Step = struct { aligned: bool, from: usize, to: usize, alignment: usize };
     const steps = [_]Step{
@@ -2218,6 +2488,583 @@ test "every realloc path recaptures the record's callstack" {
         try testing.expect(!std.mem.eql(usize, &record.callstack, &sentinel_cs));
         o.free(p);
     }
+    o.purge();
+}
+
+// ---- v0.2.0 Phase 5: deinit releases memory, check(), report(), leak detection ----
+//
+// Panics cannot be caught in a Zig test. `deinit`'s leak failure is therefore observed
+// through `deinitReturningLeaks` (everything `deinit` does except the final panic), and
+// `check()` is a plain error value. The leaking-teardown tests below print their leak
+// report to stderr, which is the point of the feature and harmless in a test run.
+
+/// Unmaps the bucket page a deliberately leaked block lives in, so the test process
+/// leaves nothing behind. `leaked_block` must be a bucket slot whose owner has been torn
+/// down (which leaves that page mapped).
+fn releaseLeakedBucketPage(leaked_block: [*]u8) void {
+    // ALIGN: bucket pages are `os.PAGE_SIZE`-aligned mappings and a slot lies inside its
+    // page, so rounding down to `PAGE_SIZE` recovers the mapping's base.
+    const base = align_helpers.alignDown(leaked_block, os.PAGE_SIZE);
+    // SAFETY: `base`/`PAGE_SIZE` describe exactly the mapping the (torn-down) allocator
+    // obtained from `os.map(PAGE_SIZE)` for this bucket page and left mapped because a
+    // live block remained in it; nothing references the page afterwards.
+    os.unmap(base, os.PAGE_SIZE);
+}
+
+/// Runs the "everything idle comes back" scenarios against a fresh instance of `config`
+/// each, asserting after every one that `deinit` returned every mapping it opened
+/// (bucket pages, tree arenas and, with `config.debug`, the record store's pages).
+fn deinitReleasesEverything(comptime config: Config) !void {
+    const O = Orisnitsa(config);
+    const gsize = guard.memoryGuardSize(config);
+    const before = os.test_vm.liveMappings();
+
+    // An instance that was never used maps and releases nothing.
+    {
+        var o: O = .init();
+        o.deinit();
+        try testing.expectEqual(before, os.test_vm.liveMappings());
+    }
+
+    // Bucket pages of many size classes.
+    {
+        var o: O = .init();
+        var blocks: std.ArrayList([*]u8) = .empty;
+        defer blocks.deinit(testing.allocator);
+        var size: usize = 1;
+        while (size <= bucket.MAX_SMALL_ALLOCATION - gsize) : (size += 7) {
+            try blocks.append(testing.allocator, o.alloc(size) orelse return error.TestUnexpectedResult);
+        }
+        // Several distinct pages were mapped.
+        try testing.expect(os.test_vm.liveMappings() > before + 2);
+        for (blocks.items) |p| o.free(p);
+        o.deinit();
+        try testing.expectEqual(before, os.test_vm.liveMappings());
+    }
+
+    // A block freed last is cached in the tree's MR slot, invisible to a tree walk: the
+    // teardown must still find it.
+    {
+        var o: O = .init();
+        const p = o.alloc(5000) orelse return error.TestUnexpectedResult;
+        o.free(p);
+        o.deinit();
+        try testing.expectEqual(before, os.test_vm.liveMappings());
+    }
+
+    // Several tree arenas, freed in a shuffled order so some sit in the tree and one in the
+    // MR cache.
+    {
+        var o: O = .init();
+        const sizes = [_]usize{ 66_000, 70_000, 9_000, 80_000, 40_000, 5_000 };
+        var blocks: [sizes.len][*]u8 = undefined;
+        for (sizes, 0..) |s, i| blocks[i] = o.alloc(s) orelse return error.TestUnexpectedResult;
+        for ([_]usize{ 3, 0, 5, 2, 4, 1 }) |i| o.free(blocks[i]);
+        o.deinit();
+        try testing.expectEqual(before, os.test_vm.liveMappings());
+    }
+
+    // A mixed workload after realloc churn.
+    {
+        var o: O = .init();
+        var live: std.ArrayList([*]u8) = .empty;
+        defer live.deinit(testing.allocator);
+        for (1..40) |round| {
+            const size = 8 + (round * 37) % 2500;
+            try live.append(testing.allocator, o.alloc(size) orelse return error.TestUnexpectedResult);
+            if (round % 3 == 0) o.free(live.orderedRemove(round % live.items.len));
+            if (round % 5 == 0) {
+                if (live.pop()) |last| {
+                    try live.append(testing.allocator, o.realloc(last, size * 3) orelse return error.TestUnexpectedResult);
+                }
+            }
+        }
+        for (live.items) |p| o.free(p);
+        o.deinit();
+        try testing.expectEqual(before, os.test_vm.liveMappings());
+    }
+
+    // The `oris_destroy` shape: the allocator lives on the heap (used in place, never
+    // moved), torn down with idle arenas in the free tree and the MR cache.
+    {
+        const o = try testing.allocator.create(O);
+        defer testing.allocator.destroy(o);
+        o.* = .init();
+        const small = o.alloc(5000) orelse return error.TestUnexpectedResult;
+        const large = o.alloc(66_000) orelse return error.TestUnexpectedResult;
+        const other = o.alloc(70_000) orelse return error.TestUnexpectedResult;
+        o.free(large);
+        o.free(other);
+        o.free(small);
+        o.deinit();
+        try testing.expectEqual(before, os.test_vm.liveMappings());
+    }
+}
+
+test "deinit returns every mapping (default instantiation)" {
+    try deinitReleasesEverything(.{});
+}
+
+test "deinit returns every mapping (debug instantiation, record pages included)" {
+    try deinitReleasesEverything(debug_config);
+}
+
+test "deinit with a live block keeps only its page (default instantiation)" {
+    // Non-debug only: with `config.debug` the same situation is a *leak* and fails the
+    // teardown (tested below).
+    const before = os.test_vm.liveMappings();
+    var o: Orisnitsa(.{}) = .init();
+    const kept = o.alloc(24) orelse return error.TestUnexpectedResult;
+    const idle = o.alloc(5000) orelse return error.TestUnexpectedResult;
+    o.free(idle);
+    const other_class = o.alloc(100) orelse return error.TestUnexpectedResult;
+    o.free(other_class);
+    o.deinit();
+    // Exactly the live block's page remains ...
+    try testing.expectEqual(before + 1, os.test_vm.liveMappings());
+    // ... and it belongs to nobody now: release it by hand so the test leaks nothing.
+    releaseLeakedBucketPage(kept);
+    try testing.expectEqual(before, os.test_vm.liveMappings());
+}
+
+fn reportText(o: *Orisnitsa(debug_config), aw: *std.Io.Writer.Allocating) ![]const u8 {
+    aw.clearRetainingCapacity();
+    try o.report(&aw.writer);
+    return aw.written();
+}
+
+fn flipGuardByte(ptr: [*]u8, size: usize) void {
+    // SAFETY: `ptr` is a live allocation of `size` requested bytes plus the guard
+    // reservation, so the byte at `size` is the first guard byte, inside the block; the
+    // calling test owns it exclusively. INDEX: as above (`size < size + guard size`).
+    ptr[size] ^= 0xFF;
+}
+
+test "check passes on a healthy heap of every kind" {
+    var o: Orisnitsa(debug_config) = .init();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&o, &failed);
+    try o.check(null); // an empty heap is healthy
+    const blocks = [_][*]u8{
+        o.alloc(24) orelse return error.TestUnexpectedResult,
+        o.alloc(1000) orelse return error.TestUnexpectedResult,
+        o.allocAligned(24, 32) orelse return error.TestUnexpectedResult,
+        o.allocAligned(3000, 128) orelse return error.TestUnexpectedResult,
+        o.calloc(3, 40) orelse return error.TestUnexpectedResult,
+    };
+    try o.check(null);
+    const grown = o.realloc(blocks[1], 4000) orelse return error.TestUnexpectedResult;
+    try o.check(null); // still healthy after a realloc
+    for ([_][*]u8{ blocks[0], grown, blocks[2], blocks[3], blocks[4] }) |p| o.free(p);
+    try o.check(null);
+    o.purge();
+}
+
+test "check reports a guard overrun as a value, and changes nothing" {
+    for ([_]usize{ 24, 3000 }) |size| {
+        var o: Orisnitsa(debug_config) = .init();
+        var failed = false;
+        errdefer failed = true;
+        defer finishDebug(&o, &failed);
+        const healthy = o.alloc(64) orelse return error.TestUnexpectedResult;
+        const victim = o.alloc(size) orelse return error.TestUnexpectedResult;
+        flipGuardByte(victim, size);
+        var diagnostic: spomen_failure.Diagnostic = .{};
+        try testing.expectError(error.Corruption, o.check(&diagnostic));
+        const message = diagnostic.message();
+        try testing.expect(std.mem.indexOf(u8, message, "guard bytes overwritten") != null);
+        var want: [64]u8 = undefined;
+        try testing.expect(std.mem.indexOf(u8, message, try std.fmt.bufPrint(&want, "requested {d} bytes", .{size})) != null);
+        // Asking again without a diagnostic gives the same error; the store is untouched.
+        try testing.expectError(error.Corruption, o.check(null));
+        try testing.expectEqual(@as(usize, 2), o.records.len());
+        // Repair the block (the same flip restores it) and the audit passes again.
+        flipGuardByte(victim, size);
+        try o.check(null);
+        o.free(victim);
+        o.free(healthy);
+        o.purge();
+    }
+}
+
+test "check reports a record larger than its block" {
+    var o: Orisnitsa(debug_config) = .init();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&o, &failed);
+    const p = o.alloc(24) orelse return error.TestUnexpectedResult;
+    const record = o.records.find(p) orelse return error.TestUnexpectedResult;
+    record.size = 10_000; // forged: the point of the test
+    var diagnostic: spomen_failure.Diagnostic = .{};
+    try testing.expectError(error.Corruption, o.check(&diagnostic));
+    try testing.expect(std.mem.indexOf(u8, diagnostic.message(), "recorded size exceeds") != null);
+    try testing.expect(std.mem.indexOf(u8, diagnostic.message(), "recorded 10000 bytes") != null);
+    record.size = 24; // restored
+    try o.check(null);
+    o.free(p);
+    o.purge();
+}
+
+fn ptrLess(_: void, a: [*]u8, b: [*]u8) bool {
+    return @intFromPtr(a) < @intFromPtr(b);
+}
+
+test "check stops at the first problem in address order" {
+    var o: Orisnitsa(debug_config) = .init();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&o, &failed);
+    var blocks = [_][*]u8{
+        o.alloc(24) orelse return error.TestUnexpectedResult,
+        o.alloc(24) orelse return error.TestUnexpectedResult,
+        o.alloc(24) orelse return error.TestUnexpectedResult,
+    };
+    std.mem.sort([*]u8, &blocks, {}, ptrLess);
+    flipGuardByte(blocks[2], 24);
+    flipGuardByte(blocks[1], 24);
+    var diagnostic: spomen_failure.Diagnostic = .{};
+    try testing.expectError(error.Corruption, o.check(&diagnostic));
+    var want: [32]u8 = undefined;
+    const lower = try std.fmt.bufPrint(&want, "0x{x}", .{@intFromPtr(blocks[1])});
+    try testing.expect(std.mem.indexOf(u8, diagnostic.message(), lower) != null); // the lower address first
+    flipGuardByte(blocks[2], 24);
+    flipGuardByte(blocks[1], 24);
+    for (blocks) |p| o.free(p);
+    o.purge();
+}
+
+test "report lists the totals and every live block in address order" {
+    var o: Orisnitsa(debug_config) = .init();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&o, &failed);
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    var blocks = [_][*]u8{
+        o.alloc(24) orelse return error.TestUnexpectedResult,
+        o.alloc(1000) orelse return error.TestUnexpectedResult,
+        o.alloc(100) orelse return error.TestUnexpectedResult,
+    };
+    const text = try reportText(&o, &aw);
+    try testing.expect(std.mem.startsWith(u8, text, "REPORT ===="));
+    try testing.expect(std.mem.indexOf(u8, text, "Currently allocated blocks:") != null);
+    var line: [96]u8 = undefined;
+    try testing.expect(std.mem.indexOf(u8, text, try std.fmt.bufPrint(&line, "Total requested size={d} bytes", .{o.requested()})) != null);
+    try testing.expect(std.mem.indexOf(u8, text, try std.fmt.bufPrint(&line, "Total allocated size={d} bytes", .{o.allocated()})) != null);
+    std.mem.sort([*]u8, &blocks, {}, ptrLess);
+    var cursor: usize = 0;
+    for (blocks) |p| {
+        const record = o.records.find(p) orelse return error.TestUnexpectedResult;
+        const want = try std.fmt.bufPrint(&line, "ptr=0x{x}, size={d}", .{ @intFromPtr(p), record.size });
+        const at = std.mem.indexOfPos(u8, text, cursor, want) orelse {
+            std.debug.print("{s} missing or out of order in:\n{s}\n", .{ want, text });
+            return error.TestUnexpectedResult;
+        };
+        cursor = at + want.len;
+    }
+    try testing.expect(std.mem.endsWith(u8, std.mem.trimEnd(u8, text, "\n"), "==========="));
+    for (blocks) |p| o.free(p);
+    // A freed block leaves the report.
+    try testing.expect(std.mem.indexOf(u8, try reportText(&o, &aw), "ptr=") == null);
+    o.purge();
+}
+
+test "report shows where a block was allocated (raw return addresses)" {
+    if (!std.options.allow_stack_tracing) return error.SkipZigTest;
+    var o: Orisnitsa(debug_config) = .init();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&o, &failed);
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    const p = o.alloc(24) orelse return error.TestUnexpectedResult;
+    const record = o.records.find(p) orelse return error.TestUnexpectedResult;
+    var line: [32]u8 = undefined;
+    const frame = try std.fmt.bufPrint(&line, "0x{x}", .{record.callstack[0]});
+    try testing.expect(std.mem.indexOf(u8, try reportText(&o, &aw), frame) != null);
+    o.free(p);
+    o.purge();
+}
+
+test "a leak at deinit is audited and reported, and everything else is released" {
+    // `deinit` ends a leaking teardown with a panic no Zig test can catch, so this drives
+    // `deinitReturningLeaks`: the audit, the report and the release, minus the panic.
+    const before = os.test_vm.liveMappings();
+    var o: Orisnitsa(debug_config) = .init();
+    const leaked = o.alloc(24) orelse return error.TestUnexpectedResult;
+    const idle = o.alloc(5000) orelse return error.TestUnexpectedResult;
+    o.free(idle);
+    try testing.expectEqual(@as(usize, 1), o.deinitReturningLeaks());
+    // Everything idle was returned (the tree arena, the record page); only the leaked
+    // block's own bucket page remains.
+    try testing.expectEqual(before + 1, os.test_vm.liveMappings());
+    releaseLeakedBucketPage(leaked);
+    try testing.expectEqual(before, os.test_vm.liveMappings());
+}
+
+test "a leak audit counts every live block and survives a corrupted one" {
+    const before = os.test_vm.liveMappings();
+    var o: Orisnitsa(debug_config) = .init();
+    const a = o.alloc(24) orelse return error.TestUnexpectedResult;
+    const b = o.alloc(24) orelse return error.TestUnexpectedResult;
+    flipGuardByte(b, 24); // the audit prints this as the first problem instead of panicking
+    try testing.expectEqual(@as(usize, 2), o.deinitReturningLeaks());
+    // Both blocks live in one bucket page, which stays mapped; nothing else does.
+    try testing.expectEqual(before + 1, os.test_vm.liveMappings());
+    releaseLeakedBucketPage(a);
+    try testing.expectEqual(before, os.test_vm.liveMappings());
+}
+
+test "a clean deinit returns zero leaks and leaves no mappings" {
+    const before = os.test_vm.liveMappings();
+    var o: Orisnitsa(debug_config) = .init();
+    const first = o.alloc(24) orelse return error.TestUnexpectedResult;
+    const second = o.alloc(5000) orelse return error.TestUnexpectedResult;
+    o.free(first);
+    o.free(second);
+    try testing.expectEqual(@as(usize, 0), o.deinitReturningLeaks());
+    try testing.expectEqual(before, os.test_vm.liveMappings());
+}
+
+// ---- Phase 5 review follow-ups: teardown output, orders, golden report ----
+
+fn teardownText(o: *Orisnitsa(debug_config), aw: *std.Io.Writer.Allocating) !usize {
+    aw.clearRetainingCapacity();
+    return o.debugTeardownTo(&aw.writer);
+}
+
+/// Every live record's pointer in *storage* order (`forEachLive`).
+fn storageOrder(o: *Orisnitsa(debug_config), out: [][*]u8) usize {
+    const Log = struct {
+        out: [][*]u8,
+        count: usize = 0,
+        fn visit(self: *@This(), record: *Record) void {
+            self.out[self.count] = record.ptr;
+            self.count += 1;
+        }
+    };
+    var log: Log = .{ .out = out };
+    o.records.forEachLive(&log, Log.visit);
+    return log.count;
+}
+
+/// Every live record's pointer in *address* order (`first`/`next`).
+fn addressOrder(o: *Orisnitsa(debug_config), out: [][*]u8) usize {
+    var count: usize = 0;
+    var cursor = o.records.first();
+    // EXPLICIT: address-order tree walk; `cursor` is the state, not expressible as an
+    // iterator.
+    while (cursor) |record| : (cursor = o.records.next(record)) {
+        out[count] = record.ptr;
+        count += 1;
+    }
+    return count;
+}
+
+test "check clears a reused Diagnostic on success" {
+    // Kills: dropping `d.len = 0` at the top of `check` (a stale message would survive).
+    var o: Orisnitsa(debug_config) = .init();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&o, &failed);
+    const p = o.alloc(24) orelse return error.TestUnexpectedResult;
+    flipGuardByte(p, 24);
+    var diagnostic: spomen_failure.Diagnostic = .{};
+    try testing.expectError(error.Corruption, o.check(&diagnostic));
+    try testing.expect(diagnostic.message().len > 0);
+    flipGuardByte(p, 24); // repaired
+    try o.check(&diagnostic);
+    try testing.expectEqual(@as(usize, 0), diagnostic.message().len);
+    o.free(p);
+    o.purge();
+}
+
+test "a clean heap's teardown prints nothing and reports zero leaks" {
+    // Kills: deleting the `leaked == 0` early return in `debugTeardownTo` (every clean
+    // debug deinit would print a report).
+    var o: Orisnitsa(debug_config) = .init();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&o, &failed);
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try testing.expectEqual(@as(usize, 0), try teardownText(&o, &aw)); // never used
+    const p = o.alloc(24) orelse return error.TestUnexpectedResult;
+    o.free(p);
+    try testing.expectEqual(@as(usize, 0), try teardownText(&o, &aw));
+    try testing.expectEqual(@as(usize, 0), aw.written().len);
+    o.purge();
+}
+
+test "the teardown output for one leak: summary, head, one entry, foot" {
+    // Kills: a wrong/missing summary line, head, entry or foot; a spurious problem line
+    // for a healthy leak.
+    var o: Orisnitsa(debug_config) = .init();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&o, &failed);
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    const p = o.alloc(24) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 1), try teardownText(&o, &aw));
+    const text = aw.written();
+    try testing.expect(std.mem.startsWith(u8, text, "orisnitsa: 1 allocation(s) were still live when the allocator was dropped\nREPORT ===="));
+    var want: [96]u8 = undefined;
+    try testing.expect(std.mem.indexOf(u8, text, try std.fmt.bufPrint(&want, "Currently allocated blocks:\nptr=0x{x}, size=24", .{@intFromPtr(p)})) != null);
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, text, "ptr="));
+    try testing.expect(std.mem.indexOf(u8, text, "orisnitsa: guard") == null); // healthy: no problem line
+    try testing.expect(std.mem.endsWith(u8, text, "===========================================================\n"));
+    o.free(p);
+    o.purge();
+}
+
+test "the teardown prints the first problem before the report head" {
+    // Kills: dropping the problem line, or printing it after the head.
+    var o: Orisnitsa(debug_config) = .init();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&o, &failed);
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    const p = o.alloc(24) orelse return error.TestUnexpectedResult;
+    flipGuardByte(p, 24);
+    try testing.expectEqual(@as(usize, 1), try teardownText(&o, &aw));
+    const text = aw.written();
+    const problem = std.mem.indexOf(u8, text, "orisnitsa: guard bytes overwritten") orelse return error.TestUnexpectedResult;
+    const head = std.mem.indexOf(u8, text, "REPORT ====") orelse return error.TestUnexpectedResult;
+    try testing.expect(problem < head);
+    flipGuardByte(p, 24); // repaired
+    o.free(p);
+    o.purge();
+}
+
+test "the teardown lists two leaks in storage order" {
+    // Kills: listing (or auditing) in address order instead of storage order.
+    var o: Orisnitsa(debug_config) = .init();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&o, &failed);
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    const first = o.alloc(24) orelse return error.TestUnexpectedResult;
+    const second = o.alloc(1000) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 2), try teardownText(&o, &aw));
+    var a: [64]u8 = undefined;
+    var b: [64]u8 = undefined;
+    const at_first = std.mem.indexOf(u8, aw.written(), try std.fmt.bufPrint(&a, "ptr=0x{x}, size=24", .{@intFromPtr(first)})) orelse return error.TestUnexpectedResult;
+    const at_second = std.mem.indexOf(u8, aw.written(), try std.fmt.bufPrint(&b, "ptr=0x{x}, size=1000", .{@intFromPtr(second)})) orelse return error.TestUnexpectedResult;
+    try testing.expect(at_first < at_second);
+    o.free(first);
+    o.free(second);
+    o.purge();
+}
+
+test "address order and storage order differ, and each consumer uses its own" {
+    // Kills: `check`/`report` walking storage order, or the teardown audit/listing walking
+    // address order. A freed block's slot is reused by a later allocation (lower address)
+    // that sits last in the book, and swap-remove moves the last record into the hole.
+    var o: Orisnitsa(debug_config) = .init();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&o, &failed);
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    const a = o.alloc(24) orelse return error.TestUnexpectedResult;
+    const b = o.alloc(24) orelse return error.TestUnexpectedResult;
+    const c = o.alloc(24) orelse return error.TestUnexpectedResult;
+    const d = o.alloc(24) orelse return error.TestUnexpectedResult;
+    o.free(a); // book: [d, b, c] after the swap-remove
+    const e = o.alloc(24) orelse return error.TestUnexpectedResult; // reuses a's slot; book: [d, b, c, e]
+    var storage: [4][*]u8 = undefined;
+    var by_address: [4][*]u8 = undefined;
+    try testing.expectEqual(@as(usize, 4), storageOrder(&o, &storage));
+    try testing.expectEqual(@as(usize, 4), addressOrder(&o, &by_address));
+    // The precondition the rest of the test needs: the two orders really differ.
+    try testing.expect(!std.mem.eql([*]u8, &storage, &by_address));
+    try testing.expect(storage[0] != by_address[0]);
+
+    // Corrupt the storage-first and the address-first blocks.
+    flipGuardByte(storage[0], 24);
+    flipGuardByte(by_address[0], 24);
+    var want: [32]u8 = undefined;
+
+    // `check` reports the address-first one.
+    var diagnostic: spomen_failure.Diagnostic = .{};
+    try testing.expectError(error.Corruption, o.check(&diagnostic));
+    try testing.expect(std.mem.indexOf(u8, diagnostic.message(), try std.fmt.bufPrint(&want, "0x{x}", .{@intFromPtr(by_address[0])})) != null);
+
+    // The teardown audit reports the storage-first one, and lists in storage order.
+    try testing.expectEqual(@as(usize, 4), try teardownText(&o, &aw));
+    const problem_line_end = std.mem.indexOf(u8, aw.written(), "\nallocated at") orelse return error.TestUnexpectedResult;
+    try testing.expect(std.mem.indexOf(u8, aw.written()[0..problem_line_end], try std.fmt.bufPrint(&want, "0x{x}", .{@intFromPtr(storage[0])})) != null);
+    var cursor: usize = std.mem.indexOf(u8, aw.written(), "Currently allocated blocks:") orelse return error.TestUnexpectedResult;
+    for (storage) |p| {
+        const line = try std.fmt.bufPrint(&want, "ptr=0x{x},", .{@intFromPtr(p)});
+        cursor = (std.mem.indexOfPos(u8, aw.written(), cursor, line) orelse return error.TestUnexpectedResult) + line.len;
+    }
+
+    // `report` lists address order.
+    aw.clearRetainingCapacity();
+    try o.report(&aw.writer);
+    cursor = 0;
+    for (by_address) |p| {
+        const line = try std.fmt.bufPrint(&want, "ptr=0x{x},", .{@intFromPtr(p)});
+        cursor = (std.mem.indexOfPos(u8, aw.written(), cursor, line) orelse return error.TestUnexpectedResult) + line.len;
+    }
+
+    flipGuardByte(storage[0], 24);
+    flipGuardByte(by_address[0], 24);
+    for ([_][*]u8{ b, c, d, e }) |p| o.free(p);
+    o.purge();
+}
+
+test "report golden output" {
+    // Kills: any change to the report's exact text — the newline after the head lines, the
+    // frame indent, whether zero frames print, the newline after each entry and the foot.
+    var o: Orisnitsa(debug_config) = .init();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&o, &failed);
+    var blocks = [_][*]u8{
+        o.alloc(24) orelse return error.TestUnexpectedResult,
+        o.alloc(100) orelse return error.TestUnexpectedResult,
+    };
+    std.mem.sort([*]u8, &blocks, {}, ptrLess);
+    (o.records.find(blocks[0]) orelse return error.TestUnexpectedResult).callstack = .{ 0x1000, 0x2000, 0, 0, 0, 0, 0, 0 };
+    (o.records.find(blocks[1]) orelse return error.TestUnexpectedResult).callstack = .{ 0, 0, 0, 0, 0, 0, 0, 0 };
+    const expected = try std.fmt.allocPrint(
+        testing.allocator,
+        "REPORT =================================================\n" ++
+            "Total requested size={d} bytes\n" ++
+            "Total allocated size={d} bytes\n" ++
+            "Currently allocated blocks:\n" ++
+            "ptr=0x{x}, size=24\n  0x1000\n  0x2000\n" ++
+            "ptr=0x{x}, size=100\n" ++
+            "===========================================================\n",
+        .{ o.requested(), o.allocated(), @intFromPtr(blocks[0]), @intFromPtr(blocks[1]) },
+    );
+    defer testing.allocator.free(expected);
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try o.report(&aw.writer);
+    try testing.expectEqualStrings(expected, aw.written());
+    // The sizes in the head are the real ones: (24 + 16) + (100 + 16).
+    try testing.expectEqual(@as(usize, 24 + 100 + 2 * guard_size), o.requested());
+    for (blocks) |p| o.free(p);
+    o.purge();
+}
+
+test "reportToStderr runs" {
+    // Kills: nothing behavioural (it writes to stderr) — but it makes the suite compile and
+    // run `reportToStderr`, which no other test does.
+    var o: Orisnitsa(debug_config) = .init();
+    var failed = false;
+    errdefer failed = true;
+    defer finishDebug(&o, &failed);
+    const p = o.alloc(24) orelse return error.TestUnexpectedResult;
+    o.reportToStderr();
+    o.free(p);
     o.purge();
 }
 

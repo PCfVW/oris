@@ -26,6 +26,7 @@
 //! const orisnitsa = @import("orisnitsa");
 //!
 //! var backing: orisnitsa.Orisnitsa = .init();
+//! defer backing.deinit(); // required: returns the idle OS pages/arenas (every build)
 //! const gpa = orisnitsa.allocator(&backing);
 //!
 //! var list: std.ArrayList(u8) = .empty;
@@ -55,6 +56,12 @@ pub const Orisnitsa = orisnitsa_mod.Orisnitsa(.{});
 /// Hands out a `std.mem.Allocator` backed by an `Orisnitsa` instance. See
 /// `allocator.zig`.
 pub const allocator = allocator_mod.allocator;
+/// The error set of the debug subsystem's off-hot-path diagnostics (`Orisnitsa.check`). See
+/// `spomen_failure.zig`.
+pub const OrisError = @import("spomen_failure.zig").OrisError;
+/// The out-parameter `Orisnitsa.check` fills with a human-readable description of the first
+/// problem it finds. See `spomen_failure.zig`.
+pub const Diagnostic = @import("spomen_failure.zig").Diagnostic;
 
 // Imported only so their `test` blocks are reachable from this root module via
 // this file's own `test { refAllDecls(...) }` block below — not re-exported as

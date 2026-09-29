@@ -5,15 +5,15 @@
 //! Ports the single-threaded slice of `allocator`'s public surface —
 //! `MULTITHREADED` (mutex-guarded buckets/tree) is out of scope until v2.x, see
 //! `ROADMAP.md`. `DEBUG_ALLOCATOR` (guard bytes, allocation records, `check()`/
-//! `report()`) is v0.2.0's own milestone, landing incrementally behind the
+//! `report()`) is v0.2.0's own milestone, implemented behind the
 //! `debug-allocator` feature (`crate::guard`, `crate::spomen`). The size-class wrappers
 //! (`tree_alloc`/`bucket_alloc`/`…_realloc`/`…_resize`) only fold the guard reservation
 //! in and out of sizes; everything else lives in HPHA's `debug_add`/`debug_remove`/
 //! `debug_replace`/`debug_update`/`debug_check`/`debug_purge`, which the public methods
 //! call at HPHA's own points (`orisnik_debug.rs`: guard seed and ramp, allocation
 //! records with callstack capture, payload poisoning, fail-fast detection of overruns,
-//! double frees and wrong sized frees). Still to come: leak detection on drop and
-//! `check()`/`report()`. With the feature off, `crate::guard::MEMORY_GUARD_SIZE` is
+//! double frees and wrong sized frees, `check()`/`report()`, and leak detection on `Drop`).
+//! With the feature off, `crate::guard::MEMORY_GUARD_SIZE` is
 //! 0, so every `inflate`/`deflate` call site below is an identity the compiler removes,
 //! restoring v0.1.x's exact guard-free arithmetic — the same "cancels out and is
 //! simply omitted" shape this doc described before this feature existed, now realized
@@ -140,6 +140,19 @@ pub(crate) const fn is_hpha_alignment(alignment: usize) -> bool {
 /// themselves, that no more than one OS thread ever calls into a given `Orisnik`
 /// instance.
 ///
+/// # Dropping
+/// Dropping an `Orisnik` returns every fully-idle bucket page and tree arena to the OS —
+/// HPHA's destructor begins with `purge()` in every build, and so does this — with no
+/// checks and no output. A page or arena that still holds a live allocation is left mapped:
+/// the allocation was leaked, and its memory is not reclaimed behind the caller's back.
+/// A `static` `Orisnik` (the `#[global_allocator]` pattern) is never dropped and keeps its
+/// memory for the life of the process, as before.
+///
+/// Because the teardown walks structures whose sentinels bind to the instance's address,
+/// the non-move rule of `# Address stability` now matters for a value that is merely *dropped*
+/// too: an `Orisnik` that has served a request and is then moved (returned from a builder,
+/// say) must not be dropped at its new address. `debug_assertions` builds catch it.
+///
 /// # With `debug-allocator`
 /// Behind the `debug-allocator` Cargo feature this type becomes HPHA's `DEBUG_ALLOCATOR`
 /// allocator: every allocation is recorded, guarded by trailing bytes and poisoned, and
@@ -155,6 +168,13 @@ pub(crate) const fn is_hpha_alignment(alignment: usize) -> bool {
 /// reservation. The C-ABI (`oris_*`) is not exempt: built with the feature, a detected
 /// corruption aborts at the `extern "C"` boundary. See `Rust/CONVENTIONS.md` for the
 /// rationale behind each rule.
+///
+/// `check()` audits every live allocation on request and returns an `OrisError` instead of
+/// panicking; `report()` prints the totals and one line per live allocation (address, size,
+/// and where it was allocated) to stderr. **Dropping an instance that still has live
+/// allocations is a leak**: `Drop` audits and reports them, releases the idle memory, and
+/// then panics (HPHA's destructor assert) — unless the thread is already unwinding, when a
+/// second panic would abort.
 pub struct Orisnik {
     /// The small-allocation path — every request `<= MAX_SMALL_ALLOCATION` (after
     /// [`bucket::clamp_small_allocation`]) lands here.
@@ -167,6 +187,10 @@ pub struct Orisnik {
     /// "not yet latched", the same lazy-init encoding `list.rs`'s sentinel uses for
     /// its null `prev`. Read and written only under `debug_assert!`, so release
     /// builds pay one word of storage and no instructions.
+    // Never read in a release build (that is the point: the tripwire is `debug_assert!`-
+    // only), which `dead_code` reports; the field is kept so the struct's layout does not
+    // depend on the build profile.
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     origin: Cell<usize>,
     /// The guard-byte ramp's seed stream (`spomen`; see `crate::rand`'s module doc).
     /// Present only under the `debug-allocator` feature — the non-debug `Orisnik`'s
@@ -276,6 +300,9 @@ impl Orisnik {
     /// `Rust/CONVENTIONS.md`'s rule that a structural invariant checked on every
     /// operation is a `debug_assert!`, never an always-on `assert!` that would tax
     /// each release-build allocation.
+    // In a release build the whole body is compiled out, leaving `self` unused; the method
+    // keeps its shape so every call site is identical in both profiles.
+    #[cfg_attr(not(debug_assertions), allow(clippy::unused_self))]
     fn debug_assert_not_moved(&self) {
         // EXPLICIT: the whole body is debug-only bookkeeping; guarding it keeps
         // release builds from even loading `origin`, and keeps `&self`-through-`Cell`
@@ -976,7 +1003,7 @@ impl Orisnik {
         unsafe { self.free(Some(ptr)) };
     }
 
-    /// Returns every fully-unused page/arena to the OS. Never called automatically —
+    /// Returns every fully-unused page/arena to the OS. Never called automatically (except that dropping the allocator does the equivalent, see [`Drop`]) —
     /// call periodically if reclaiming idle memory matters. Ports `allocator::purge`.
     pub fn purge(&self) {
         self.debug_assert_not_moved();
@@ -1049,6 +1076,35 @@ impl Orisnik {
 // real footgun (clippy's `declare_interior_mutable_const`) unrelated to what this
 // guard checks — `static` is also the exact form the pattern above actually uses.
 static _ORISNIK_NEW_IS_CONST: Orisnik = Orisnik::new();
+
+impl Drop for Orisnik {
+    /// Tears the allocator down: returns every fully-idle arena and bucket page to the OS
+    /// (HPHA's `~allocator` begins with `purge()`), and — with `debug-allocator` — first
+    /// audits and reports any allocation still live, then panics on a leak once the memory is
+    /// released (HPHA's destructor asserts). Pages that still hold a live block stay mapped.
+    ///
+    /// Deliberately **not** `self.purge()`: `drop` receives `&mut self`, protected for the
+    /// whole call, and purging writes the free tree's and the page lists' sentinels through
+    /// pointers derived long before — a foreign write to a protected tag, undefined behaviour
+    /// under Tree Borrows. The `release_idle_on_drop` teardowns only read the structures and
+    /// write nothing inside `self`; see `list.rs`'s "`Drop` and `&mut self`" section.
+    fn drop(&mut self) {
+        // The teardowns below walk structures whose sentinels bind to this instance's
+        // address, so a *moved-then-dropped* value (used, then returned from a builder, say)
+        // would chase stale sentinels forever; before `Drop` existed such a value merely
+        // leaked. The tripwire writes only `origin`, and only when still unlatched — a
+        // write before any foreign read, hence sound inside `drop` (see `list.rs`).
+        self.debug_assert_not_moved();
+        #[cfg(feature = "debug-allocator")]
+        let leaked = self.debug_teardown();
+        // Buckets first: their walk only dereferences pointers derived from `self` afresh,
+        // whereas the tree walk can read through old sentinel pointers.
+        self.buckets.release_idle_on_drop();
+        self.tree.release_idle_on_drop();
+        #[cfg(feature = "debug-allocator")]
+        debug::fail_on_leak(leaked);
+    }
+}
 
 impl Default for Orisnik {
     fn default() -> Self {
@@ -2163,5 +2219,256 @@ mod tests {
                 "size {size}: alloc chose bucket {allocated_from}, free would pick {freed_into}"
             );
         }
+    }
+
+    // ---- `Drop`: returning memory to the OS ----------------------------------------------
+
+    /// Mappings this thread has open right now (see `os::test_vm::live_mappings`).
+    fn mappings() -> isize {
+        crate::os::test_vm::live_mappings()
+    }
+
+    /// Runs `body` on a fresh `Orisnik`, drops it, and asserts every mapping it opened —
+    /// bucket pages, tree arenas and (with `debug-allocator`) record pages — was returned.
+    fn assert_drop_releases_everything(body: impl FnOnce(&Orisnik)) {
+        let before = mappings();
+        {
+            let orisnik = Orisnik::new();
+            body(&orisnik);
+        }
+        assert_eq!(mappings(), before, "dropping leaked OS mappings");
+    }
+
+    fn take(orisnik: &Orisnik, size: usize) -> NonNull<u8> {
+        orisnik.alloc(size).expect("allocation must succeed")
+    }
+
+    fn give(orisnik: &Orisnik, ptr: NonNull<u8>) {
+        // SAFETY: every caller passes a live allocation of `orisnik`.
+        unsafe { orisnik.free(Some(ptr)) };
+    }
+
+    #[test]
+    fn dropping_an_unused_orisnik_maps_and_releases_nothing() {
+        assert_drop_releases_everything(|_| {});
+    }
+
+    #[test]
+    fn dropping_releases_bucket_pages_of_every_size_class() {
+        assert_drop_releases_everything(|orisnik| {
+            let blocks: Vec<_> = (1..=MAX_SMALL_ALLOCATION - crate::guard::MEMORY_GUARD_SIZE)
+                .step_by(7)
+                .map(|size| take(orisnik, size))
+                .collect();
+            for ptr in blocks {
+                give(orisnik, ptr);
+            }
+        });
+    }
+
+    #[test]
+    fn dropping_releases_the_most_recently_freed_tree_block() {
+        // A block freed last is cached in `mr_free_block`, invisible to the tree walk: the
+        // teardown must find it separately.
+        assert_drop_releases_everything(|orisnik| {
+            let ptr = take(orisnik, 5000);
+            give(orisnik, ptr);
+        });
+    }
+
+    #[test]
+    fn dropping_releases_several_tree_arenas() {
+        assert_drop_releases_everything(|orisnik| {
+            // Bigger than one arena each, so several are mapped; freed in a shuffled order
+            // so some sit in the tree and one in the MR cache.
+            let sizes = [66_000, 70_000, 9_000, 80_000, 40_000, 5_000];
+            let blocks: Vec<_> = sizes.iter().map(|size| take(orisnik, *size)).collect();
+            for index in [3, 0, 5, 2, 4, 1] {
+                give(orisnik, *blocks.get(index).expect("index in range"));
+            }
+        });
+    }
+
+    #[test]
+    fn dropping_releases_a_mixed_workload_after_realloc_churn() {
+        assert_drop_releases_everything(|orisnik| {
+            let mut live: Vec<NonNull<u8>> = Vec::new();
+            for round in 1..40_usize {
+                let size = 8 + (round * 37) % 2500;
+                live.push(take(orisnik, size));
+                if round % 3 == 0 {
+                    let victim = live.remove(round % live.len());
+                    give(orisnik, victim);
+                }
+                if round % 5 == 0 {
+                    if let Some(last) = live.pop() {
+                        // SAFETY: `last` is a live allocation of `orisnik`.
+                        let grown = unsafe { orisnik.realloc(Some(last), size * 3) };
+                        live.push(grown.expect("realloc must succeed"));
+                    }
+                }
+            }
+            for ptr in live {
+                give(orisnik, ptr);
+            }
+        });
+    }
+
+    /// A block still live at drop keeps its own page mapped and nothing else: the teardown
+    /// returns idle memory only. Non-debug builds only — with `debug-allocator` the same
+    /// situation is a *leak* and panics (tested in `orisnik_debug.rs`).
+    #[test]
+    #[cfg(not(feature = "debug-allocator"))]
+    fn dropping_with_a_live_block_keeps_only_its_page() {
+        let before = mappings();
+        let kept;
+        {
+            let orisnik = Orisnik::new();
+            kept = take(&orisnik, 24);
+            let idle = take(&orisnik, 5000);
+            give(&orisnik, idle);
+            let other_class = take(&orisnik, 100);
+            give(&orisnik, other_class);
+        }
+        assert_eq!(
+            mappings(),
+            before + 1,
+            "exactly the live block's page remains"
+        );
+        // The page belongs to nobody now: release it by hand so the test itself leaks nothing.
+        let base = crate::align::align_down(kept.as_ptr(), crate::os::PAGE_SIZE);
+        // SAFETY: `base` is the `PAGE_SIZE` mapping `kept` lives in (a bucket slot), still
+        // mapped (the drop left it), and nothing uses it any more.
+        unsafe { crate::os::unmap(NonNull::new(base).expect("non-null"), crate::os::PAGE_SIZE) };
+        assert_eq!(mappings(), before);
+    }
+
+    /// The `oris_destroy` shape: the allocator lives in a `Box` (moved after first use,
+    /// which retags it) and is dropped with idle arenas still in the free tree and the MR
+    /// cache. The teardown reads the tree through pointers derived before the move.
+    #[test]
+    fn dropping_a_boxed_orisnik_with_idle_tree_arenas_is_sound() {
+        let before = mappings();
+        let orisnik = Box::new(Orisnik::new());
+        let small = take(&orisnik, 5000);
+        let large = take(&orisnik, 66_000);
+        let other = take(&orisnik, 70_000);
+        give(&orisnik, large);
+        give(&orisnik, other);
+        give(&orisnik, small);
+        let moved = orisnik;
+        drop(moved);
+        assert_eq!(mappings(), before);
+    }
+
+    // ---- teardown edge cases (found by a mutation audit) ---------------------------------
+
+    /// Drops `orisnik`, tolerating the panic `debug-allocator` raises for a leak: the tests
+    /// below leave blocks live on purpose. Takes the `Box` (not the value), so the allocator
+    /// is never moved after first use. Under `debug-allocator` it insists the panic *is* the
+    /// leak panic — a bare `catch_unwind` would also swallow a `debug_assert!` failure from a
+    /// mis-released arena and hide exactly the mutants these tests exist to kill.
+    fn drop_tolerating_a_leak(orisnik: Box<Orisnik>) {
+        #[cfg(feature = "debug-allocator")]
+        {
+            let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                drop(orisnik);
+            }))
+            .expect_err("a live block is a leak under debug-allocator");
+            let message = error
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| error.downcast_ref::<&str>().map(|text| (*text).to_owned()))
+                .unwrap_or_default();
+            assert!(
+                message.contains("memory leaked"),
+                "unexpected panic: {message}"
+            );
+        }
+        #[cfg(not(feature = "debug-allocator"))]
+        drop(orisnik);
+    }
+
+    fn release_mapping_of(block: NonNull<u8>, size: usize) {
+        let base = crate::align::align_down(block.as_ptr(), crate::os::PAGE_SIZE);
+        // SAFETY: `block` lives in a mapping of `size` bytes starting at `base`, left mapped
+        // by the drop; nothing uses it any more.
+        unsafe { crate::os::unmap(NonNull::new(base).expect("non-null"), size) };
+    }
+
+    /// `[fence][head: freed, cached][kept: live][rest: free, in the tree][fence]`: the arena
+    /// holds a live block *between* free ones, so it is not idle and must stay mapped.
+    #[test]
+    fn dropping_keeps_a_tree_arena_with_a_live_block_between_free_ones() {
+        let before = mappings();
+        let orisnik = Box::new(Orisnik::new());
+        let head = take(&orisnik, 5000);
+        let kept = take(&orisnik, 5000);
+        give(&orisnik, head);
+        drop_tolerating_a_leak(orisnik);
+        assert_eq!(
+            mappings(),
+            before + 1,
+            "the arena holding a live block must stay"
+        );
+        release_mapping_of(kept, crate::os::PAGE_SIZE);
+        assert_eq!(mappings(), before);
+    }
+
+    /// `[fence][kept: live][tail: free][fence]`: a free block that is the arena's *last*
+    /// content but not its only one.
+    #[test]
+    fn dropping_keeps_a_tree_arena_whose_live_block_precedes_the_free_tail() {
+        let before = mappings();
+        let orisnik = Box::new(Orisnik::new());
+        let kept = take(&orisnik, 5000);
+        let tail = take(&orisnik, 5000);
+        give(&orisnik, tail);
+        drop_tolerating_a_leak(orisnik);
+        assert_eq!(mappings(), before + 1);
+        release_mapping_of(kept, crate::os::PAGE_SIZE);
+        assert_eq!(mappings(), before);
+    }
+
+    /// Bucket pages are ordered so pages with free slots come first, but among not-full pages
+    /// the order is arbitrary: an empty page can sit *behind* a partly-used one, and the
+    /// teardown must not stop at the first page that is not empty.
+    #[test]
+    fn dropping_releases_empty_bucket_pages_that_sit_behind_a_partly_used_one() {
+        let before = mappings();
+        let orisnik = Box::new(Orisnik::new());
+        let blocks: Vec<NonNull<u8>> = (0..6000).map(|_| take(&orisnik, 24)).collect();
+        let pages: std::collections::BTreeSet<usize> = blocks
+            .iter()
+            .map(|ptr| crate::align::align_down(ptr.as_ptr(), crate::os::PAGE_SIZE).addr())
+            .collect();
+        assert!(pages.len() >= 3, "need several pages, got {}", pages.len());
+        // Freed in reverse so the page keeping `blocks[0]` ends up in front, with empty
+        // pages behind it.
+        for ptr in blocks.iter().skip(1).rev() {
+            give(&orisnik, *ptr);
+        }
+        drop_tolerating_a_leak(orisnik);
+        assert_eq!(
+            mappings(),
+            before + 1,
+            "only the page of the live block remains"
+        );
+        release_mapping_of(*blocks.first().expect("non-empty"), crate::os::PAGE_SIZE);
+        assert_eq!(mappings(), before);
+    }
+
+    /// Equal-sized idle arenas share a key, so all but one are chained duplicates in the
+    /// tree rather than tree positions: the walk must reach the chain members too.
+    #[test]
+    fn dropping_releases_equal_sized_arenas_chained_in_the_tree() {
+        assert_drop_releases_everything(|orisnik| {
+            let blocks: Vec<_> = (0..6).map(|_| take(orisnik, 70_000)).collect();
+            // Each block exactly once, in a scrambled order: five land in the tree (all with
+            // the same key, hence chained) and the last one freed sits in the MR cache.
+            for index in [2, 0, 5, 1, 4, 3] {
+                give(orisnik, *blocks.get(index).expect("index in range"));
+            }
+        });
     }
 }

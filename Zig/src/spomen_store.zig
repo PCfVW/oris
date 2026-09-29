@@ -182,6 +182,37 @@ pub const RecordStore = struct {
         return info;
     }
 
+    /// The record with the lowest payload address, or `null` if the store is empty: the
+    /// start of an address-ordered walk (HPHA's `debug_record_map::begin()`), used by
+    /// `check()` and `report()`.
+    pub fn first(self: *RecordStore) ?*Record {
+        return self.tree.minimum();
+    }
+
+    /// The record after `record` in address order, or `null` if it is the last. The
+    /// successor is re-derived from the tree on every call, so a walk tolerates records
+    /// being *inserted* while it is in progress, as long as `record` itself is still live
+    /// when this is called. It does **not** tolerate removals: `remove` swaps the last
+    /// book record into the vacated slot, so a successor latched before a removal can go
+    /// stale.
+    pub fn next(self: *RecordStore, record: *Record) ?*Record {
+        return self.tree.succ(record);
+    }
+
+    /// Calls `visit(context, record)` for every live record in *storage* order (the order
+    /// the records sit in the book, which a removal from the middle perturbs — not address
+    /// order), changing nothing and never touching the
+    /// address index. The leak audit in `Orisnitsa.deinit` uses it, so both ports list
+    /// leaked blocks in the same order (`orisnik` needs it for an aliasing reason Zig does
+    /// not have); the public `report()` uses address order (`first`/`next`).
+    pub fn forEachLive(
+        self: *RecordStore,
+        context: anytype,
+        comptime visit: fn (@TypeOf(context), *Record) void,
+    ) void {
+        self.book.forEachLive(context, visit);
+    }
+
     /// Returns the record book's spare pages to the OS. Ports
     /// `debug_record_map::purge`.
     pub fn purge(self: *RecordStore) void {
@@ -318,6 +349,72 @@ test "update changes size and seed in place" {
     try testing.expectEqual(@as(usize, 64), rec.size);
     try testing.expectEqual(@as(u8, 5), rec.guard_byte);
     try testing.expect(store.update(addr(4), 1, 0, sentinel(4)) == null);
+}
+
+test "first/next walk the records in address order, whatever the insertion order, before and after a removal" {
+    var store: RecordStore = .init();
+    defer store.deinit();
+    try testing.expect(store.first() == null);
+    const n = 50;
+    for (shuffled(n, 42)) |i| try testing.expect(store.addRecord(tagged(i)));
+    var expected: usize = 0;
+    var cursor = store.first();
+    // EXPLICIT: address-order tree walk; `cursor` is the state, not expressible as an
+    // iterator.
+    while (cursor) |record| : (cursor = store.next(record)) {
+        try testing.expectEqual(addr(expected), record.ptr);
+        expected += 1;
+    }
+    try testing.expectEqual(@as(usize, n), expected);
+    // A removal between two complete walks leaves the second one consistent.
+    _ = store.remove(addr(10));
+    try testing.expect(store.find(addr(10)) == null);
+    var seen: usize = 0;
+    cursor = store.first();
+    // EXPLICIT: as above.
+    while (cursor) |record| : (cursor = store.next(record)) seen += 1;
+    try testing.expectEqual(@as(usize, n - 1), seen);
+}
+
+test "forEachLive visits in storage order, not address order" {
+    var store: RecordStore = .init();
+    defer store.deinit();
+    const order = [_]usize{ 5, 1, 9, 3 };
+    for (order) |i| try testing.expect(store.addRecord(tagged(i)));
+    const Log = struct {
+        sizes: [4]usize = undefined,
+        count: usize = 0,
+        fn visit(self: *@This(), record: *Record) void {
+            self.sizes[self.count] = record.size;
+            self.count += 1;
+        }
+    };
+    var log: Log = .{};
+    store.forEachLive(&log, Log.visit);
+    try testing.expectEqual(@as(usize, 4), log.count);
+    try testing.expectEqualSlices(usize, &order, &log.sizes);
+}
+
+test "a removal from the middle perturbs the storage order" {
+    // Swap-remove moves the last book record into the hole, so `forEachLive` no longer
+    // lists records in the order they were added. Kills a doc/behaviour claim that storage
+    // order is insertion order.
+    var store: RecordStore = .init();
+    defer store.deinit();
+    for ([_]usize{ 1, 2, 3, 4 }) |i| try testing.expect(store.addRecord(tagged(i)));
+    _ = store.remove(addr(2));
+    const Log = struct {
+        sizes: [4]usize = undefined,
+        count: usize = 0,
+        fn visit(self: *@This(), record: *Record) void {
+            self.sizes[self.count] = record.size;
+            self.count += 1;
+        }
+    };
+    var log: Log = .{};
+    store.forEachLive(&log, Log.visit);
+    try testing.expectEqual(@as(usize, 3), log.count);
+    try testing.expectEqualSlices(usize, &[_]usize{ 1, 4, 3 }, log.sizes[0..3]);
 }
 
 test "add reports OS refusal and records nothing" {

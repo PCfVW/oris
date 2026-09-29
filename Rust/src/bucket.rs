@@ -790,6 +790,45 @@ impl Buckets {
             }
         }
     }
+
+    /// Drop-time counterpart of [`Buckets::purge`]: returns every page with zero live
+    /// allocations to the OS **without unlinking anything or updating any counter** — the
+    /// same reasoning as [`crate::tree::Tree::release_idle_on_drop`] (`Drop::drop`'s
+    /// `&mut self` is protected, so nothing inside `self` may be written through a pointer
+    /// derived earlier). Pages still holding a live block are left mapped. Unlike `purge`
+    /// it visits every page rather than stopping at the first full one: with no unlinking
+    /// there is no ordering assumption worth relying on.
+    pub(crate) fn release_idle_on_drop(&self) {
+        for bucket in &self.buckets {
+            let sentinel = bucket.pages.sentinel();
+            // EXPLICIT: raw link-chase; the successor is latched before the current page
+            // is unmapped, and `cur` is the state.
+            // SAFETY: `sentinel` is live and self-linked (`IntrusiveList::sentinel`'s own
+            // guarantee); its `next` is therefore live.
+            let mut cur = unsafe { crate::list::ListLink::next(sentinel) };
+            while cur != sentinel {
+                // SAFETY: `cur != sentinel`, so it is a real node's link, and every node
+                // in this list is a `Page` whose `link` sits at offset 0.
+                let page = unsafe { NonNull::new_unchecked(cur.cast::<Page>()) };
+                // SAFETY: `cur` is live and linked (established above).
+                let next = unsafe { crate::list::ListLink::next(cur) };
+                // SAFETY: `page` is live (a linked member of this bucket's list).
+                if unsafe { Page::is_empty(page.as_ptr()) } {
+                    // ALIGN: `page` is always `PAGE_SIZE - size_of::<Page>()` bytes into its
+                    // owning PAGE_SIZE-aligned mapping (the type's own invariant); rounding
+                    // down recovers that mapping's base.
+                    let mem = crate::align::align_down(page.as_ptr().cast::<u8>(), os::PAGE_SIZE);
+                    // SAFETY: `mem` is the live mapping `page` belongs to, non-null.
+                    let mem = unsafe { NonNull::new_unchecked(mem) };
+                    // SAFETY: `mem` is exactly the `PAGE_SIZE` mapping `system_alloc`
+                    // obtained; nothing references it afterwards (`next` was latched above
+                    // and this whole structure is being dropped).
+                    unsafe { os::unmap(mem, os::PAGE_SIZE) };
+                }
+                cur = next;
+            }
+        }
+    }
 }
 
 #[cfg(test)]

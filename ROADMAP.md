@@ -31,7 +31,7 @@ From v0.1.0 onward, both Oris ports satisfy the following property:
 
 This is a stricter property than "the API behaves the same"; it is "the algorithm executes the same." Verified in CI from v0.3.0 onward against a corpus of reproducible traces.
 
-**Scope.** The invariant covers the allocator's own state — in the default build, and in the debug configuration for everything the guard reservation changes (size classes, block sizes, bucket/tree routing), which is identical in both ports. Debug-only *diagnostic storage* is outside it: the allocation-record book's pages differ in size between the ports (`orisnitsa` inlines an 8-frame callstack in each record; `orisnik` holds an owning `Backtrace`), so record-page capacity — and with it debug-mode RSS — differs, and a Rust instance used as a `#[global_allocator]` records no callstack at all. The v0.3.0 trace gate therefore runs the non-debug build, or excludes record pages.
+**Scope.** The invariant covers the allocator's own state — in the default build, and in the debug configuration for everything the guard reservation changes (size classes, block sizes, bucket/tree routing), which is identical in both ports. Debug-only *diagnostic storage* is outside it: the allocation-record book's pages differ in size between the ports (`orisnitsa` inlines an 8-frame callstack in each record; `orisnik` holds an owning `Backtrace`), so record-page capacity — and with it debug-mode RSS — differs, and a Rust instance used as a `#[global_allocator]` records no callstack at all. The v0.3.0 trace gate therefore runs the non-debug build, or excludes record pages. It also compares allocator state *before* teardown: `Drop`/`deinit` returns idle memory by different means in the two ports (`orisnik` reads its structures and unmaps; `orisnitsa` calls `purge`, which erases and rotates tree nodes), so rotation counts across teardown are not comparable, though the final result — every idle page released — is.
 
 This invariant is the property that justifies maintaining two ports rather than one. Without it, the ports are merely two implementations; with it, they are two views of the same machine.
 
@@ -56,7 +56,7 @@ This invariant is the property that justifies maintaining two ports rather than 
 
 **Theme:** Observability and safety.
 
-**Progress (unreleased):** guard bytes with overflow detection, allocation-record tracking, callstack capture, the build toggle and fail-fast detection of overruns, double frees, foreign pointers and wrong sized frees are implemented in both ports. Leak detection on drop / deinit and `report()` / `check()` remain.
+**Progress (unreleased):** every v0.2.0 bullet below is implemented in both ports — guard bytes with overflow detection, allocation-record tracking, callstack capture, leak detection on drop / deinit, `report()` and `check()`, the build toggle, and fail-fast detection of overruns, double frees, foreign pointers and wrong sized frees. What remains before release is the release itself (version bumps, the changelog cut, the tag).
 
 - Port HPHA's `DEBUG_ALLOCATOR` mode in both languages
 - **Memory guard bytes** with overflow detection

@@ -117,8 +117,6 @@ impl RecordBook {
 
     /// Number of live records.
     #[must_use]
-    // Reached only through `RecordStore::len` (itself dead until Phase 5) and tests.
-    #[allow(dead_code)]
     pub(crate) fn len(&self) -> usize {
         self.len.get()
     }
@@ -243,6 +241,45 @@ impl RecordBook {
         let at = unsafe { slot(page, index) };
         // SAFETY: `at` is non-null (inside a mapping).
         Some(unsafe { NonNull::new_unchecked(at) })
+    }
+
+    /// Calls `visit` for every live record, in the order they were stored (page by page),
+    /// changing nothing. The walk follows the pages' own links and compares against the page
+    /// list's sentinel by *address* only — it never dereferences a stored pointer to the
+    /// sentinel, which is what makes it usable from `Orisnik`'s `Drop` (see
+    /// [`crate::spomen::store::RecordStore::for_each_live`]).
+    pub(crate) fn for_each_live(&self, mut visit: impl FnMut(NonNull<Record>)) {
+        let cur = self.cur.get();
+        if cur.is_null() {
+            return;
+        }
+        let Some(first) = self.pages.front() else {
+            return;
+        };
+        let mut page = first.as_ptr();
+        // EXPLICIT: walks the page chain up to and including `cur`; `page` is the state.
+        loop {
+            let live = if page == cur {
+                self.next.get()
+            } else {
+                CAPACITY
+            };
+            for index in 0..live {
+                // SAFETY: `page` is a live page of this book and `index < CAPACITY`
+                // (`live <= CAPACITY`).
+                let at = unsafe { slot(page, index) };
+                // SAFETY: `at` is non-null (inside a mapping).
+                visit(unsafe { NonNull::new_unchecked(at) });
+            }
+            if page == cur {
+                return;
+            }
+            // SAFETY: `page` is a live page of this book.
+            page = unsafe { self.next_page(page) };
+            if page.is_null() {
+                return;
+            }
+        }
     }
 
     /// Removes the last record and returns it by value; the caller now owns it (and
@@ -484,5 +521,36 @@ mod tests {
         let _oom = os::test_vm::fail_map_after(0);
         assert!(book.push_back(rec(0)).is_none());
         assert!(book.is_empty());
+    }
+
+    /// `for_each_live` visits every live record exactly once, in storage order, at every
+    /// page-boundary shape — including records that span several pages, and a `cur` page
+    /// left with `next == 0` after a pop.
+    #[test]
+    fn for_each_live_visits_every_record_once_across_pages() {
+        for count in [0, 1, CAPACITY - 1, CAPACITY, CAPACITY + 1, CAPACITY * 2 + 3] {
+            let book = RecordBook::new();
+            for index in 0..count {
+                book.push_back(rec(index)).expect("map");
+            }
+            let mut seen = Vec::new();
+            book.for_each_live(|record| {
+                // SAFETY: `record` is a live record.
+                seen.push(unsafe { (*record.as_ptr()).size });
+            });
+            assert_eq!(seen, (0..count).collect::<Vec<_>>(), "count {count}");
+        }
+        // Pop the only record of the second page: `cur` is now a page with `next == 0`.
+        let book = RecordBook::new();
+        for index in 0..=CAPACITY {
+            book.push_back(rec(index)).expect("map");
+        }
+        drop(book.pop_back());
+        let mut seen = Vec::new();
+        book.for_each_live(|record| {
+            // SAFETY: `record` is a live record.
+            seen.push(unsafe { (*record.as_ptr()).size });
+        });
+        assert_eq!(seen, (0..CAPACITY).collect::<Vec<_>>());
     }
 }

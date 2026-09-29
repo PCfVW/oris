@@ -19,7 +19,7 @@
 //!
 //! It does **not** exercise the `busy` re-entrancy flag: with callstack capture off in
 //! global mode, no hook allocates, so there is no recursion to break. That flag is
-//! defence in depth for hooks that do allocate (the coming `report()`), and is tested
+//! defence in depth for hooks that do allocate (`write_report`'s formatting), and is tested
 //! directly in `orisnik_debug.rs`.
 //!
 //! It is its own integration-test binary with `harness = false` because a global
@@ -110,6 +110,13 @@ mod scenario {
         let second = workload();
         let after = ALLOCATOR.requested();
         assert_eq!(before, after, "second pass must balance too");
+        // The public audit over a heap full of real std allocations (the runtime's own,
+        // this test's, and whatever is still live): none may be reported corrupt.
+        let audit = ALLOCATOR.check();
+        assert!(
+            audit.is_ok(),
+            "check() must find a healthy heap healthy: {audit:?}"
+        );
         assert_eq!(first, second, "the workload is deterministic");
 
         println!("debug_global_allocator: ok (checksum {first})");

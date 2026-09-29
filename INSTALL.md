@@ -20,8 +20,10 @@ Oris is a two-port monorepo; each port builds independently with its own toolcha
   needed. Guard bytes, payload poisoning, allocation records (with callstack capture) and
   the hooks that use them are implemented: a guard overrun, a double free, a foreign
   pointer or a wrong sized-free size now **panics** with a diagnostic naming the block and
-  where it was allocated. Leak detection on drop and `check()`/`report()` are still to
-  come. Installed as a `#[global_allocator]`, build with `panic = "abort"`, and note that
+  where it was allocated. `Orisnik::check()` audits every live block on request
+  (`Result<(), OrisError>`), `report()` prints the live blocks to stderr, and dropping an
+  instance that still has live allocations is a **leak**: it is reported, the idle memory is
+  released, and it panics. Installed as a `#[global_allocator]`, build with `panic = "abort"`, and note that
   such an instance records no callstacks (see `Rust/CONVENTIONS.md`). Build and test it
   with
   `cargo test --features debug-allocator` (Miri:
@@ -55,9 +57,10 @@ orisnik = "0.1"
   `debug-allocator` feature — `spomen`, landing across v0.2.0 (`ROADMAP.md`). No
   `zig build` flag needed; the default `orisnitsa.Orisnitsa` export stays the
   non-debug `Orisnitsa(.{})`. Same status as the Rust side above: guard bytes and
-  payload poisoning, allocation records and the hooks that use them are implemented
-  (detected corruption panics); leak detection on `deinit` and `check()`/`report()` are
-  still to come. A debug instance must be `deinit()`ed (it owns record pages). Exercise
+  payload poisoning, allocation records, the hooks that use them, `check()`/`report()` and
+  leak detection are all implemented (detected corruption and leaks panic). Every
+  `Orisnitsa` should be `deinit()`ed: that returns its idle memory to the OS, and a debug
+  instance also frees its record pages and fails on leaked blocks. Exercise
   it with `zig build test` (the debug instantiation is covered by the test suite).
 
 ```sh

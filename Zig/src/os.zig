@@ -43,7 +43,9 @@ const is_windows = builtin.os.tag == .windows;
 pub fn map(size: usize) ?[*]u8 {
     std.debug.assert(size > 0 and size % PAGE_SIZE == 0);
     if (builtin.is_test and test_vm.shouldFail()) return null;
-    return if (is_windows) mapWindows(size) else mapUnix(size);
+    const mapped = if (is_windows) mapWindows(size) else mapUnix(size);
+    if (builtin.is_test and mapped != null) test_vm.live += 1;
+    return mapped;
 }
 
 /// Test-only out-of-memory injection over the OS boundary. Compiled out entirely
@@ -87,6 +89,18 @@ pub const test_vm = struct {
         fail_after = null;
     }
 
+    /// Mappings currently open: successful `map` calls minus `unmap` calls. Zig's test
+    /// runner runs tests one at a time on one thread, so a plain global is the analogue
+    /// of `orisnik`'s thread-local counter. Only maintained in a test build.
+    var live: isize = 0;
+
+    /// How many mappings are currently open (see `live`). Lets a test assert that
+    /// tearing an allocator down returned everything to the OS natively. Mirrors
+    /// `orisnik`'s `os::test_vm::live_mappings`.
+    pub fn liveMappings() isize {
+        return live;
+    }
+
     /// Consumes one budgeted success, reporting whether this `map` call must fail.
     pub fn shouldFail() bool {
         const n = fail_after orelse return false;
@@ -104,6 +118,7 @@ pub const test_vm = struct {
 /// - `size` must be the exact size passed to that `map` call.
 pub fn unmap(ptr: [*]u8, size: usize) void {
     std.debug.assert(size > 0 and size % PAGE_SIZE == 0);
+    if (builtin.is_test) test_vm.live -= 1;
     if (is_windows) unmapWindows(ptr) else unmapUnix(ptr, size);
 }
 

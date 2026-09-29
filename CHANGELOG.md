@@ -12,6 +12,58 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Added
 
+- **Leak detection, `check()`, `report()` and `OrisError` (v0.2.0, Phase 5 — completes the
+  debug allocator).** With `debug-allocator` / `Orisnitsa(.{ .debug = true })`:
+  `check()` audits every live allocation — its recorded size must fit the block and its
+  guard ramp must be intact — and returns the first problem in address order as an error
+  (`Orisnik::check` → `Result<(), OrisError>`, `#[non_exhaustive] OrisError { Os, Corruption }`,
+  a new public type; `Orisnitsa.check` → the same shape as a Zig error set), instead of
+  panicking; it ports `allocator::check`. `report()` prints HPHA's report — total requested and
+  allocated bytes, then one line per live allocation with its allocation callstack — to
+  stderr (`Orisnik::report`, and `write_report(&mut dyn fmt::Write)` for a caller-supplied
+  sink; `Orisnitsa.report(writer)`). A block still live when the allocator is dropped /
+  `deinit`ed is a **leak**: it is audited and reported, every idle page is released, and then
+  it panics — HPHA's destructor, which runs `purge(); check(); report();` and asserts the
+  heap empty (Rust skips the panic while the thread is already unwinding, where a second
+  panic would abort). A new `Corruption` kind, `Oversized`, covers the audit's size check.
+
+  The Rust teardown is the hard part, and Miri found three constraints on it.
+  `Drop::drop(&mut self)` cannot call `purge()`, which rewrites the free tree and page lists
+  through pointers derived long before; and — the surprise — it also cannot *read* the
+  tree's sentinel through the pointers stored in the nodes if the allocator lives in a `Box`
+  (as `oris_destroy` makes it): moving into a `Box` retags it, so one such read makes the
+  box's deallocation undefined behaviour under Tree Borrows. Teardown therefore only reads
+  what it must, in a fixed order: it writes its flags into `self` first, walks the buckets
+  (which need no sentinel reads), walks the free tree with a new `visit_all_readonly` that
+  recognises the sentinel by address and never dereferences it, and threads the purgeable
+  arenas onto a list through their own payloads (an allocator cannot allocate) before
+  unmapping them. The debug leak audit walks the record *book* (storage order), not the
+  record tree, for the same reason — so `Drop`'s leak report lists blocks in storage order (roughly
+  allocation order; a removal from the middle perturbs it), while `report()` lists them by
+  address. `orisnitsa` has no aliasing model
+  to satisfy: its `deinit` simply calls `purge`.
+
+  Two consequences worth stating. After a corruption has been *detected* the hooks are off and
+  records may be stale (a caller who caught the panic can free the block, which then no longer
+  retires its record), so `check()` refuses with an error rather than read freed memory; and
+  because teardown now walks structures bound to the instance's address, an `Orisnik` that has
+  served a request must not be moved before it is dropped (a `debug_assert!` at the top of
+  `drop` catches it).
+
+  `orisnitsa` specifics: `OrisError = error{ Os, Corruption }` is the codebase's first Zig
+  error set; since an error set carries no message, `check(?*Diagnostic)` takes an optional
+  fixed-buffer out-parameter for the description (no allocation). `report(*std.Io.Writer)`
+  and `reportToStderr()` print HPHA's report with callstacks as hex return addresses (symbol
+  resolution stays out of the allocator). Zig cannot catch a panic in a test, so the leak
+  path is tested through a private `deinitReturningLeaks` that does everything except panic.
+  The C-ABI's `oris_destroy` now calls `deinit`, so C callers get their memory back in both
+  ports. A debug `Orisnitsa` must be `deinit`ed or its record pages leak.
+
+  Also worth knowing: `write_report` writes into a caller-supplied sink, and whatever that
+  sink allocates while the hooks are suspended is unrecorded, so for an `Orisnik` that is the
+  `#[global_allocator]` use `report()` (straight to stderr) instead. The C-ABI's
+  `oris_destroy` under `debug-allocator` aborts on a leak, as the panic cannot cross the
+  `extern "C"` boundary.
 - **Debug hooks wired into the allocator (v0.2.0, Phase 4).** With `debug-allocator` /
   `Orisnitsa(.{ .debug = true })` the record store from Phase 3 is now live: every
   allocation is recorded (address, requested size, source, guard seed, callstack) and every
@@ -244,6 +296,18 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Changed
 
+- **Dropping an allocator now returns its idle memory to the OS, in every build.** Until now
+  an `Orisnik` that went out of scope (or was `oris_destroy`ed, or an `Orisnitsa` that was
+  `deinit`ed) leaked every OS page and arena it had mapped unless the caller had called
+  `purge()` first; `oris_destroy`'s doc even said so, "matching HPHA" — which was wrong, as
+  HPHA's destructor begins with `purge()`. `Drop` / `deinit` now does the equivalent, with
+  no checks or output outside the debug allocator, so `oris_purge` before `oris_destroy` is
+  no longer needed. A page that still holds a live allocation stays mapped (the allocation
+  leaked; its memory is not reclaimed behind the caller's back), and a `static` allocator
+  (the `#[global_allocator]` pattern) is never dropped and is unaffected. This is a
+  behaviour change for code that dropped an allocator and kept using pointers into it —
+  which was already outside the contract, since an allocation may not outlive its
+  allocator.
 - **Zig `// SAFETY:` coverage and Rust rustdoc links (pre-existing gaps closed).** The
   pre-v0.2.0 Zig code (`tree`, `block`, `bucket`, `align`, `os`, `rbtree`, `orisnitsa`,
   `allocator`, `list`) justified raw-pointer operations without the literal

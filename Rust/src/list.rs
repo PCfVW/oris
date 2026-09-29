@@ -43,6 +43,21 @@
 //! to a protected tag — undefined behaviour under Tree Borrows, confirmed by Miri on
 //! `spomen`'s `RecordBook`. An owner's `drop` must therefore only *read* links (walk the
 //! chain and release each node) and never call [`unlink_node`] or the list's mutators.
+//!
+//! Three refinements, each found by Miri while writing `Orisnik`'s own `Drop` (v0.2.0
+//! Phase 5), apply to every intrusive structure an owner tears down:
+//!
+//! - **No writes after a foreign read.** A protected `&mut` that has seen a foreign *read*
+//!   may not be *written* through afterwards, so a teardown writes into `self` (flags,
+//!   counters) *first*, or not at all.
+//! - **Never dereference the sentinel through a stored pointer.** Reading the sentinel via
+//!   the copy stored in a node is a foreign read just like a write is a foreign write. The
+//!   list's own walks compare against the sentinel by address and are safe; the red-black
+//!   tree's ordinary navigation (`is_nil`, `succ`) *does* dereference it, so a teardown uses
+//!   `IntrusiveMultiRbTree::visit_all_readonly`, which does not.
+//! - **A `Box` retags.** An allocator moved into a `Box` (the C-ABI's `oris_destroy`) has a
+//!   fresh tag, so *every* pointer stored in its structures before the move is foreign to
+//!   it: one foreign read anywhere in teardown makes the box's deallocation undefined.
 
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;

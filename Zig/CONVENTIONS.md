@@ -498,16 +498,40 @@ shims. Contracts to keep:
   `capi.zig` are fixed to `Orisnitsa(.{})`, so in this repo a `config.debug` instance cannot back a
   `std.mem.Allocator` through the vtable or the C API — it is reachable only through the type's own
   methods.
-- **`requested()` and `deinit()`.** `requested()` (debug only) is HPHA's `mTotalRequestedSize*`, each
-  block counted as `size + memoryGuardSize`. A `config.debug` instance owns the record store's OS
-  pages, so its owner must call `deinit()` (a no-op for `Orisnitsa(.{})`); it does not free
-  outstanding allocations. Tests that use a debug instance `defer orisnitsa.deinit()`.
+- **`requested()`.** Debug only; HPHA's `mTotalRequestedSize*`, each block counted as
+  `size + memoryGuardSize`.
+- **`deinit()` — every build releases memory; debug also fails on leaks.** `deinit()` returns every
+  idle bucket page and tree arena to the OS in **every** build (HPHA's destructor begins with
+  `purge()`; it is `purge()` here, Zig has no Tree Borrows problem), with no checks or output
+  without `config.debug`. Pages that still hold a live block stay mapped. With `config.debug`, live
+  blocks at `deinit` are a **leak**, in this order: (1) if `records.len() > 0`, print to stderr a
+  summary line, the first problem the audit finds, and the report — head, one line per live record,
+  foot — before the record store is released, mirroring HPHA's check-then-report (this is not about
+  readability: `purge` never frees a page that holds a live block). Unlike the public `check`
+  (**address** order), this audit and listing walk **storage** order (`RecordStore.forEachLive`: the
+  order the records sit in the book, which a removal from the middle perturbs), so the "first
+  problem" is the first in storage order and the two ports list leaked blocks alike; (2)
+  `purge()`; (3) `records.deinit()`; (4) if anything leaked, `std.debug.panic` (HPHA's destructor
+  assert). Zig panics do not unwind, so unlike Rust there is no `panicking()` guard and no `disabled`
+  latch. The non-panicking part is the private `deinitReturningLeaks`, which tests call (a panic
+  cannot be caught in a Zig test); `deinit` = that + the panic. A debug instance's owner must call
+  `deinit()` — it also returns the record store's own pages. Tests that use a debug instance
+  `defer orisnitsa.deinit()` and must free every block first.
+- **`check()`, `report()` and `OrisError`.** `check(?*Diagnostic) OrisError!void` audits every record
+  in **address** order (`RecordStore.first`/`next`): the recorded size must fit `querySize(ptr)` and
+  the guard ramp must be intact (`Record.checkGuard`). It stops at the first problem, returns
+  `error.Corruption` (`OrisError = error{ Os, Corruption }`; `Os` is reserved, like Rust), never
+  panics and changes nothing; the human-readable description (same wording as Rust, incl. the
+  `oversized` kind) goes into the optional fixed-buffer `Diagnostic` out-parameter, so nothing
+  allocates. `report(*std.Io.Writer)` (address order; `reportToStderr()` for the convenience) writes
+  the head, `ptr=0x…, size=N` plus the callstack as raw return addresses per record, and the foot.
+  Public `report()` is address order, the leak report at `deinit` is storage order — both ports.
 - **The `stats` seam.** Zig cannot catch the panic a missing hook call would otherwise show up
   through, so `Orisnitsa` carries debug-only plain `usize` counters (`HookStats`: adds, removes,
   removes carrying a size, replaces, updates, checks, purges) incremented inside the hooks, and
   tests pin the exact counts after each public operation. This is a carve-out from "no test
   hooks": the seam counts hook *invocations* only and never lets dispatch continue past a detected
-  corruption. It is expected to feed Phase 5's `report()`.
+  corruption. `report()` does not use it; it exists for the wiring tests only.
 - **`verify` compares the way the record holds it.** A bucket-path record holds the
   minimum-size-clamped size, so the caller's `orig_size` is clamped before the compare; a tree-path
   record holds the raw size (`allocAligned(5, 512)`, a tree-path `realloc(p, 5)`), so it is

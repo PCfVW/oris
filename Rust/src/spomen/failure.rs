@@ -23,7 +23,7 @@ use core::ptr::NonNull;
 /// What a debug hook found wrong with a pointer handed to `free`/`realloc`/`resize`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[allow(clippy::exhaustive_enums)]
-// EXHAUSTIVE: exactly the three failures HPHA's `debug_record_map` asserts on.
+// EXHAUSTIVE: the failures HPHA's `debug_record_map` and `check()` assert on.
 pub(crate) enum Corruption {
     /// No record exists for the pointer: it was never allocated by this allocator, or it
     /// was already freed (a double free).
@@ -36,6 +36,12 @@ pub(crate) enum Corruption {
     /// The trailing guard ramp no longer matches the seed recorded for the allocation:
     /// something wrote past the end of the block.
     GuardOverrun,
+    /// A live record claims more bytes than the block it describes can hold. Only
+    /// `check()` looks for this (HPHA's `assert(it->size() <= size(it->ptr()))`).
+    Oversized {
+        /// The block's real usable size.
+        usable: usize,
+    },
 }
 
 /// The diagnostic for `what`, following the house wording (`Rust/CONVENTIONS.md`:
@@ -64,6 +70,16 @@ pub(crate) unsafe fn describe(
             format!(
                 "free size does not match allocation size (block {addr:#x}, allocated as \
                  {recorded} bytes, freed as {given})"
+            )
+        }
+        Corruption::Oversized { usable } => {
+            let size = record.map_or(0, |r| {
+                // SAFETY: `r` is live (this function's contract); reads one field.
+                unsafe { (*r.as_ptr()).size }
+            });
+            format!(
+                "recorded size exceeds the block's size (block {addr:#x}, recorded {size} bytes, \
+                 block holds {usable})"
             )
         }
         Corruption::GuardOverrun => {

@@ -24,7 +24,8 @@
 //! the book and store move it by value with no ownership bookkeeping.
 //!
 //! Symbol resolution (turning the addresses into names and source locations) is
-//! deferred to `report()`, a later phase; nothing here formats or resolves anything.
+//! left to the reader: `report()` prints the raw addresses, and nothing here formats or
+//! resolves anything.
 
 const std = @import("std");
 const rbtree = @import("rbtree.zig");

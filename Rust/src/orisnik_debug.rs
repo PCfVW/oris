@@ -21,9 +21,11 @@
 //! callstack at all (see `spomen::record`'s "global allocator" section — that rule exists
 //! to avoid a *deadlock*, not recursion), and the record store maps its pages with
 //! `os::map`. The `busy` flag is kept anyway as the enforcement of the invariant "a hook
-//! never observes or records its own allocations", because the next hooks will break it:
-//! `report()`/`check()` format strings (allocating) while iterating the record tree, and
-//! that iteration must not see records inserted by its own allocations.
+//! never observes or records its own allocations", because it is what makes `report()`
+//! safe: formatting a report (a `Backtrace`'s symbol resolution, or a caller's sink) can
+//! allocate while the record tree is being walked, and the walk must not see records inserted
+//! by its own allocations. `report`/`write_report` therefore hold `busy`; `check` allocates
+//! nothing during its walk and does not need to.
 //!
 //! While a hook runs, nested `alloc`/`free`/`realloc` calls are served normally but skip
 //! every hook — unrecorded and unchecked. That is self-consistent provided everything a
@@ -46,6 +48,7 @@
 use super::{DebugSource, Orisnik};
 use crate::bucket;
 use crate::guard::MEMORY_GUARD_SIZE;
+use crate::spomen::error::OrisError;
 use crate::spomen::failure::{self, Corruption};
 use crate::spomen::record::{Record, Source};
 use core::cell::Cell;
@@ -321,6 +324,246 @@ impl Orisnik {
         };
         self.records.purge();
     }
+}
+
+/// A `fmt::Write` sink over standard error: one unbuffered `write_all` per piece, so
+/// printing a report needs no heap buffer and allocates nothing from this instance.
+struct StderrSink;
+
+impl core::fmt::Write for StderrSink {
+    fn write_str(&mut self, text: &str) -> core::fmt::Result {
+        use std::io::Write;
+        std::io::stderr()
+            .write_all(text.as_bytes())
+            .map_err(|_| core::fmt::Error)
+    }
+}
+
+impl Orisnik {
+    /// Audits every live allocation and returns the first problem found, without changing
+    /// anything and without panicking. Ports `allocator::check` (which `assert`s each
+    /// record's size against the block's size and its guard ramp): for every record, in
+    /// address order, the recorded size must fit the block and the trailing guard ramp must
+    /// still be intact. Stops at the first mismatch, like HPHA.
+    ///
+    /// Available with the `debug-allocator` feature. A hook-detected corruption panics; this
+    /// is the way to *ask* instead, e.g. from a test or a periodic self-check.
+    ///
+    /// Once a hook has detected corruption the hooks are off for good and the records may be
+    /// stale (a caller who caught the panic can free the block, which no longer retires its
+    /// record). Auditing them would read freed memory, so `check` then refuses and returns an
+    /// error instead: the heap is, by definition, no longer trustworthy.
+    ///
+    /// # Errors
+    /// Returns [`OrisError::Corruption`] describing the first record found overrun or
+    /// inconsistent (block address, sizes, and — for an owned instance — where it was
+    /// allocated), or, after an earlier detected corruption, saying the records can no longer
+    /// be audited.
+    pub fn check(&self) -> Result<(), OrisError> {
+        if self.disabled.get() {
+            return Err(OrisError::Corruption(
+                "records can no longer be audited (a corruption was already detected)".to_owned(),
+            ));
+        }
+        let mut cursor = self.records.first();
+        while let Some(record) = cursor {
+            // Latched first: nothing below changes the store, but this keeps the walk
+            // robust should a future caller interleave allocations.
+            cursor = self.records.next(record);
+            if let Some(problem) = self.audit_record(record) {
+                return Err(problem);
+            }
+        }
+        Ok(())
+    }
+
+    /// The problem with one live allocation, if any: its recorded size must fit the block
+    /// and its guard ramp must be intact.
+    fn audit_record(&self, record: NonNull<Record>) -> Option<OrisError> {
+        // SAFETY: `record` is live (the caller got it from the store).
+        let ptr = unsafe { (*record.as_ptr()).ptr };
+        // SAFETY: `record` is live; reads one field.
+        let size = unsafe { (*record.as_ptr()).size };
+        // SAFETY: `ptr` is a live allocation this instance produced (it has a record).
+        let usable = unsafe { self.size(Some(ptr)) };
+        let problem = if size > usable {
+            Corruption::Oversized { usable }
+        } else {
+            // SAFETY: `record` is live (see above).
+            let record_ref = unsafe { &*record.as_ptr() };
+            // SAFETY: `ptr` is valid for `size + MEMORY_GUARD_SIZE` bytes (its recorded
+            // size fits the block, checked just above).
+            if unsafe { record_ref.check_guard() } {
+                return None;
+            }
+            Corruption::GuardOverrun
+        };
+        // SAFETY: `record` is live (nothing has touched the store since).
+        let message = unsafe { failure::describe(problem, ptr, Some(record)) };
+        Some(OrisError::Corruption(message))
+    }
+
+    /// Prints a report of the allocator's state to standard error: total requested and
+    /// allocated bytes, then one line per live allocation (address, requested size, and
+    /// where it was allocated). Ports `allocator::report`, which `printf`s the same content
+    /// to stdout. Available with the `debug-allocator` feature.
+    ///
+    /// This is the form to use when this `Orisnik` is the `#[global_allocator]`: it formats
+    /// straight to stderr, so it allocates nothing that outlives the call. See
+    /// [`Orisnik::write_report`] for the caveat on the other form.
+    ///
+    /// After a detected corruption the records may be stale, so the report may list blocks
+    /// that have since been freed; it only reads recorded data, never the blocks themselves.
+    pub fn report(&self) {
+        let _busy = self.hold_busy();
+        // A failed write to stderr has nowhere to be reported; the report is best-effort.
+        let _ = self.write_report_unguarded(&mut StderrSink);
+    }
+
+    /// [`Orisnik::report`]'s content, written to `out` instead of stderr.
+    ///
+    /// **Caveat for a `#[global_allocator]`.** Whatever `out` allocates while the report is
+    /// being written (a `String` growing, say) is allocated while the hooks are suspended,
+    /// so it is *unrecorded* — and freeing it later, outside the report, would look like a
+    /// double free. With an owned instance `out` allocates from the system allocator and
+    /// none of this applies. When this instance is the global allocator, use
+    /// [`Orisnik::report`].
+    ///
+    /// # Errors
+    /// Returns `fmt::Error` when `out` does.
+    pub fn write_report<W: core::fmt::Write + ?Sized>(&self, out: &mut W) -> core::fmt::Result {
+        let _busy = self.hold_busy();
+        self.write_report_unguarded(out)
+    }
+
+    /// Suspends the hooks for as long as the returned guard lives, if they are not already
+    /// suspended: the report iterates the record tree while formatting, and formatting can
+    /// allocate (a `Backtrace`'s symbol resolution), which must not insert into the tree
+    /// mid-walk. Unlike [`Orisnik::enter_hook`] this also works when the hooks are
+    /// `disabled`: reading the records is still meaningful after a detected corruption.
+    fn hold_busy(&self) -> Option<Busy<'_>> {
+        if self.busy.get() {
+            return None;
+        }
+        self.busy.set(true);
+        Some(Busy(&self.busy))
+    }
+
+    /// The report itself, in address order. The caller has suspended the hooks.
+    fn write_report_unguarded<W: core::fmt::Write + ?Sized>(
+        &self,
+        out: &mut W,
+    ) -> core::fmt::Result {
+        self.write_report_head(out)?;
+        let mut cursor = self.records.first();
+        while let Some(record) = cursor {
+            cursor = self.records.next(record);
+            Self::write_record_line(record, out)?;
+        }
+        Self::write_report_foot(out)
+    }
+
+    fn write_report_head<W: core::fmt::Write + ?Sized>(&self, out: &mut W) -> core::fmt::Result {
+        writeln!(
+            out,
+            "REPORT ================================================="
+        )?;
+        writeln!(out, "Total requested size={} bytes", self.requested())?;
+        writeln!(out, "Total allocated size={} bytes", self.allocated())?;
+        writeln!(out, "Currently allocated blocks:")
+    }
+
+    fn write_report_foot<W: core::fmt::Write + ?Sized>(out: &mut W) -> core::fmt::Result {
+        writeln!(
+            out,
+            "==========================================================="
+        )
+    }
+
+    /// One live allocation's line in the report: address, requested size, and — if one was
+    /// recorded — the allocation callstack.
+    fn write_record_line<W: core::fmt::Write + ?Sized>(
+        record: NonNull<Record>,
+        out: &mut W,
+    ) -> core::fmt::Result {
+        // SAFETY: `record` is live (the caller got it from the store); only borrowed for
+        // the duration of this formatting.
+        let record_ref = unsafe { &*record.as_ptr() };
+        // PROVENANCE: address read for its bit pattern only (it is printed).
+        let address = record_ref.ptr.as_ptr().addr();
+        write!(out, "ptr={address:#x}, size={}", record_ref.size)?;
+        if let Some(trace) = &record_ref.callstack {
+            write!(out, "\n{trace}")?;
+        }
+        writeln!(out)
+    }
+
+    /// The leak half of `Drop`, run first — before the record store is released, in HPHA's
+    /// `check()`-then-`report()` order (releasing idle memory would not disturb a live block;
+    /// only the records must outlive the audit): if any allocation is still live, audits it
+    /// and prints the report to stderr — HPHA's `~allocator`'s `check(); report();`. Returns how many
+    /// allocations leaked. Does nothing after a detected corruption (the hooks are off, so
+    /// the records may be stale).
+    ///
+    /// Two constraints shape it, both from Tree Borrows (see `list.rs`'s "`Drop` and
+    /// `&mut self`" section):
+    ///
+    /// - It writes into `self` (the `busy` flag) **before** reading anything else: a write
+    ///   *after* a foreign read of a protected tag is undefined.
+    /// - It walks the record **book** (a plain array of pages, in allocation order), never
+    ///   the record tree: the tree's leaves point at its sentinel, and reading the sentinel
+    ///   through those stored pointers — foreign to the retagged `Box` an `oris_destroy`ed
+    ///   instance lives in — makes the box's deallocation undefined. The order of the leak
+    ///   report therefore differs from [`Orisnik::report`]'s address order; the content is
+    ///   the same.
+    pub(super) fn debug_teardown(&self) -> usize {
+        self.debug_teardown_to(&mut StderrSink)
+    }
+
+    /// [`Orisnik::debug_teardown`] with the destination explicit, so a test can read what
+    /// `Drop` would print. Same constraints, same return value.
+    fn debug_teardown_to<W: core::fmt::Write + ?Sized>(&self, sink: &mut W) -> usize {
+        if self.disabled.get() {
+            return 0;
+        }
+        self.busy.set(true);
+        let leaked = self.records.len();
+        if leaked == 0 {
+            return 0;
+        }
+        let _ = writeln!(
+            sink,
+            "orisnik: {leaked} allocation(s) were still live when the allocator was dropped"
+        );
+        let mut first_problem = None;
+        self.records.for_each_live(|record| {
+            if first_problem.is_none() {
+                first_problem = self.audit_record(record);
+            }
+        });
+        if let Some(problem) = first_problem {
+            let _ = writeln!(sink, "orisnik: {problem}");
+        }
+        let _ = self.write_report_head(&mut *sink);
+        self.records.for_each_live(|record| {
+            let _ = Self::write_record_line(record, &mut *sink);
+        });
+        let _ = Self::write_report_foot(&mut *sink);
+        leaked
+    }
+}
+
+/// The panic that ends `Drop` when `leaked` allocations were still live (HPHA's destructor
+/// assert), skipped while the thread is already unwinding: a second panic would abort the
+/// process and bury the first one.
+pub(super) fn fail_on_leak(leaked: usize) {
+    if leaked == 0 || std::thread::panicking() {
+        return;
+    }
+    failure::fail(&format!(
+        "memory leaked: {leaked} allocation(s) still live when the allocator was dropped \
+         (see the report above)"
+    ));
 }
 
 #[cfg(test)]
@@ -657,6 +900,11 @@ mod tests {
     fn free_sized_aligned(orisnik: &Orisnik, ptr: NonNull<u8>, size: usize, alignment: usize) {
         // SAFETY: see the helpers' shared contract above.
         unsafe { orisnik.free_with_size_aligned(Some(ptr), size, alignment) };
+    }
+
+    fn usable_size(orisnik: &Orisnik, ptr: NonNull<u8>) -> usize {
+        // SAFETY: see the helpers' shared contract above.
+        unsafe { orisnik.size(Some(ptr)) }
     }
 
     fn recorded_size(orisnik: &Orisnik, ptr: NonNull<u8>) -> usize {
@@ -1089,5 +1337,411 @@ mod tests {
             }
             orisnik.purge();
         }
+    }
+
+    // ---- `check()`, `report()` and leak detection at drop ---------------------------------
+
+    fn report_text(orisnik: &Orisnik) -> String {
+        let mut text = String::new();
+        orisnik
+            .write_report(&mut text)
+            .expect("writing to a String");
+        text
+    }
+
+    /// A page-sized leak left behind by a block the test deliberately never freed: release
+    /// its bucket page by hand so the test process (and Miri's leak checker) stay clean.
+    fn release_leaked_bucket_page(block: NonNull<u8>) {
+        let base = crate::align::align_down(block.as_ptr(), crate::os::PAGE_SIZE);
+        // SAFETY: `block` is a bucket slot, so `base` is the `PAGE_SIZE` mapping it lives in;
+        // the owning allocator has been dropped and left the page mapped; nothing uses it.
+        unsafe {
+            crate::os::unmap(NonNull::new(base).expect("non-null"), crate::os::PAGE_SIZE);
+        }
+    }
+
+    #[test]
+    fn check_passes_on_a_healthy_heap_of_every_kind() {
+        let orisnik = Orisnik::new();
+        assert!(orisnik.check().is_ok(), "an empty heap is healthy");
+        let blocks = [
+            alloc(&orisnik, 24),
+            alloc(&orisnik, 1000),
+            orisnik.alloc_aligned(24, 32).expect("alloc"),
+            orisnik.alloc_aligned(3000, 128).expect("alloc"),
+            orisnik.calloc(3, 40).expect("calloc"),
+        ];
+        assert!(orisnik.check().is_ok());
+        let grown = realloc(&orisnik, blocks[1], 4000).expect("realloc");
+        assert!(orisnik.check().is_ok(), "still healthy after a realloc");
+        for ptr in [blocks[0], grown, blocks[2], blocks[3], blocks[4]] {
+            free(&orisnik, ptr);
+        }
+        assert!(orisnik.check().is_ok());
+        orisnik.purge();
+    }
+
+    #[test]
+    fn check_reports_a_guard_overrun_without_panicking_or_disabling_the_hooks() {
+        for size in [24_usize, 3000] {
+            let orisnik = Orisnik::new();
+            let healthy = alloc(&orisnik, 64);
+            let victim = alloc(&orisnik, size);
+            overrun(victim, size);
+            let Err(OrisError::Corruption(message)) = orisnik.check() else {
+                panic!("the overrun must be reported");
+            };
+            assert!(message.contains("guard bytes overwritten"), "{message}");
+            assert!(
+                message.contains(&format!("requested {size} bytes")),
+                "{message}"
+            );
+            assert!(!orisnik.disabled.get(), "asking is not a detection");
+            // Repair the block (the same flip restores it) and the audit passes again.
+            overrun(victim, size);
+            assert!(orisnik.check().is_ok());
+            free(&orisnik, victim);
+            free(&orisnik, healthy);
+            orisnik.purge();
+        }
+    }
+
+    #[test]
+    fn check_reports_a_record_larger_than_its_block() {
+        let orisnik = Orisnik::new();
+        let ptr = alloc(&orisnik, 24);
+        let record = orisnik.records.find(ptr).expect("recorded");
+        // SAFETY: `record` is a live record; forging its size is the point of the test.
+        unsafe { (*record.as_ptr()).size = 10_000 };
+        let Err(OrisError::Corruption(message)) = orisnik.check() else {
+            panic!("the oversized record must be reported");
+        };
+        assert!(message.contains("recorded size exceeds"), "{message}");
+        assert!(message.contains("recorded 10000 bytes"), "{message}");
+        // One line for the head (no stray newline inside the message), and the real usable
+        // size is the one reported.
+        let usable = usable_size(&orisnik, ptr);
+        assert!(
+            message
+                .lines()
+                .next()
+                .is_some_and(|head| head.ends_with(&format!("block holds {usable})"))),
+            "{message}"
+        );
+        // SAFETY: as above; restoring the true size.
+        unsafe { (*record.as_ptr()).size = 24 };
+        assert!(orisnik.check().is_ok());
+        free(&orisnik, ptr);
+        orisnik.purge();
+    }
+
+    #[test]
+    fn check_stops_at_the_first_problem_in_address_order() {
+        let orisnik = Orisnik::new();
+        let mut blocks = [
+            alloc(&orisnik, 24),
+            alloc(&orisnik, 24),
+            alloc(&orisnik, 24),
+        ];
+        blocks.sort_by_key(|ptr| ptr.addr());
+        overrun(blocks[2], 24);
+        overrun(blocks[1], 24);
+        let Err(OrisError::Corruption(message)) = orisnik.check() else {
+            panic!("reported");
+        };
+        assert!(
+            message.contains(&format!("{:#x}", blocks[1].addr().get())),
+            "the lower address must be reported first: {message}"
+        );
+        overrun(blocks[2], 24);
+        overrun(blocks[1], 24);
+        for ptr in blocks {
+            free(&orisnik, ptr);
+        }
+        orisnik.purge();
+    }
+
+    #[test]
+    fn report_lists_the_totals_and_every_live_block_in_address_order() {
+        let orisnik = Orisnik::new();
+        let mut blocks = [
+            alloc(&orisnik, 24),
+            alloc(&orisnik, 1000),
+            alloc(&orisnik, 100),
+        ];
+        let text = report_text(&orisnik);
+        assert!(text.starts_with("REPORT ===="), "{text}");
+        assert!(text.contains("Currently allocated blocks:"), "{text}");
+        assert!(
+            text.contains(&format!(
+                "Total requested size={} bytes",
+                orisnik.requested()
+            )),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "Total allocated size={} bytes",
+                orisnik.allocated()
+            )),
+            "{text}"
+        );
+        blocks.sort_by_key(|ptr| ptr.addr());
+        let mut cursor = 0;
+        for ptr in blocks {
+            let line = format!(
+                "ptr={:#x}, size={}",
+                ptr.addr().get(),
+                recorded_size(&orisnik, ptr)
+            );
+            let at = text[cursor..]
+                .find(&line)
+                .unwrap_or_else(|| panic!("{line} missing or out of order in:\n{text}"));
+            cursor += at + line.len();
+        }
+        assert!(text.trim_end().ends_with("==========="), "{text}");
+        for ptr in blocks {
+            free(&orisnik, ptr);
+        }
+        let empty = report_text(&orisnik);
+        assert!(
+            !empty.contains("ptr="),
+            "a freed block must leave the report: {empty}"
+        );
+        orisnik.purge();
+    }
+
+    #[test]
+    fn report_shows_where_an_owned_instance_allocated_but_not_a_global_one() {
+        use core::alloc::{GlobalAlloc, Layout};
+        let owned = Orisnik::new();
+        let ptr = alloc(&owned, 24);
+        let text = report_text(&owned);
+        if cfg!(miri) {
+            // Miri records the cheap, disabled backtrace (see `capture_callstack`).
+            assert!(text.contains("disabled backtrace"), "{text}");
+        } else {
+            assert!(
+                text.contains("report_shows_where_an_owned_instance"),
+                "the trace should name this test: {text}"
+            );
+        }
+        free(&owned, ptr);
+        owned.purge();
+
+        // An instance used through `GlobalAlloc` records no callstack at all.
+        let global = Orisnik::new();
+        let layout = Layout::from_size_align(24, 8).expect("layout");
+        // SAFETY: non-zero size.
+        let raw = unsafe { GlobalAlloc::alloc(&global, layout) };
+        let text = report_text(&global);
+        assert!(text.contains("ptr="), "{text}");
+        assert!(!text.contains("backtrace"), "{text}");
+        assert!(!text.contains("report_shows_where"), "{text}");
+        // SAFETY: `raw` came from `GlobalAlloc::alloc` above with this layout.
+        unsafe { GlobalAlloc::dealloc(&global, raw, layout) };
+        global.purge();
+    }
+
+    #[test]
+    fn report_works_while_the_hooks_are_suspended_or_disabled() {
+        let orisnik = Orisnik::new();
+        let ptr = alloc(&orisnik, 24);
+        orisnik.disabled.set(true);
+        assert!(report_text(&orisnik).contains("ptr="));
+        orisnik.disabled.set(false);
+        let outer = orisnik.enter_hook().expect("hooks are on");
+        assert!(report_text(&orisnik).contains("ptr="));
+        assert!(orisnik.busy.get(), "an outer hold survives the report");
+        drop(outer);
+        assert!(!orisnik.busy.get());
+        free(&orisnik, ptr);
+        orisnik.purge();
+    }
+
+    #[test]
+    fn a_leak_at_drop_is_reported_then_panics_after_everything_else_is_released() {
+        let before = test_vm::live_mappings();
+        let orisnik = Box::new(Orisnik::new());
+        let leaked = alloc(&orisnik, 24);
+        let idle = alloc(&orisnik, 5000);
+        free(&orisnik, idle);
+        let message = panic_message(move || drop(orisnik)).expect("a leak must fail the drop");
+        assert!(
+            message.contains("memory leaked: 1 allocation(s)"),
+            "{message}"
+        );
+        // Everything idle was returned before the panic (the tree arena, the record page);
+        // only the leaked block's own bucket page remains.
+        assert_eq!(test_vm::live_mappings(), before + 1);
+        release_leaked_bucket_page(leaked);
+        assert_eq!(test_vm::live_mappings(), before);
+    }
+
+    #[test]
+    fn a_leak_during_unwinding_does_not_abort_the_process() {
+        let before = test_vm::live_mappings();
+        // A `Cell`: the closure below always panics, so a plain assignment inside it looks
+        // never-read to the compiler even though the test reads it afterwards.
+        let leaked = core::cell::Cell::new(None);
+        let outer = panic_message(|| {
+            let orisnik = Box::new(Orisnik::new());
+            leaked.set(Some(alloc(&orisnik, 24)));
+            // Dropped while this panic unwinds: a second panic would abort the test binary.
+            panic!("outer failure");
+        })
+        .expect("the outer panic propagates");
+        assert!(outer.contains("outer failure"), "{outer}");
+        release_leaked_bucket_page(leaked.get().expect("allocated"));
+        assert_eq!(test_vm::live_mappings(), before);
+    }
+
+    #[test]
+    fn a_clean_drop_does_not_panic_and_leaves_no_mappings() {
+        let before = test_vm::live_mappings();
+        let orisnik = Box::new(Orisnik::new());
+        let first = alloc(&orisnik, 24);
+        let second = alloc(&orisnik, 5000);
+        free(&orisnik, first);
+        free(&orisnik, second);
+        assert!(panic_message(move || drop(orisnik)).is_none());
+        assert_eq!(test_vm::live_mappings(), before);
+    }
+
+    #[test]
+    fn a_drop_after_a_detected_corruption_skips_the_leak_report() {
+        let before = test_vm::live_mappings();
+        let orisnik = Box::new(Orisnik::new());
+        let leaked = alloc(&orisnik, 24);
+        let victim = alloc(&orisnik, 24);
+        free(&orisnik, victim);
+        // Deliberate double free: detected, and the hooks are off from here on.
+        assert!(panic_message(|| free(&orisnik, victim)).is_some());
+        assert!(orisnik.disabled.get());
+        // The records may be stale now, so the still-live block is not reported as a leak.
+        assert!(panic_message(move || drop(orisnik)).is_none());
+        release_leaked_bucket_page(leaked);
+        assert_eq!(test_vm::live_mappings(), before);
+    }
+
+    #[test]
+    fn dropping_a_globalalloc_instance_reports_no_callstack_but_still_detects_the_leak() {
+        use core::alloc::{GlobalAlloc, Layout};
+        let before = test_vm::live_mappings();
+        let orisnik = Box::new(Orisnik::new());
+        let layout = Layout::from_size_align(24, 8).expect("layout");
+        // SAFETY: non-zero size.
+        let raw = unsafe { GlobalAlloc::alloc(&*orisnik, layout) };
+        let leaked = NonNull::new(raw).expect("alloc");
+        let message = panic_message(move || drop(orisnik)).expect("a leak must fail the drop");
+        assert!(message.contains("memory leaked"), "{message}");
+        release_leaked_bucket_page(leaked);
+        assert_eq!(test_vm::live_mappings(), before);
+    }
+
+    // ---- check() after a corruption, sinks that allocate, and the drop-time report -------
+
+    /// A `fmt::Write` sink that allocates from the instance being reported on.
+    struct AllocatingSink<'a> {
+        orisnik: &'a Orisnik,
+        blocks: Vec<NonNull<u8>>,
+    }
+
+    impl core::fmt::Write for AllocatingSink<'_> {
+        fn write_str(&mut self, _text: &str) -> core::fmt::Result {
+            self.blocks.push(self.orisnik.alloc(24).expect("alloc"));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn write_report_suspends_the_hooks_for_allocations_made_by_the_sink() {
+        let orisnik = Orisnik::new();
+        let ptr = alloc(&orisnik, 24);
+        let mut sink = AllocatingSink {
+            orisnik: &orisnik,
+            blocks: Vec::new(),
+        };
+        orisnik.write_report(&mut sink).expect("sink never fails");
+        assert!(!sink.blocks.is_empty());
+        assert_eq!(
+            orisnik.records.len(),
+            1,
+            "the sink's blocks must be unrecorded"
+        );
+        assert!(!orisnik.busy.get());
+        // Freed under a hold, exactly as the documented caveat requires.
+        let hold = orisnik.enter_hook().expect("hooks are on");
+        for block in sink.blocks {
+            free(&orisnik, block);
+        }
+        drop(hold);
+        free(&orisnik, ptr);
+        orisnik.purge();
+    }
+
+    /// After a detected corruption the hooks are off and a caught panic can be followed by
+    /// freeing the block *without* retiring its record; auditing that stale record would read
+    /// freed (here: unmapped) memory. `check` must refuse instead.
+    #[test]
+    fn check_after_a_detected_corruption_refuses_rather_than_reading_freed_memory() {
+        let orisnik = Orisnik::new();
+        let stale = alloc(&orisnik, 24);
+        let victim = alloc(&orisnik, 24);
+        free(&orisnik, victim);
+        assert!(panic_message(|| free(&orisnik, victim)).is_some());
+        assert!(orisnik.disabled.get());
+        free(&orisnik, stale); // hooks are off: freed, but its record stays
+        orisnik.purge(); // and the page is unmapped
+        let Err(OrisError::Corruption(message)) = orisnik.check() else {
+            panic!("check must refuse after a detected corruption");
+        };
+        assert!(message.contains("already detected"), "{message}");
+    }
+
+    #[test]
+    fn a_clean_teardown_prints_nothing() {
+        let orisnik = Orisnik::new();
+        let ptr = alloc(&orisnik, 24);
+        free(&orisnik, ptr);
+        let mut text = String::new();
+        assert_eq!(orisnik.debug_teardown_to(&mut text), 0);
+        assert!(text.is_empty(), "nothing leaked, nothing printed: {text}");
+        orisnik.purge();
+    }
+
+    /// What `Drop` prints for a leak: the count, the first audit problem, then the report
+    /// with each live block, in the order they were allocated.
+    #[test]
+    fn the_leak_report_printed_at_drop_lists_the_audit_and_every_live_block() {
+        let orisnik = Box::new(Orisnik::new());
+        let first = alloc(&orisnik, 24);
+        let second = alloc(&orisnik, 1000);
+        overrun(second, 1000);
+        let mut text = String::new();
+        assert_eq!(orisnik.debug_teardown_to(&mut text), 2);
+        assert!(
+            text.starts_with(
+                "orisnik: 2 allocation(s) were still live when the allocator was dropped"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("orisnik: guard bytes overwritten"),
+            "the audit line: {text}"
+        );
+        assert!(text.contains("REPORT ===="), "{text}");
+        let first_line = format!("ptr={:#x}, size=24", first.addr().get());
+        let second_line = format!("ptr={:#x}, size=1000", second.addr().get());
+        let at_first = text.find(&first_line).expect("first block listed");
+        let at_second = text.find(&second_line).expect("second block listed");
+        assert!(at_first < at_second, "storage (allocation) order: {text}");
+        assert!(text.trim_end().ends_with("==========="), "{text}");
+        // Undo: repair the block, lift the suspension the teardown set, and drop cleanly.
+        overrun(second, 1000);
+        orisnik.busy.set(false);
+        free(&orisnik, first);
+        free(&orisnik, second);
+        assert!(panic_message(move || drop(orisnik)).is_none());
     }
 }

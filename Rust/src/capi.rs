@@ -33,14 +33,17 @@ pub extern "C" fn oris_new() -> *mut Orisnik {
 
 /// Destroys an allocator instance created by [`oris_new`].
 ///
+/// Destroying the instance returns every fully-idle OS page and arena to the OS — HPHA's
+/// destructor begins with `purge()` in every build, and so does this, so no [`oris_purge`]
+/// is needed first. A page that still holds a live allocation is left mapped (the
+/// allocation was leaked; its memory is not reclaimed behind the caller's back). With the
+/// `debug-allocator` feature, live allocations at this point are reported to stderr and then
+/// **abort** (the panic cannot cross the `extern "C"` boundary), HPHA's destructor assert.
+///
 /// # Safety
 /// `handle` must be a still-live result of [`oris_new`] (or null, in which case this
 /// is a no-op), not yet destroyed, and not used again after this call — by this
-/// function or any other `oris_*` call. Every allocation made through `handle`
-/// should already be freed or intentionally leaked first: destroying the instance
-/// does not return its outstanding OS pages/arenas (matching HPHA, which never
-/// returns memory to the OS except via an explicit `purge()`) — call
-/// [`oris_purge`] beforehand if reclaiming that memory matters.
+/// function or any other `oris_*` call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oris_destroy(handle: *mut Orisnik) {
     let Some(handle) = NonNull::new(handle) else {

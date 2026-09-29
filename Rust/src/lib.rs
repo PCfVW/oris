@@ -96,3 +96,6 @@ pub use capi::{
     oris_realloc_aligned, oris_resize, oris_size,
 };
 pub use orisnik::Orisnik;
+// The error type of `Orisnik::check`, which exists only with `debug-allocator`.
+#[cfg(feature = "debug-allocator")]
+pub use spomen::error::OrisError;

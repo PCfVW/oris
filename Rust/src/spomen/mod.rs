@@ -14,10 +14,12 @@
 //! ([`poison`]); the allocation-record store ([`record`], [`book`], [`store`]:
 //! per-allocation records with callstack capture, indexed by address); and the hooks that
 //! wire them into the allocator (`orisnik_debug.rs`), with fail-fast reporting of
-//! detected corruption ([`failure`]). Still to come across v0.2.0's remaining phase (Phase 5):
-//! leak detection on drop, `OrisError`, and the `check()`/`report()` diagnostics.
+//! detected corruption ([`failure`]); and, last, the diagnostics: [`error`]'s `OrisError`, the
+//! public `Orisnik::check`/`report`/`write_report`, and leak detection on `Drop`
+//! (`orisnik_debug.rs`). This completes v0.2.0's debug allocator.
 
 pub(crate) mod book;
+pub(crate) mod error;
 pub(crate) mod failure;
 pub(crate) mod guard;
 pub(crate) mod poison;

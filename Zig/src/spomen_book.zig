@@ -200,8 +200,9 @@ pub const RecordBook = struct {
             self.next = 0;
             index = 0;
         }
-        // `page` is a live page of this book and `index < CAPACITY` (the fill-in-place
-        // branch checked `next < CAPACITY`; the fresh/advanced branch uses slot 0).
+        // SAFETY: `page` is a live page of this book and `index < CAPACITY` (the
+        // fill-in-place branch checked `next < CAPACITY`; the fresh/advanced branch uses
+        // slot 0), so `slot` returns an in-bounds, aligned, currently dead slot.
         const at = slot(page, index);
         // SAFETY: `at` is the book's next free slot — inside a live mapping, aligned
         // (see `slot`), and holding no live record (slots `>= next` are dead), so this
@@ -221,9 +222,12 @@ pub const RecordBook = struct {
             // The book is non-empty with `next == 0`, so `cur` is live and a full page
             // precedes it (module invariants), hence `.?` cannot fail.
             const prev = self.prevPage(self.cur.?).?;
+            // SAFETY: `prev` is a live, full page of this book and `CAPACITY - 1 <
+            // CAPACITY`, so `slot` returns its last, live record.
             return slot(prev, CAPACITY - 1);
         }
-        // `cur` is a live page of this book (non-empty book) and `next - 1 < CAPACITY`.
+        // SAFETY: `cur` is a live page of this book (non-empty book) and `next - 1 <
+        // CAPACITY`, so `slot` returns the last, live record.
         return slot(self.cur.?, self.next - 1);
     }
 
@@ -245,12 +249,39 @@ pub const RecordBook = struct {
         const index = self.next - 1;
         self.next = index;
         self.len -= 1;
-        // `cur` is a live page of this book and `index < CAPACITY`.
+        // SAFETY: `cur` is a live page of this book and `index < CAPACITY`, so `slot`
+        // returns an in-bounds, aligned slot (the one just vacated, read below).
         const at = slot(self.cur.?, index);
         // SAFETY: `at` held the last live record (module invariants); `next` was
         // decremented above so the slot is now dead and the book will never read it
         // again — the value moves to the caller.
         return at.*;
+    }
+
+    /// Calls `visit(context, record)` for every live record in *storage* order (the order
+    /// the records sit in the book, which a removal from the middle perturbs — not address
+    /// order), changing nothing. Walks the page chain from the
+    /// first page up to and including `cur`, visiting `next` records in `cur` and
+    /// `CAPACITY` in each page before it. Mirrors `orisnik`'s `for_each_live`.
+    pub fn forEachLive(
+        self: *RecordBook,
+        context: anytype,
+        comptime visit: fn (@TypeOf(context), *Record) void,
+    ) void {
+        const cur = self.cur orelse return;
+        var page = self.pages.front() orelse return;
+        // EXPLICIT: walks the page chain up to and including `cur`; `page` is the state.
+        while (true) {
+            const live = if (page == cur) self.next else CAPACITY;
+            for (0..live) |index| {
+                // SAFETY: `page` is a live page of this book and `index < CAPACITY`
+                // (`live <= CAPACITY`), so `slot` returns a live record — every slot below
+                // the fill mark is initialised.
+                visit(context, slot(page, index));
+            }
+            if (page == cur) return;
+            page = self.nextPage(page) orelse return;
+        }
     }
 
     /// Returns unused pages to the OS: every spare page after `cur`, and — when the
@@ -364,6 +395,38 @@ test "deinit drains every record and returns every page" {
     try testing.expect(book.isEmpty());
     try testing.expect(book.cur == null);
     try testing.expect(book.pages.isEmpty());
+}
+
+const VisitLog = struct {
+    seen: [CAPACITY * 2 + 3]usize = undefined,
+    count: usize = 0,
+
+    fn visit(self: *VisitLog, record: *Record) void {
+        self.seen[self.count] = record.size;
+        self.count += 1;
+    }
+};
+
+test "forEachLive visits every live record in storage order" {
+    var book: RecordBook = .init();
+    defer book.deinit();
+    var empty_log: VisitLog = .{};
+    book.forEachLive(&empty_log, VisitLog.visit);
+    try testing.expectEqual(@as(usize, 0), empty_log.count);
+
+    const n = CAPACITY * 2 + 3; // spans three pages
+    for (0..n) |i| _ = book.pushBack(rec(i)) orelse return error.TestUnexpectedResult;
+    var log: VisitLog = .{};
+    book.forEachLive(&log, VisitLog.visit);
+    try testing.expectEqual(n, log.count);
+    for (0..n) |i| try testing.expectEqual(i, log.seen[i]);
+
+    // Popped records and spare pages are not visited.
+    for (0..5) |_| _ = book.popBack();
+    var after: VisitLog = .{};
+    book.forEachLive(&after, VisitLog.visit);
+    try testing.expectEqual(n - 5, after.count);
+    try testing.expectEqual(n - 6, after.seen[after.count - 1]);
 }
 
 test "push reports OS refusal as null" {

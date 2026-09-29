@@ -1010,6 +1010,30 @@ impl Tree {
     unsafe fn purge_block(&self, bl: *mut BlockHeader) {
         // SAFETY: `bl` is live (this function's contract).
         debug_assert!(!unsafe { BlockHeader::used(bl) });
+        // SAFETY: `bl` is live and on a live physical chain (this function's contract).
+        let Some((mem_start, size)) = (unsafe { Self::whole_arena(bl) }) else {
+            return;
+        };
+        // SAFETY: `bl` is live and currently indexed (unused, this function's contract).
+        let bl_nn = unsafe { NonNull::new_unchecked(bl) };
+        self.detach(bl_nn);
+        // SAFETY: `mem_start`/`size` describe exactly the arena `add_block` originally
+        // mapped (the opening fence through the closing one, established by
+        // `whole_arena`), not referenced again after this call (everything in it — `bl`,
+        // the fences — is either just detached or was never indexed at all, being a
+        // fence).
+        unsafe { self.system_free(mem_start, size) };
+    }
+
+    /// If `bl` is the only content of its arena — its physical predecessor is the arena's
+    /// opening fence and its successor the closing one — returns the arena's base address
+    /// and byte size, exactly the span `add_block` mapped. Read-only. Shared by
+    /// [`Tree::purge_block`] and [`Tree::release_idle_on_drop`], so the two can never
+    /// disagree about what counts as a whole idle arena.
+    ///
+    /// # Safety
+    /// `bl` must be live, unused, and attached to a live physical chain.
+    unsafe fn whole_arena(bl: *mut BlockHeader) -> Option<(NonNull<u8>, usize)> {
         // SAFETY: `bl` is live.
         let prev = unsafe { BlockHeader::prev(bl) };
         debug_assert!(!prev.is_null());
@@ -1024,37 +1048,29 @@ impl Tree {
         let prev_prev = unsafe { BlockHeader::prev(prev) };
         // SAFETY: `next` is live.
         let next_size = unsafe { BlockHeader::size(next) };
-        if prev_prev.is_null() && next_size == 0 {
-            // SAFETY: `bl` is live and currently indexed (unused, this function's contract).
-            let bl_nn = unsafe { NonNull::new_unchecked(bl) };
-            self.detach(bl_nn);
-            let mem_start = prev.cast::<u8>();
-            // SAFETY: `bl` is live; reads its own payload start.
-            let bl_mem = unsafe { BlockHeader::mem(bl) };
-            // SAFETY: `bl` is live; reads its own size.
-            let bl_size = unsafe { BlockHeader::size(bl) };
-            // SAFETY: `bl_mem` is live (`bl`'s own payload start, established above);
-            // `bl_size` bytes past it stays within `bl`'s own span.
-            let past_payload = unsafe { bl_mem.byte_add(bl_size) };
-            // SAFETY: `past_payload` is exactly `next` (`bl.mem() + bl.size()` is
-            // `BlockHeader::next(bl)` by definition), live (established above);
-            // `size_of::<BlockHeader>()` bytes past it stays within `next`'s own span.
-            let mem_end = unsafe { past_payload.byte_add(size_of::<BlockHeader>()) };
-            let size = mem_end.addr() - mem_start.addr();
-            debug_assert_eq!(mem_start.addr() % os::PAGE_SIZE, 0);
-            debug_assert_eq!(size % os::PAGE_SIZE, 0);
-            // SAFETY: `mem_start` is `prev` (the arena's opening fence, live and,
-            // per this function's `prev_prev.is_null()` check, the very first block
-            // of its arena — i.e. the arena's own base address), non-null.
-            let mem_start = unsafe { NonNull::new_unchecked(mem_start) };
-            // SAFETY: `mem_start`/`size` describe exactly the arena `add_block`
-            // originally mapped (the opening fence through the closing one,
-            // established by the `prev_prev`/`next_size` checks above), not
-            // referenced again after this call (everything in it — `bl`, `prev`,
-            // `next` — is either just detached or was never indexed at all, being a
-            // fence).
-            unsafe { self.system_free(mem_start, size) };
+        if !(prev_prev.is_null() && next_size == 0) {
+            return None;
         }
+        let mem_start = prev.cast::<u8>();
+        // SAFETY: `bl` is live; reads its own payload start.
+        let bl_mem = unsafe { BlockHeader::mem(bl) };
+        // SAFETY: `bl` is live; reads its own size.
+        let bl_size = unsafe { BlockHeader::size(bl) };
+        // SAFETY: `bl_mem` is live (`bl`'s own payload start, established above);
+        // `bl_size` bytes past it stays within `bl`'s own span.
+        let past_payload = unsafe { bl_mem.byte_add(bl_size) };
+        // SAFETY: `past_payload` is exactly `next` (`bl.mem() + bl.size()` is
+        // `BlockHeader::next(bl)` by definition), live (established above);
+        // `size_of::<BlockHeader>()` bytes past it stays within `next`'s own span.
+        let mem_end = unsafe { past_payload.byte_add(size_of::<BlockHeader>()) };
+        let size = mem_end.addr() - mem_start.addr();
+        debug_assert_eq!(mem_start.addr() % os::PAGE_SIZE, 0);
+        debug_assert_eq!(size % os::PAGE_SIZE, 0);
+        // SAFETY: `mem_start` is `prev` (the arena's opening fence, live and, per the
+        // `prev_prev.is_null()` check above, the very first block of its arena — i.e. the
+        // arena's own base address), non-null.
+        let mem_start = unsafe { NonNull::new_unchecked(mem_start) };
+        Some((mem_start, size))
     }
 
     /// Returns every fully-unused arena to the OS. Ports `allocator::tree_purge`.
@@ -1085,6 +1101,109 @@ impl Tree {
         }
         // SAFETY: same as the flush above.
         unsafe { self.attach(None) };
+    }
+
+    /// Drop-time counterpart of [`Tree::purge`]: returns every fully-idle arena to the OS
+    /// **without touching the tree, the small list or any counter**. Called only from
+    /// `Orisnik`'s `Drop`, which is why it must not use [`Tree::purge`]:
+    ///
+    /// `Drop::drop` takes `&mut self`, and that reference is *protected* for the whole call.
+    /// Purging rewrites the free tree, whose nodes hold pointers to the tree's own sentinel
+    /// (a field of `self`) derived long before this call; a write through one of them is a
+    /// foreign write to a protected tag — undefined behaviour under Tree Borrows (see
+    /// `list.rs`'s "`Drop` and `&mut self`" section, found by Miri on `RecordBook`). So this
+    /// method only ever *reads* the structure, and writes nothing inside `self`: a write
+    /// *after* a foreign read of a protected tag is undefined too, hence no counter updates.
+    ///
+    /// Without unlinking, the walk cannot unmap an arena while it is still traversing (a
+    /// node's parent may live in an arena already gone). Instead it makes two passes: the
+    /// first *threads* every purgeable block onto a list through the blocks' own payloads
+    /// (arena memory, not `self`; no allocation, which an allocator could not do), the second
+    /// walks that list and unmaps. An arena still holding a live block is never found by the
+    /// walk (its free blocks are smaller than an arena) and stays mapped — the same "idle
+    /// memory only" rule as [`Tree::purge`].
+    pub(crate) fn release_idle_on_drop(&self) {
+        let mut pending: *mut BlockHeader = core::ptr::null_mut();
+        // The most-recently-freed block is cached outside the tree, so the tree walk
+        // below cannot see it.
+        if let Some(cached) = self.mr_free_block.get() {
+            // SAFETY: the MR cache only ever holds a live free block on a live chain.
+            pending = unsafe { Self::thread_if_purgeable(cached.as_ptr(), pending) };
+        }
+        // `visit_all_readonly` (not `lower_bound`/`succ`): the ordinary navigation reads the
+        // tree's sentinel through pointers stored in the nodes, which — for an `Orisnik` that
+        // has been moved into a `Box` — makes the later deallocation of the box undefined
+        // under Tree Borrows. It also needs no size filter: `whole_arena` decides.
+        self.free_tree.visit_all_readonly(|node| {
+            // SAFETY: `node` is live (handed out by the tree).
+            let block = unsafe { FreeNode::get_block(node.as_ptr()) };
+            // SAFETY: `block` is live, unused (a `FreeNode` only ever sits at a free
+            // block's `mem()`), attached to a live physical chain. The write goes into the
+            // block's own payload, past its `FreeNode`, so it disturbs no node the walk
+            // still has to read.
+            pending = unsafe { Self::thread_if_purgeable(block, pending) };
+        });
+        while !pending.is_null() {
+            let block = pending;
+            // SAFETY: `block` was threaded by `thread_if_purgeable`, so it is live and unused
+            // with a payload larger than the slot.
+            let slot = unsafe { Self::thread_slot(block) };
+            // SAFETY: `slot` is where `thread_if_purgeable` wrote the next pointer, and the
+            // block has been left otherwise intact since.
+            pending = unsafe { slot.read() };
+            // SAFETY: `block` is live, unused, on a live chain, and still is: only earlier
+            // list members' arenas have been unmapped, and arenas are disjoint.
+            if let Some((base, size)) = unsafe { Self::whole_arena(block) } {
+                // SAFETY: `base`/`size` describe exactly the arena `add_block` mapped
+                // (`whole_arena`'s guarantee); nothing references it afterwards — the
+                // tree that indexed `block` is being dropped and is never read again.
+                unsafe { os::unmap(base, size) };
+            }
+        }
+    }
+
+    /// Where a purgeable block's "next to unmap" pointer lives: just past the `FreeNode` at
+    /// the start of its payload — memory the block owns whether or not it is currently
+    /// indexed by a node.
+    ///
+    /// # Safety
+    /// `bl` must be live and unused, with a payload of at least
+    /// `size_of::<FreeNode>() + size_of::<usize>()` bytes (every purgeable block is nearly a
+    /// whole arena).
+    unsafe fn thread_slot(bl: *mut BlockHeader) -> *mut *mut BlockHeader {
+        // SAFETY: `bl` is live.
+        let mem = unsafe { BlockHeader::mem(bl) };
+        // SAFETY: the payload is larger than the `FreeNode` plus one pointer (this
+        // function's contract), so the offset stays inside `bl`'s own span.
+        let slot = unsafe { mem.byte_add(size_of::<FreeNode>()) };
+        // ALIGN: `mem` is `size_of::<BlockHeader>()`-aligned (16, hence 8-aligned) and
+        // `size_of::<FreeNode>()` is a multiple of 8, so `slot` is 8-aligned — matching
+        // `*mut BlockHeader`'s alignment.
+        #[allow(clippy::cast_ptr_alignment)]
+        slot.cast::<*mut BlockHeader>()
+    }
+
+    /// If `bl` is a whole idle arena, threads it onto the front of the list headed by
+    /// `head` and returns the new head; otherwise returns `head` unchanged. Writes only
+    /// into `bl`'s own payload.
+    ///
+    /// # Safety
+    /// `bl` must be live, unused, and attached to a live physical chain.
+    unsafe fn thread_if_purgeable(
+        bl: *mut BlockHeader,
+        head: *mut BlockHeader,
+    ) -> *mut BlockHeader {
+        // SAFETY: forwarded from this function's own contract.
+        if unsafe { Self::whole_arena(bl) }.is_none() {
+            return head;
+        }
+        // SAFETY: `bl` is live and unused, and a whole idle arena is far larger than the
+        // slot (see `thread_slot`'s contract).
+        let slot = unsafe { Self::thread_slot(bl) };
+        // SAFETY: `slot` is inside `bl`'s payload (above), exclusively owned by this
+        // teardown (nothing else reads a free block's payload), 8-aligned.
+        unsafe { slot.write(head) };
+        bl
     }
 }
 

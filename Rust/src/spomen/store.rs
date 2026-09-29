@@ -63,9 +63,6 @@ impl RecordStore {
 
     /// Number of live records.
     #[must_use]
-    // Not yet called outside tests: `check()`/`report()` (v0.2.0 Phase 5) enumerate the
-    // live records and need the count.
-    #[allow(dead_code)]
     pub(crate) fn len(&self) -> usize {
         self.book.len()
     }
@@ -204,6 +201,37 @@ impl RecordStore {
             size: old_size,
             source,
         })
+    }
+
+    /// The record with the lowest address, or `None` if nothing is recorded — the start of an
+    /// address-ordered walk (HPHA's `debug_record_map::begin()`), used by `check()` and
+    /// `report()`.
+    #[must_use]
+    pub(crate) fn first(&self) -> Option<NonNull<Record>> {
+        self.tree.minimum()
+    }
+
+    /// The record after `record` in address order, or `None` if it is the last. Robust to
+    /// other records being *inserted* while a walk is in progress, as long as `record`
+    /// itself is still live when this is called: the successor is re-derived from the tree
+    /// each time. It is **not** robust to removals — a removal moves the book's last record
+    /// into the vacated slot, so a successor latched before it can be stale. `check` and
+    /// `report` never remove.
+    #[must_use]
+    pub(crate) fn next(&self, record: NonNull<Record>) -> Option<NonNull<Record>> {
+        self.tree.succ(record)
+    }
+
+    /// Calls `visit` for every live record in *storage* order (the order the records sit in the book, which a removal from the middle perturbs,
+    /// not address order), changing nothing and never touching the address index.
+    ///
+    /// This, not [`RecordStore::first`]/[`next`](RecordStore::next), is what `Orisnik`'s
+    /// `Drop` uses to audit and report leaks: navigating the tree reads its sentinel through
+    /// pointers stored in the nodes, and for an allocator that has been moved into a `Box`
+    /// (`oris_destroy`) such a read makes the box's later deallocation undefined behaviour
+    /// under Tree Borrows. The record book is a plain array of pages and has no such hazard.
+    pub(crate) fn for_each_live(&self, visit: impl FnMut(NonNull<Record>)) {
+        self.book.for_each_live(visit);
     }
 
     /// Returns the record book's spare pages to the OS. Ports

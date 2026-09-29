@@ -10,8 +10,9 @@
 //! storage (`spomen_record.zig`, `spomen_book.zig`, `spomen_store.zig`, including
 //! raw callstack capture), wired into `Orisnitsa`'s dispatch through the
 //! `debug*` hooks (`orisnitsa.zig`), with corruption reported by
-//! `spomen_failure.zig`. Still to come: `check()`/`report()` (with callstack
-//! symbol resolution) and leak detection.
+//! `spomen_failure.zig`. `Orisnitsa.check()`, `report()` and leak detection at
+//! `deinit()` are implemented too. Still to come: resolving callstack addresses to
+//! symbols (`report()` prints raw return addresses).
 
 /// The `comptime` configuration `Orisnitsa`/`Buckets`/`Tree` are generic type
 /// constructors over — `Orisnitsa(config)`, not a plain `Orisnitsa` value with a
@@ -27,8 +28,9 @@
 pub const Config = struct {
     /// Enables the `spomen` debug subsystem (guard bytes, allocation-record
     /// tracking, callstack capture, leak detection, check()/report()) — guard
-    /// bytes, poisoning, allocation records and the hooks that use them are implemented;
-    /// leak detection and check()/report() are still to come (see this module's own doc). `comptime` so the relevant branches are
+    /// bytes, poisoning, allocation records, the hooks that use them, check()/report()
+    /// and leak detection at `deinit()` are implemented (see this module's own doc).
+    /// `comptime` so the relevant branches are
     /// eliminated entirely when `false`, matching
     /// `orisnik`'s `debug-allocator` Cargo feature and Zig's own
     /// `std.heap.DebugAllocator(comptime config: Config)`.

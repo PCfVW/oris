@@ -18,7 +18,7 @@ The Zig port of [Oris](https://github.com/PCfVW/oris) — a Rust and Zig port of
   - **`Orisnitsa`**'s own methods (`alloc`, `free`, `realloc`, `resize`, `purge`, ...) — the idiomatic Zig entry point.
   - **`allocator()`** — hands out a `std.mem.Allocator` backed by an instance, for `std.ArrayList`/`std.HashMap`/etc.
   - **`oris_*`** — a C-shaped API (`oris_new`, `oris_alloc`, `oris_free`, `oris_realloc`, ...), instance-scoped via an explicit handle — never a hidden global. `zig build` also emits real linkable `liborisnitsa.so`/`.dylib`/`.a` (or `orisnitsa.dll`/`.lib` on Windows) artifacts; pair with [`include/oris.h`](include/oris.h) (vendored here — byte-identical to [the canonical copy](https://github.com/PCfVW/oris/blob/main/include/oris.h), so this package is self-contained) to link from C/C++.
-- 96 tests, verified in Debug and ReleaseSafe (runtime safety checks on) and ReleaseFast (hot path with checks off), on Windows, Linux, and macOS in CI.
+- 190+ tests, verified in Debug and ReleaseSafe (runtime safety checks on) and ReleaseFast (hot path with checks off), on Windows, Linux, and macOS in CI.
 - **64-bit platforms only** — enforced at compile time (see `src/block.zig`'s module doc).
 
 ## Quick start
@@ -28,6 +28,7 @@ const std = @import("std");
 const orisnitsa = @import("orisnitsa");
 
 var backing: orisnitsa.Orisnitsa = .init();
+defer backing.deinit(); // required: returns the idle OS pages/arenas (every build)
 const gpa = orisnitsa.allocator(&backing);
 
 var list: std.ArrayList(u8) = .empty;
