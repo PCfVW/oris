@@ -74,10 +74,9 @@ pub fn writeGuard(comptime config: Config, ptr: [*]u8, requested_size: usize, se
 /// `hpha.cpp`'s own `check_guard` early-exits on the first mismatch; this does
 /// too.
 ///
-/// Not yet called from any real dispatch path: the record store exists but is
-/// not yet wired into `free`/`realloc`'s pre-reclaim check (a later phase).
-/// Exercised directly by this module's own tests (and, indirectly, by
-/// `orisnitsa.zig`'s Phase 2 integration tests) until then.
+/// Dispatch (`orisnitsa.zig`'s `verify`) uses the seeded form through
+/// `Record.checkGuard`; this unseeded form is exercised by this module's own
+/// tests and by `orisnitsa.zig`'s guard tests.
 ///
 /// Only instantiate with `config.debug = true`: `.{}` fails the comptime
 /// `memory_guard_size > 0` assert below. `ptr` must be valid for

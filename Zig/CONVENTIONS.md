@@ -443,8 +443,8 @@ the CRT `rand()` port that seeds the guard ramp (and the stress-test workload).
 (`RecordBook`, dense page-chained storage) and `spomen_store.zig` (`RecordStore`, the address-indexed
 map over an `IntrusiveMultiRbTree`) — are the exception to "only reachable inside `if
 (config.debug)`": they are **non-generic and always compiled** (and exercised by `refAllDecls` in
-`root.zig`), but nothing in the allocator reaches them until the dispatch wiring lands in a later
-phase, so they cost `Orisnitsa(.{})` nothing. Contracts to keep:
+`root.zig`), but the allocator only reaches them from inside `if (config.debug)` call sites in
+`orisnitsa.zig`, so they cost `Orisnitsa(.{})` nothing. Contracts to keep:
 
 - `Record` is an `extern struct` with `NodeBase` first (offset 0); its 64-bit layout is locked by
   `comptime` asserts (`ptr` 40, `size` 48, `source` 56, `guard_byte` 57, `callstack` 64, 128 bytes).
@@ -458,16 +458,58 @@ phase, so they cost `Orisnitsa(.{})` nothing. Contracts to keep:
 - `RecordBook`/`RecordStore` embed self-referential sentinels: **never move one after its first
   use** (same contract as `IntrusiveList`), and, having no `Drop`, the owner **must call `deinit()`**
   to return the OS pages.
-- Callstack capture starts at the return address a layer passes down; `RecordStore.add`/`replace`/
-  `update` each take `@returnAddress()` at their own level, so a trace always starts at the store
-  method's caller. Symbol resolution is deferred to `report()`.
+- Callstack capture starts at the return address a layer passes down. The store itself never
+  captures on the dispatch path: it takes a prebuilt `Record` (`addRecord`, `replace(ptr, fresh)`)
+  or a prebuilt callstack (`update`), which `orisnitsa.zig` builds with `Record.initAt` /
+  `Record.captureCallstack` from the *public method's own* `@returnAddress()`, so a trace starts at
+  the caller of `alloc`/`realloc`/`resize`. Symbol resolution is deferred to `report()`.
+
+**The hooks** (`debugAdd`, `debugRemove`, `debugReplace`, `debugUpdate`, `debugCheck`, `debugPurge`
+— HPHA's `debug_*`) live in `orisnitsa.zig`, are called only inside `if (config.debug)` at exactly
+the points HPHA calls them, and own the whole debug responsibility: the guard seed draw, the ramp
+write, the record and the poisoning. The `tree*`/`bucket*` methods are pure `inflate`/`deflate`
+shims. Contracts to keep:
+
+- **Order and semantics mirror `orisnik`'s `orisnik_debug.rs` 1:1.** `debugRemove` verifies, poisons
+  at the *recorded* size, retires the record, then decrements the counters; `debugReplace` with a
+  null new pointer is a no-op (`Cpp/ERRATA.md` E9); a record-store OOM in `debugAdd` frees the block
+  and returns null, as a value.
+- **Failure is a panic with a pure `verify`.** Detection is `verify(ptr, ?orig_size)`, returning
+  `error{UnknownPointer, SizeMismatch, GuardOverrun}!*Record`; the reaction is
+  `spomen_failure.fail` (`std.debug.panic`, `noreturn`). Zig tests cannot catch a panic, so tests
+  cover `verify` and `spomen_failure.describe` directly and never continue past a detected
+  corruption; do not add a test hook that lets dispatch do so. A test that corrupts a guard on
+  purpose must repair it (rewrite the ramp with the record's seed) before freeing the block.
+  `orig_size` is compared after the minimum-size clamp (HPHA's raw compare would reject the legal
+  `free(p, 5)` of an `alloc(5)`).
+- **No re-entrancy guard, no global-allocator rule** — the contrast with Rust, whose `Backtrace`
+  capture allocates. Zig's capture is a lock-free, non-allocating frame walk into a fixed
+  `[MAX_CALLSTACK_DEPTH]usize`, and the store maps pages through `os.map`, never an allocator, so a
+  hook can never re-enter the allocator and there is no `busy`/`disabled` state.
+- **`requested()` and `deinit()`.** `requested()` (debug only) is HPHA's `mTotalRequestedSize*`, each
+  block counted as `size + memoryGuardSize`. A `config.debug` instance owns the record store's OS
+  pages, so its owner must call `deinit()` (a no-op for `Orisnitsa(.{})`); it does not free
+  outstanding allocations. Tests that use a debug instance `defer orisnitsa.deinit()`.
+- **The `stats` seam.** Zig cannot catch the panic a missing hook call would otherwise show up
+  through, so `Orisnitsa` carries debug-only plain `usize` counters (`HookStats`: adds, removes,
+  removes carrying a size, replaces, updates, checks, purges) incremented inside the hooks, and
+  tests pin the exact counts after each public operation. This is a carve-out from "no test
+  hooks": the seam counts hook *invocations* only and never lets dispatch continue past a detected
+  corruption. It is expected to feed Phase 5's `report()`.
+- **`verify` compares the way the record holds it.** A bucket-path record holds the
+  minimum-size-clamped size, so the caller's `orig_size` is clamped before the compare; a tree-path
+  record holds the raw size (`allocAligned(5, 512)`, a tree-path `realloc(p, 5)`), so it is
+  compared raw.
+- **OOM budgets.** Under `config.debug` the first record needs one extra `os.map` (the record
+  page), so a `failMapAfter(n)` budget written for the default build needs `n + 1`.
 
 **Debug-only state in an otherwise-shared struct** is declared as a field whose *type* depends
 on `config`, defaulted to match: `field: if (config.debug) T else void = if (config.debug)
 initial else {},`. For `Orisnitsa(.{})` the field is `void` — zero size, so the default type's
 layout is unaffected — and any method that touches it (e.g. `nextGuardSeed`) is only reachable
 from inside an `if (config.debug)` branch, so it is never analyzed for the non-debug
-instantiation. `Orisnitsa.guard_rng` is the first use.
+instantiation. `Orisnitsa.guard_rng` was the first use; `records`, `requested_buckets`,
+`requested_tree` and `stats` follow the same idiom.
 
 ---
 

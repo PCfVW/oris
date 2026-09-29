@@ -566,6 +566,33 @@ mentions any of this — like HPHA's own `tree_alloc`, it serves whatever alread
 size `orisnik.rs` hands it. `rand.rs` (the CRT `rand()` port that seeds the guard ramp)
 is compiled for `any(test, feature = "debug-allocator")`.
 
+The `spomen` hooks (`debug_add`/`debug_remove`/`debug_replace`/`debug_update`/`debug_check`/
+`debug_purge`, `Rust/src/orisnik_debug.rs`) mirror HPHA's own and are called by `Orisnik`'s
+*public* methods at exactly the points HPHA calls them; without the feature `orisnik.rs`
+supplies `#[inline]` no-op stand-ins, so no call site carries a `cfg`. Three rules follow
+from how they behave:
+
+- **Detected corruption panics** (guard overrun, freeing an unrecorded pointer, a sized free
+  whose size disagrees with the record). Detection is a plain value (`Orisnik::verify`,
+  directly testable); the reaction is the single `spomen::failure::fail`. This is `spomen`'s
+  one reviewed exception to "the hot path never panics" — fail-fast is the point of a debug
+  allocator, and it exists only under the feature. After a detection the hooks switch
+  themselves off for good (the panic message and payload are allocated unrecorded).
+- **Re-entrancy.** While a hook runs, `busy` makes nested `alloc`/`free`/`realloc` calls skip
+  every hook; everything a hook allocates must also be freed inside a hook, so an unrecorded
+  block is never freed by a non-busy call. No hook allocates from its own instance today
+  (see the next rule), so this is the enforced invariant rather than a live hazard; anything
+  new that does allocate inside a hook (`report()`'s formatting while iterating the store)
+  must run under the same flag.
+- **`#[global_allocator]`.** std's backtrace lock is process-wide and non-reentrant, and std
+  allocates while holding it, so an allocator that captures a backtrace inside `alloc`
+  deadlocks against application code that is itself capturing one (a panic hook with
+  `RUST_BACKTRACE=1`). An instance used through the `GlobalAlloc` interface therefore records
+  **no callstack** (`Record::callstack` is `None`); everything else about the record — and so
+  every detection above — still works. Such an instance must also be built with
+  `panic = "abort"` (unwinding out of a global allocator is undefined behaviour).
+  `tests/debug_global_allocator.rs` pins both hazards.
+
 Never use `assert!` (always-on) on the hot path for an invariant that `debug_assert!` can carry
 — it would tax every release-build allocation.
 

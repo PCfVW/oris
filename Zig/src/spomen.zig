@@ -8,8 +8,10 @@
 //! incrementally across v0.2.0: guard bytes (`guard.zig`, `spomen_guard.zig`) and
 //! payload poisoning (`spomen_poison.zig`) are implemented, as is allocation-record
 //! storage (`spomen_record.zig`, `spomen_book.zig`, `spomen_store.zig`, including
-//! raw callstack capture). Still to come: dispatch wiring, `check()`/`report()`
-//! (with callstack symbol resolution), and leak detection.
+//! raw callstack capture), wired into `Orisnitsa`'s dispatch through the
+//! `debug*` hooks (`orisnitsa.zig`), with corruption reported by
+//! `spomen_failure.zig`. Still to come: `check()`/`report()` (with callstack
+//! symbol resolution) and leak detection.
 
 /// The `comptime` configuration `Orisnitsa`/`Buckets`/`Tree` are generic type
 /// constructors over — `Orisnitsa(config)`, not a plain `Orisnitsa` value with a
@@ -25,7 +27,7 @@
 pub const Config = struct {
     /// Enables the `spomen` debug subsystem (guard bytes, allocation-record
     /// tracking, callstack capture, leak detection, check()/report()) — guard
-    /// bytes and payload poisoning are implemented, the rest is still to come
+    /// bytes, poisoning and allocation records are implemented, the rest is still to come
     /// (see this module's own doc). `comptime` so the relevant branches are
     /// eliminated entirely when `false`, matching
     /// `orisnik`'s `debug-allocator` Cargo feature and Zig's own

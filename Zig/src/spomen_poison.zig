@@ -11,12 +11,11 @@
 //! guard bytes trail the payload to catch overflow, poisoning fills the payload
 //! itself. Mirrors `orisnik`'s `Rust/src/spomen/poison.rs`.
 //!
-//! Wired into the tree/bucket `alloc`/`allocAligned` choke points (fill on
-//! success, after the guard write — matching HPHA's
-//! `write_guard()`-then-`initial_fill()` order inside `debug_record_map::add`)
-//! and into `free`/`freeWithSize*` (fill before the underlying reclaim —
-//! matching `debug_remove` running before `bucket_free`/`tree_free` in
-//! `allocator::free`). Deliberately **not** wired into `realloc`/`resize`:
+//! Called from `orisnitsa.zig`'s debug hooks: `debugAdd` (fill on success, after
+//! the guard write and the record — matching HPHA's `write_guard()`-then-
+//! `initial_fill()` order inside `debug_record_map::add`) and `debugRemove` (fill
+//! at the *recorded* size before the underlying reclaim — matching `debug_remove`
+//! running before `bucket_free`/`tree_free` in `allocator::free`). Deliberately **not** wired into `realloc`/`resize`:
 //! HPHA's own `update`/`replace` never poison, only `add`/`remove` do (see
 //! `Cpp/hpha.cpp`'s `debug_record_map`, `update`/`replace` bodies).
 //!

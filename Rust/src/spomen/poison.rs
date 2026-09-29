@@ -10,11 +10,11 @@
 //! a **separate** mechanism from the guard ramp ([`crate::spomen::guard`]) — guard
 //! bytes trail the payload to catch overflow, poisoning fills the payload itself.
 //!
-//! Wired into the tree/bucket `alloc`/`alloc_aligned` choke points (fill on success,
-//! after the guard write — matching HPHA's `write_guard()`-then-`initial_fill()`
-//! order inside `debug_record_map::add`) and into `free`/`free_with_size*` (fill
-//! before the underlying reclaim — matching `debug_remove` running before
-//! `bucket_free`/`tree_free` in `allocator::free`). Deliberately **not** wired into
+//! Called from the `debug_add` hook (fill on success, after the guard write — matching
+//! HPHA's `write_guard()`-then-`initial_fill()` order inside `debug_record_map::add`) and
+//! the `debug_remove` hook (fill at the *recorded* size, before the underlying reclaim —
+//! matching `debug_remove` running before `bucket_free`/`tree_free` in `allocator::free`);
+//! both live in `orisnik_debug.rs`. Deliberately **not** wired into
 //! `realloc`/`resize`: HPHA's own `update`/`replace` never poison, only `add`/`remove`
 //! do (see `Cpp/hpha.cpp`'s `debug_record_map`, `update`/`replace` bodies).
 //!

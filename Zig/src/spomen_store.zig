@@ -12,8 +12,8 @@
 //! # What this module does *not* do
 //! It is pure bookkeeping. HPHA's `add`/`remove` also poison the payload and assert the
 //! guard ramp; here those stay with the dispatch layer (`orisnitsa.zig`), which already
-//! owns poisoning (`spomen_poison.zig`) and the guard-seed stream, and will call
-//! `Record.checkGuard` before retiring a record. Keeping the store free of payload
+//! owns poisoning (`spomen_poison.zig`) and the guard-seed stream, and calls
+//! `Record.checkGuard` (through its pure `verify`) before retiring a record. Keeping the store free of payload
 //! access means it never dereferences a caller's allocation, so it is testable with
 //! made-up addresses.
 //!
@@ -87,9 +87,10 @@ pub const RecordStore = struct {
     /// `ptr` must not already be recorded (HPHA `assert`s this; so does this, in safe
     /// builds).
     pub fn add(self: *RecordStore, ptr: [*]u8, size: usize, source: Source, guard_byte: u8) bool {
-        // `@returnAddress()` is taken at THIS level so the captured trace starts at
-        // `add`'s caller (the dispatch layer), the same frame `replace` and `update`
-        // start from — not somewhere inside the store.
+        // Convenience for tests (dispatch builds its record itself and calls
+        // `addRecord`). `@returnAddress()` is taken at THIS level so the captured trace
+        // starts at `add`'s caller, not somewhere inside the store; `replace`/`update`
+        // capture nothing — their callers pass a prebuilt record/callstack.
         return self.addRecord(Record.initAt(@returnAddress(), ptr, size, source, guard_byte));
     }
 
@@ -133,21 +134,19 @@ pub const RecordStore = struct {
         return .{ .size = removed.size, .source = removed.source };
     }
 
-    /// Retargets the record of the allocation at `ptr` to a new allocation at `new_ptr`
-    /// (a successful `realloc` that moved), returning what it recorded before. Returns
-    /// `null` if `ptr` is not recorded. Ports `debug_record_map::replace`.
+    /// Retargets the record of the allocation at `ptr` to `fresh`, the record of its
+    /// replacement (a successful `realloc`, which may or may not have moved it),
+    /// returning what it recorded before. Returns `null` — storing nothing — if `ptr` is
+    /// not recorded. Ports `debug_record_map::replace`.
+    ///
+    /// The caller builds `fresh` (with `Record.initAt`, choosing the callstack's first
+    /// frame) *before* calling, so nothing in here captures anything or can observe a
+    /// half-updated store. Mirrors `orisnik`'s `replace(ptr, fresh)`.
     ///
     /// Call this only once the new allocation has *succeeded* — see `Cpp/ERRATA.md`'s
     /// E9 correction: HPHA's own caller guards on `newPtr`, so a failed realloc never
     /// reaches here and the original record survives untouched.
-    pub fn replace(
-        self: *RecordStore,
-        ptr: [*]u8,
-        new_ptr: [*]u8,
-        size: usize,
-        source: Source,
-        guard_byte: u8,
-    ) ?DebugInfo {
+    pub fn replace(self: *RecordStore, ptr: [*]u8, fresh: Record) ?DebugInfo {
         const record = self.find(ptr) orelse return null;
         // The address is the tree key, so the record leaves the tree while it changes.
         self.tree.erase(record);
@@ -155,24 +154,31 @@ pub const RecordStore = struct {
         // exclusively accessed here; the old value is copied out before the slot holds a
         // fresh, initialized record.
         const old = record.*;
-        record.* = Record.initAt(@returnAddress(), new_ptr, size, source, guard_byte);
+        record.* = fresh;
         self.tree.insert(record);
         return .{ .size = old.size, .source = old.source };
     }
 
     /// Updates the record of the allocation at `ptr` after an in-place resize: new
-    /// requested `size`, a freshly captured callstack, and the new guard seed. Returns
-    /// what it recorded before, or `null` if `ptr` is not recorded. Ports
-    /// `debug_record_map::update`. The address — the tree key — is unchanged, so the
-    /// tree is untouched.
-    pub fn update(self: *RecordStore, ptr: [*]u8, size: usize, guard_byte: u8) ?DebugInfo {
+    /// requested `size`, the new guard seed and `callstack` (freshly captured by the
+    /// caller with `Record.captureCallstack`, choosing its first frame; built *before*
+    /// this call, see `replace`). Returns what it recorded before, or `null` if `ptr` is
+    /// not recorded. Ports `debug_record_map::update`. The address — the tree key — is
+    /// unchanged, so the tree is untouched.
+    pub fn update(
+        self: *RecordStore,
+        ptr: [*]u8,
+        size: usize,
+        guard_byte: u8,
+        callstack: [spomen_record.MAX_CALLSTACK_DEPTH]usize,
+    ) ?DebugInfo {
         const record = self.find(ptr) orelse return null;
         // SAFETY: `record` is a live, initialized record (found above), exclusively
         // accessed here; only non-key fields are written.
         const info: DebugInfo = .{ .size = record.size, .source = record.source };
         record.size = size;
         record.guard_byte = guard_byte;
-        record.callstack = Record.captureCallstack(@returnAddress());
+        record.callstack = callstack;
         return info;
     }
 
@@ -291,7 +297,7 @@ test "replace rekeys without duplicating" {
     defer store.deinit();
     try testing.expect(store.add(addr(1), 10, .buckets, 1));
     try testing.expect(store.add(addr(2), 20, .buckets, 2));
-    const info = store.replace(addr(1), addr(9), 300, .tree, 9) orelse return error.TestUnexpectedResult;
+    const info = store.replace(addr(1), Record.init(addr(9), 300, .tree, 9)) orelse return error.TestUnexpectedResult;
     try testing.expectEqual(DebugInfo{ .size = 10, .source = .buckets }, info);
     try testing.expectEqual(@as(usize, 2), store.len()); // rekeyed, not duplicated
     try testing.expect(store.find(addr(1)) == null);
@@ -299,19 +305,19 @@ test "replace rekeys without duplicating" {
     try testing.expectEqual(@as(usize, 300), moved.size);
     try testing.expectEqual(Source.tree, moved.source);
     try testing.expect(store.find(addr(2)) != null);
-    try testing.expect(store.replace(addr(1), addr(5), 1, .tree, 0) == null);
+    try testing.expect(store.replace(addr(1), Record.init(addr(5), 1, .tree, 0)) == null);
 }
 
 test "update changes size and seed in place" {
     var store: RecordStore = .init();
     defer store.deinit();
     try testing.expect(store.add(addr(3), 10, .tree, 1));
-    const info = store.update(addr(3), 64, 5) orelse return error.TestUnexpectedResult;
+    const info = store.update(addr(3), 64, 5, sentinel(3)) orelse return error.TestUnexpectedResult;
     try testing.expectEqual(DebugInfo{ .size = 10, .source = .tree }, info);
     const rec = store.find(addr(3)) orelse return error.TestUnexpectedResult; // still indexed
     try testing.expectEqual(@as(usize, 64), rec.size);
     try testing.expectEqual(@as(u8, 5), rec.guard_byte);
-    try testing.expect(store.update(addr(4), 1, 0) == null);
+    try testing.expect(store.update(addr(4), 1, 0, sentinel(4)) == null);
 }
 
 test "add reports OS refusal and records nothing" {
@@ -349,7 +355,7 @@ test "records capture the allocating callstack" {
     try testing.expect(rec.callstack[0] != 0);
     // `update` recaptures.
     rec.callstack = [_]usize{0} ** spomen_record.MAX_CALLSTACK_DEPTH;
-    _ = store.update(addr(1), 8, 0);
+    _ = store.update(addr(1), 8, 0, Record.captureCallstack(@returnAddress()));
     try testing.expect(rec.callstack[0] != 0);
 }
 
@@ -375,8 +381,8 @@ test "replace preserves neighbours and update recaptures only its own record" {
     var store: RecordStore = .init();
     defer store.deinit();
     for (0..4) |i| try testing.expect(store.addRecord(tagged(i)));
-    _ = store.replace(addr(1), addr(9), 300, .tree, 9) orelse return error.TestUnexpectedResult;
-    _ = store.update(addr(2), 64, 5) orelse return error.TestUnexpectedResult;
+    _ = store.replace(addr(1), Record.init(addr(9), 300, .tree, 9)) orelse return error.TestUnexpectedResult;
+    _ = store.update(addr(2), 64, 5, Record.captureCallstack(@returnAddress())) orelse return error.TestUnexpectedResult;
     for ([_]usize{ 0, 3 }) |i| { // untouched neighbours
         const rec = store.find(addr(i)) orelse return error.TestUnexpectedResult;
         try testing.expectEqual(i, rec.size);

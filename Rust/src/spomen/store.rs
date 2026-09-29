@@ -63,6 +63,9 @@ impl RecordStore {
 
     /// Number of live records.
     #[must_use]
+    // Not yet called outside tests: `check()`/`report()` (v0.2.0 Phase 5) enumerate the
+    // live records and need the count.
+    #[allow(dead_code)]
     pub(crate) fn len(&self) -> usize {
         self.book.len()
     }
@@ -88,6 +91,9 @@ impl RecordStore {
     /// `ptr` must not already be recorded (HPHA `assert`s this; so does this, in debug
     /// builds).
     #[must_use]
+    // The dispatch layer builds its own record (it owns the guard seed) and calls
+    // `add_record`; this convenience form is what the store's tests use.
+    #[allow(dead_code)]
     pub(crate) fn add(
         &self,
         ptr: NonNull<u8>,
@@ -141,26 +147,20 @@ impl RecordStore {
         })
     }
 
-    /// Retargets the record of the allocation at `ptr` to a new allocation at
-    /// `new_ptr` (a successful `realloc` that moved), returning what it recorded before.
-    /// Returns `None` if `ptr` is not recorded. Ports `debug_record_map::replace`.
+    /// Retargets the record of the allocation at `ptr` to `fresh`, the record of its
+    /// replacement (a successful `realloc`, which may or may not have moved it), returning
+    /// what it recorded before. Returns `None` — dropping `fresh` — if `ptr` is not
+    /// recorded. Ports `debug_record_map::replace`.
+    ///
+    /// The caller builds `fresh` (and so decides whether to capture a callstack, which
+    /// allocates — see `spomen::record`'s "global allocator" section) *before* calling, so
+    /// nothing in here allocates or can observe a half-updated store.
     ///
     /// Call this only once the new allocation has *succeeded* — see `Cpp/ERRATA.md`'s
     /// E9 correction: HPHA's own caller guards on `newPtr`, so a failed realloc never
     /// reaches here and the original record survives untouched.
-    pub(crate) fn replace(
-        &self,
-        ptr: NonNull<u8>,
-        new_ptr: NonNull<u8>,
-        size: usize,
-        source: Source,
-        guard_byte: u8,
-    ) -> Option<DebugInfo> {
+    pub(crate) fn replace(&self, ptr: NonNull<u8>, fresh: Record) -> Option<DebugInfo> {
         let record = self.find(ptr)?;
-        // Build the replacement (which captures a callstack, allocating) *before* the
-        // record is disturbed: nothing that runs here may observe a half-updated store —
-        // see `spomen::record`'s "Re-entrancy" section.
-        let fresh = Record::new(new_ptr, size, source, guard_byte);
         // The address is the tree key, so the record leaves the tree while it changes.
         self.tree.erase(record);
         // SAFETY: `record` is a live, initialized slot in the book (found above),
@@ -175,19 +175,19 @@ impl RecordStore {
     }
 
     /// Updates the record of the allocation at `ptr` after an in-place resize: new
-    /// requested `size`, a freshly captured callstack, and the new guard seed. Returns
-    /// what it recorded before, or `None` if `ptr` is not recorded. Ports
-    /// `debug_record_map::update`. The address — the tree key — is unchanged, so the
-    /// tree is untouched.
+    /// requested `size`, the new guard seed and `callstack` (freshly captured by the
+    /// caller, or `None`; built *before* this call, see `replace`). Returns what it
+    /// recorded before, or `None` if `ptr` is not recorded. Ports
+    /// `debug_record_map::update`. The address — the tree key — is unchanged, so the tree
+    /// is untouched.
     pub(crate) fn update(
         &self,
         ptr: NonNull<u8>,
         size: usize,
         guard_byte: u8,
+        callstack: Option<std::backtrace::Backtrace>,
     ) -> Option<DebugInfo> {
         let record = self.find(ptr)?;
-        // Capture first, before any field is written (see `replace`).
-        let callstack = crate::spomen::record::capture_callstack();
         // SAFETY: `record` is a live, initialized record (found above), exclusively
         // accessed here; only non-key fields are written.
         let old_size = unsafe { (*record.as_ptr()).size };
@@ -292,7 +292,7 @@ mod tests {
         assert!(store.add(addr(1), 10, Source::Buckets, 1));
         assert!(store.add(addr(2), 20, Source::Buckets, 2));
         let info = store
-            .replace(addr(1), addr(9), 300, Source::Tree, 9)
+            .replace(addr(1), Record::new(addr(9), 300, Source::Tree, 9))
             .expect("recorded");
         assert_eq!(
             info,
@@ -312,7 +312,7 @@ mod tests {
         assert!(store.find(addr(2)).is_some());
         assert!(
             store
-                .replace(addr(1), addr(5), 1, Source::Tree, 0)
+                .replace(addr(1), Record::new(addr(5), 1, Source::Tree, 0))
                 .is_none()
         );
     }
@@ -321,7 +321,7 @@ mod tests {
     fn update_changes_size_and_seed_in_place() {
         let store = RecordStore::new();
         assert!(store.add(addr(3), 10, Source::Tree, 1));
-        let info = store.update(addr(3), 64, 5).expect("recorded");
+        let info = store.update(addr(3), 64, 5, None).expect("recorded");
         assert_eq!(
             info,
             DebugInfo {
@@ -335,7 +335,32 @@ mod tests {
         // SAFETY: `rec` is a live record.
         let seed = unsafe { (*rec.as_ptr()).guard_byte };
         assert_eq!((size, seed), (64, 5));
-        assert!(store.update(addr(4), 1, 0).is_none());
+        assert!(store.update(addr(4), 1, 0, None).is_none());
+    }
+
+    #[test]
+    fn records_without_a_callstack_index_and_retire_like_any_other() {
+        // The `#[global_allocator]` mode: no callstack, everything else identical.
+        let store = RecordStore::new();
+        for i in 0..3 {
+            assert!(store.add_record(Record::with_callstack(addr(i), i, Source::Buckets, 0, None)));
+        }
+        let rec = store.find(addr(1)).expect("recorded");
+        // SAFETY: `rec` is a live record.
+        assert!(unsafe { (*rec.as_ptr()).callstack.is_none() });
+        assert!(store.update(addr(1), 9, 3, None).is_some());
+        assert!(
+            store
+                .replace(
+                    addr(2),
+                    Record::with_callstack(addr(7), 4, Source::Tree, 1, None)
+                )
+                .is_some()
+        );
+        assert!(store.remove(addr(0)).is_some());
+        assert!(store.remove(addr(1)).is_some());
+        assert!(store.remove(addr(7)).is_some());
+        assert_eq!(store.len(), 0);
     }
 
     #[test]
@@ -375,35 +400,67 @@ mod tests {
         use std::backtrace::BacktraceStatus;
         let store = RecordStore::new();
         for i in 0..4 {
-            let rec =
-                Record::with_callstack(addr(i), i, Source::Tree, 0, capture_callstack_with(true));
+            let rec = Record::with_callstack(
+                addr(i),
+                i,
+                Source::Tree,
+                0,
+                Some(capture_callstack_with(true)),
+            );
             assert!(store.add_record(rec));
         }
         let status = |n: usize| {
             let rec = store.find(addr(n)).expect("recorded");
             // SAFETY: `rec` is a live record.
-            unsafe { (*rec.as_ptr()).callstack.status() }
+            unsafe {
+                (*rec.as_ptr())
+                    .callstack
+                    .as_ref()
+                    .map(std::backtrace::Backtrace::status)
+            }
         };
         // Removing a non-last record moves the last (captured) record into its slot.
         assert!(store.remove(addr(0)).is_some());
         assert_eq!(
             status(3),
-            BacktraceStatus::Captured,
+            Some(BacktraceStatus::Captured),
             "moved record keeps its trace"
         );
-        assert_eq!(status(1), BacktraceStatus::Captured);
+        assert_eq!(status(1), Some(BacktraceStatus::Captured));
         // Replace drops the old trace and installs a fresh one.
         assert!(
             store
-                .replace(addr(1), addr(9), 5, Source::Buckets, 1)
+                .replace(
+                    addr(1),
+                    Record::with_callstack(
+                        addr(9),
+                        5,
+                        Source::Buckets,
+                        1,
+                        Some(capture_callstack_with(true)),
+                    ),
+                )
                 .is_some()
         );
         // Update swaps the trace in place (with the ordinary capture policy, so under Miri
         // the new trace is the cheap disabled one).
-        assert_eq!(status(2), BacktraceStatus::Captured, "unaffected neighbour");
-        assert!(store.update(addr(2), 7, 2).is_some());
+        assert_eq!(
+            status(2),
+            Some(BacktraceStatus::Captured),
+            "unaffected neighbour"
+        );
+        assert!(
+            store
+                .update(
+                    addr(2),
+                    7,
+                    2,
+                    Some(crate::spomen::record::capture_callstack())
+                )
+                .is_some()
+        );
         if !cfg!(miri) {
-            assert_eq!(status(2), BacktraceStatus::Captured, "recaptured");
+            assert_eq!(status(2), Some(BacktraceStatus::Captured), "recaptured");
         }
         // Removing the (now) last record pops without a move.
         assert!(store.remove(addr(3)).is_some());
@@ -429,8 +486,13 @@ mod tests {
         let store = RecordStore::new();
         // Force the real capture in both modes (under Miri the ordinary policy is the
         // cheap no-op), so this always checks a genuine trace.
-        let rec =
-            Record::with_callstack(addr(1), 8, Source::Buckets, 0, capture_callstack_with(true));
+        let rec = Record::with_callstack(
+            addr(1),
+            8,
+            Source::Buckets,
+            0,
+            Some(capture_callstack_with(true)),
+        );
         assert!(store.add_record(rec));
         // Natively, also check the ordinary `add` path captures at its call site.
         if !cfg!(miri) {
@@ -439,7 +501,8 @@ mod tests {
         for n in if cfg!(miri) { 1..2 } else { 1..3 } {
             let rec = store.find(addr(n)).expect("recorded");
             // SAFETY: `rec` is a live record.
-            let trace = unsafe { (*rec.as_ptr()).callstack.to_string() };
+            let trace = unsafe { (*rec.as_ptr()).callstack.as_ref().map(ToString::to_string) }
+                .expect("a callstack was captured");
             assert!(
                 trace.contains("records_capture_the_allocating_callstack"),
                 "callstack should name the capturing test, got:\n{trace}"

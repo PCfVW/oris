@@ -7,13 +7,15 @@
 //! of scope until v2.x, see `ROADMAP.md`. `DEBUG_ALLOCATOR` (guard bytes,
 //! allocation records, `check()`/`report()`) is v0.2.0's own milestone, landing
 //! incrementally behind `config.debug` (`guard.zig`, `spomen_guard.zig`,
-//! `spomen_poison.zig`): both paths' guard bytes and payload poisoning are wired
-//! in here (`treeAlloc`/`treeAllocAligned`/`treeRealloc`/`treeReallocAligned`/
-//! `treeResize`/`bucketAlloc`/`bucketAllocAligned`/`bucketRealloc`/
-//! `bucketResize`, and `querySize`/`free`/`freeWithSize`/`freeWithSizeAligned`'s
-//! deflate/poison calls); the rest of `spomen` (allocation records, callstack
-//! capture, `check()`/`report()`) follows in later phases. With
-//! `config.debug` false, `guard.memoryGuardSize(config)` is 0, so every
+//! `spomen_poison.zig`, `spomen_record.zig`/`spomen_book.zig`/`spomen_store.zig`,
+//! `spomen_failure.zig`). The `tree*`/`bucket*` methods below are pure size-class
+//! shims (they only fold the guard reservation in and out); the debug *hooks*
+//! (`debugAdd`/`debugRemove`/`debugReplace`/`debugUpdate`/`debugCheck`/`debugPurge`,
+//! HPHA's `debug_*`) own the guard seed, the ramp, the allocation record and the
+//! poisoning, and are called by the public methods at exactly the points HPHA's own
+//! `alloc`/`realloc`/`resize`/`free`/`purge` call them. `check()`/`report()` and leak
+//! detection follow in later phases. With `config.debug` false,
+//! `guard.memoryGuardSize(config)` is 0, so every
 //! `+`/`- memoryGuardSize(config)` site below is dead code the compiler removes,
 //! restoring v0.1.x's exact guard-free arithmetic — the same "cancels out and is
 //! simply omitted" shape this doc described before this feature existed, now
@@ -45,10 +47,42 @@ const spomen = @import("spomen.zig");
 const guard = @import("guard.zig");
 const spomen_guard = @import("spomen_guard.zig");
 const spomen_poison = @import("spomen_poison.zig");
+const spomen_record = @import("spomen_record.zig");
+const spomen_store = @import("spomen_store.zig");
+const spomen_failure = @import("spomen_failure.zig");
 const rand = @import("rand.zig");
 const tree_mod = @import("tree.zig");
 
 const Config = spomen.Config;
+const Record = spomen_record.Record;
+const Source = spomen_record.Source;
+const Corruption = spomen_failure.Corruption;
+const VerifyError = spomen_failure.VerifyError;
+
+/// How many times each debug hook has run — a plain-counter seam that lets tests prove
+/// the hooks are actually wired into dispatch at HPHA's call sites. Zig cannot catch a
+/// panic, so a deleted hook call would otherwise change nothing observable. The seam
+/// counts hook *invocations* only; it never lets dispatch continue past a detected
+/// corruption (see `Zig/CONVENTIONS.md`). Phase 5's `report()` is expected to reuse it.
+/// Counted at the point a hook does real work: `adds`/`replaces` skip a null pointer
+/// (a failed allocation/realloc is not an add/replace).
+pub const HookStats = struct {
+    /// `debugAdd` calls that received a real (non-null) allocation.
+    adds: usize = 0,
+    /// `debugRemove` calls (every free path).
+    removes: usize = 0,
+    /// The subset of `removes` that carried a caller-supplied `orig_size`
+    /// (`freeWithSize`/`freeWithSizeAligned`) — proves the size reaches the check.
+    removes_with_size: usize = 0,
+    /// `debugReplace` calls that received a non-null new pointer (a successful realloc).
+    replaces: usize = 0,
+    /// `debugUpdate` calls (every `resize`).
+    updates: usize = 0,
+    /// `debugCheck` calls (`realloc`/`reallocAligned`/`resize` before touching the block).
+    checks: usize = 0,
+    /// `debugPurge` calls.
+    purges: usize = 0,
+};
 
 /// HPHA's own alignment precondition, ported verbatim: `(alignment & (alignment-1)) == 0`.
 ///
@@ -92,10 +126,12 @@ pub fn isHphaAlignment(alignment: usize) bool {
 /// sentinel of the tree's free-block index (both lazily initialized — see
 /// `list.zig`'s lazy-sentinel-init doc), and the per-bucket page marker that
 /// `Buckets.ptrInBucket` re-derives on every `free`/`realloc`/`querySize` call to
-/// decide whether a pointer belongs to the bucket or the tree path.
+/// decide whether a pointer belongs to the bucket or the tree path. Under
+/// `config.debug` the record store adds two more: its book's page-list sentinel and
+/// its address index's tree sentinel (`spomen_book.zig`/`spomen_store.zig`).
 ///
 /// Copying the value out of its original storage — `var b = a;`, returning it by
-/// value from a helper, appending it to an `ArrayList` — leaves all three pointing at
+/// value from a helper, appending it to an `ArrayList` — leaves all of them pointing at
 /// the old address. The sentinels then dangle, and every marker mismatches, so
 /// `ptrInBucket` starts answering `false` for genuine bucket pointers and `free`
 /// hands them to the tree path, which reads a block header out of a bucket slot's
@@ -116,10 +152,14 @@ pub fn isHphaAlignment(alignment: usize) bool {
 ///
 /// **Single-threaded only** — see the module doc's "`&self` vs `*Self`" section.
 ///
+/// **A `config.debug` instance must be `deinit`ed.** It owns the record store's OS
+/// pages, which nothing else returns: skipping `deinit()` leaks them (`purge` only
+/// returns the *spare* ones). `Orisnitsa(.{})` owns nothing `deinit` releases.
+///
 /// Generic over the `spomen` debug-subsystem `Config` (see `Zig/CONVENTIONS.md`'s
 /// "`comptime` Toggles" section): `Orisnitsa(config)`, not a plain `Orisnitsa`
-/// value with a runtime `config` field, is what gives the future debug subsystem
-/// (guard bytes, allocation-record tracking) a compiler-enforced
+/// value with a runtime `config` field, is what gives the debug subsystem
+/// (guard bytes, allocation records, hooks) a compiler-enforced
 /// zero-cost-when-disabled guarantee, matching Zig's own
 /// `std.heap.DebugAllocator(comptime config: Config) type`. `root.zig`'s exported
 /// `Orisnitsa` is the default, non-debug instantiation `Orisnitsa(.{})`, keeping
@@ -153,6 +193,20 @@ pub fn Orisnitsa(comptime config: Config) type {
         /// ASLR) would not.
         guard_rng: if (config.debug) rand.VintageRand else void =
             if (config.debug) rand.VintageRand.init(0) else {},
+        /// Every live allocation's debug record, indexed by address (`spomen`; HPHA's
+        /// `mDebugMap`). `void` (zero-size) unless `config.debug`. Owns OS pages: the
+        /// owner must call `deinit`.
+        records: if (config.debug) spomen_store.RecordStore else void =
+            if (config.debug) spomen_store.RecordStore.init() else {},
+        /// Bytes currently outstanding on the bucket path, each block counted as
+        /// `requested size + memoryGuardSize(config)`. Ports
+        /// `mTotalRequestedSizeBuckets`. `void` unless `config.debug`.
+        requested_buckets: if (config.debug) usize else void = if (config.debug) 0 else {},
+        /// `requested_buckets`'s tree-path twin. Ports `mTotalRequestedSizeTree`.
+        requested_tree: if (config.debug) usize else void = if (config.debug) 0 else {},
+        /// How many times each debug hook has run — the wiring seam (see `HookStats`).
+        /// `void` unless `config.debug`.
+        stats: if (config.debug) HookStats else void = if (config.debug) .{} else {},
 
         /// Builds a fresh, empty allocator instance — no OS memory is claimed until
         /// the first allocation. Ports `allocator::allocator` (the default
@@ -162,6 +216,16 @@ pub fn Orisnitsa(comptime config: Config) type {
         /// pattern's own requirement.
         pub fn init() Self {
             return .{};
+        }
+
+        /// Releases the debug record store's OS pages (`records.deinit()`) when
+        /// `config.debug`; a no-op otherwise. Zig has no `Drop`, so a debug
+        /// instance's owner must call this (the `Orisnitsa(.{})` default owns nothing
+        /// that needs it). It does **not** free outstanding allocations or return the
+        /// bucket/tree pages — `purge` does the latter, once everything is freed. The
+        /// instance must not be used afterwards.
+        pub fn deinit(self: *Self) void {
+            if (config.debug) self.records.deinit();
         }
 
         /// Latches this instance's address on first use and, on every later call,
@@ -202,73 +266,42 @@ pub fn Orisnitsa(comptime config: Config) type {
             return @truncate(self.guard_rng.next());
         }
 
-        /// The tree path's sole *fresh-allocation* choke point: `alloc` and
-        /// `realloc`'s bucket→tree crossover both go through this rather than
-        /// `self.tree.alloc` directly, so the guard-byte write (when
-        /// `config.debug`) exists exactly once. `size` is the caller-visible
-        /// request; the guard reservation is folded in and out here, invisibly to
-        /// every caller of this method.
+        // ---- size-class wrappers ---------------------------------------------------
+        //
+        // Every `tree*`/`bucket*` method below is the single place the guard
+        // reservation (`guard.inflate`/`guard.deflate`, an identity when
+        // `config.debug` is false) is folded into a size before it reaches `Tree`/
+        // `Buckets`, which are guard-oblivious. They do *not* write guard bytes,
+        // poison payloads or touch the record store: that is the `debug*` hooks'
+        // job, called by the public methods below exactly where HPHA's `alloc`/
+        // `realloc`/`resize`/`free` call `debug_add`/`debug_replace`/`debug_update`/
+        // `debug_remove`. (Before v0.2.0 Phase 4 the guard write lived here; it moved
+        // so the guard seed, the record and the poisoning all happen in one place,
+        // in HPHA's order.)
+
+        /// The tree path's fresh-allocation shim: inflates `size` by the guard
+        /// reservation. `size` is the caller-visible request.
         fn treeAlloc(self: *Self, size: usize) ?[*]u8 {
             const inflated = guard.inflate(config, size) orelse return null;
-            const ptr = self.tree.alloc(inflated) orelse return null;
-            if (config.debug) {
-                // SAFETY: `ptr` is valid for `size + memoryGuardSize(config)` bytes
-                // (just allocated with that inflated size above), exclusively owned
-                // (freshly allocated, not yet handed to any other caller).
-                spomen_guard.writeGuard(config, ptr, size, self.nextGuardSeed());
-                // Poisons the payload *after* the guard write, matching HPHA's
-                // own `write_guard()`-then-`initial_fill()` order inside
-                // `debug_record`'s constructor/`debug_record_map::add` — the two
-                // ranges are disjoint ([0, size) vs
-                // [size, size + memoryGuardSize(config))) so the order has no
-                // functional effect, only fidelity value.
-                // SAFETY: `ptr` is valid for `size` bytes (a subset of the span
-                // just established above), exclusively owned.
-                spomen_poison.fill(ptr, size);
-            }
-            return ptr;
+            return self.tree.alloc(inflated);
         }
 
-        /// `treeAlloc`'s aligned counterpart — the tree path's sole
-        /// *fresh-allocation* choke point for an aligned request.
+        /// `treeAlloc`'s aligned counterpart.
         fn treeAllocAligned(self: *Self, size: usize, alignment: usize) ?[*]u8 {
             const inflated = guard.inflate(config, size) orelse return null;
-            const ptr = self.tree.allocAligned(inflated, alignment) orelse return null;
-            if (config.debug) {
-                // SAFETY: `ptr` is valid for `size + memoryGuardSize(config)` bytes,
-                // aligned to `alignment`, exclusively owned (freshly allocated).
-                spomen_guard.writeGuard(config, ptr, size, self.nextGuardSeed());
-                // See `treeAlloc`'s identical poisoning comment.
-                // SAFETY: `ptr` is valid for `size` bytes (established above),
-                // exclusively owned.
-                spomen_poison.fill(ptr, size);
-            }
-            return ptr;
+            return self.tree.allocAligned(inflated, alignment);
         }
 
-        /// `treeAlloc`'s realloc counterpart: the tree path's sole choke point for
-        /// growing/shrinking/moving an *existing* tree-path allocation. `size` is
-        /// the new caller-visible target; on success, the guard ramp is
-        /// (re)written at the new position regardless of whether the block grew
-        /// in place, merged with a neighbour, or moved via allocate-copy-free —
+        /// `treeAlloc`'s realloc counterpart: grows/shrinks/moves an *existing*
+        /// tree-path allocation. `size` is the new caller-visible target;
         /// `tree.Tree.realloc`'s contract guarantees the returned pointer is valid
-        /// for at least the inflated size passed in, whichever path it took
-        /// internally.
+        /// for at least the inflated size, whichever path it took internally.
         ///
         /// `ptr` must be a still-live tree-path allocation this instance
         /// produced.
         fn treeRealloc(self: *Self, ptr: [*]u8, size: usize) ?[*]u8 {
             const inflated = guard.inflate(config, size) orelse return null;
-            const new_ptr = self.tree.realloc(ptr, inflated) orelse return null;
-            if (config.debug) {
-                // SAFETY: `new_ptr` is valid for `size + memoryGuardSize(config)`
-                // bytes (just (re)allocated with that inflated size above);
-                // exclusively owned — even if this is the same address `ptr` was,
-                // the trailing guard region past the new, still-live payload is
-                // this instance's own to write.
-                spomen_guard.writeGuard(config, new_ptr, size, self.nextGuardSeed());
-            }
-            return new_ptr;
+            return self.tree.realloc(ptr, inflated);
         }
 
         /// `treeRealloc`'s aligned counterpart.
@@ -277,19 +310,12 @@ pub fn Orisnitsa(comptime config: Config) type {
         /// produced, itself already aligned to `alignment`.
         fn treeReallocAligned(self: *Self, ptr: [*]u8, size: usize, alignment: usize) ?[*]u8 {
             const inflated = guard.inflate(config, size) orelse return null;
-            const new_ptr = self.tree.reallocAligned(ptr, inflated, alignment) orelse return null;
-            if (config.debug) {
-                // SAFETY: same reasoning as `treeRealloc`, aligned.
-                spomen_guard.writeGuard(config, new_ptr, size, self.nextGuardSeed());
-            }
-            return new_ptr;
+            return self.tree.reallocAligned(ptr, inflated, alignment);
         }
 
-        /// `treeAlloc`'s in-place-only counterpart: grows `ptr` without ever
-        /// moving it, reporting the resulting caller-visible size either way. On
-        /// growth, the guard ramp is rewritten at the new position — HPHA's own
-        /// `debug_update` re-runs `write_guard` here too (`resize` changing size
-        /// necessarily changes where the trailing guard region starts).
+        /// The tree path's in-place-only counterpart: grows `ptr` without ever
+        /// moving it and returns the resulting caller-visible (deflated) size,
+        /// whether or not it grew.
         ///
         /// `ptr` must be a still-live tree-path allocation this instance
         /// produced.
@@ -302,48 +328,20 @@ pub fn Orisnitsa(comptime config: Config) type {
             // desired — no separate handling needed.
             const inflated = guard.inflate(config, size) orelse size;
             const real_size = self.tree.resize(ptr, inflated);
-            const new_size = guard.deflate(config, real_size);
-            // Unconditional — ports HPHA's own `resize` body exactly, which
-            // reassigns `size` to `tree_resize`'s (deflated) return value and
-            // calls `debug_update(ptr, size)` *every* time, whether or not the
-            // block actually grew (`hpha.h`'s `resize`). This is not merely
-            // faithful, it is necessary: when growth lands exactly on the
-            // caller's own target (`new_size == size`), the guard's *position*
-            // still moved from the old size's end to the new one's — comparing
-            // `new_size` against `size` cannot detect that, only comparing
-            // against the block's size *before* this call could, and
-            // `Tree.resize` doesn't hand that back separately from the
-            // *not-grown* case either.
-            if (config.debug) {
-                // SAFETY: `ptr` is valid for `real_size == new_size +
-                // memoryGuardSize(config)` bytes (just reported by `Tree.resize`
-                // above), exclusively owned.
-                spomen_guard.writeGuard(config, ptr, new_size, self.nextGuardSeed());
-            }
-            return new_size;
+            return guard.deflate(config, real_size);
         }
 
-        /// The bucket path's sole *fresh-allocation* choke point for a plain
-        /// (unaligned) request. `size` is the caller-visible, already-clamped
-        /// request — the guard reservation is folded into the bucket-index
-        /// computation and stripped back off nowhere here (bucket "size" is a
-        /// slot's fixed class, never reported through this method; `resize`/
-        /// `querySize` deflate it on their own).
+        /// The bucket path's fresh-allocation shim for a plain (unaligned)
+        /// request. `size` is the caller-visible, already-clamped request; the
+        /// guard reservation is folded into the bucket-index computation here but
+        /// never stripped back off, because a bucket slot's size is its fixed
+        /// class (`querySize`/`resize` deflate it). The `orelse size` fallback is
+        /// unreachable: every caller has just established `isSmallAllocation`, so
+        /// `inflate` cannot overflow (the other `bucket*` shims and the sized
+        /// `freeWithSize*` paths rely on the same bound).
         fn bucketAlloc(self: *Self, size: usize) ?[*]u8 {
             const inflated = guard.inflate(config, size) orelse size;
-            const ptr = self.buckets.allocDirect(bucket.bucketSpacingFunction(inflated)) orelse return null;
-            if (config.debug) {
-                // SAFETY: `ptr` is a slot of at least `inflated == size +
-                // memoryGuardSize(config)` bytes (just allocated from that
-                // bucket), exclusively owned (freshly allocated, not yet handed
-                // to any other caller).
-                spomen_guard.writeGuard(config, ptr, size, self.nextGuardSeed());
-                // See `treeAlloc`'s identical poisoning comment.
-                // SAFETY: `ptr` is a slot of at least `size` bytes (established
-                // above), exclusively owned.
-                spomen_poison.fill(ptr, size);
-            }
-            return ptr;
+            return self.buckets.allocDirect(bucket.bucketSpacingFunction(inflated));
         }
 
         /// `bucketAlloc`'s aligned counterpart. The guard reservation is folded
@@ -356,81 +354,307 @@ pub fn Orisnitsa(comptime config: Config) type {
         /// alternative.
         fn bucketAllocAligned(self: *Self, size: usize, alignment: usize) ?[*]u8 {
             const inflated = guard.inflate(config, size) orelse size;
-            const ptr = self.buckets.allocDirect(
+            return self.buckets.allocDirect(
                 bucket.bucketSpacingFunction(align_helpers.roundUp(inflated, alignment)),
-            ) orelse return null;
-            if (config.debug) {
-                // SAFETY: `ptr` is a slot of at least `roundUp(inflated, alignment)
-                // >= size + memoryGuardSize(config)` bytes, aligned to
-                // `alignment`, exclusively owned.
-                spomen_guard.writeGuard(config, ptr, size, self.nextGuardSeed());
-                // See `treeAlloc`'s identical poisoning comment.
-                // SAFETY: `ptr` is a slot of at least `size` bytes (established
-                // above), exclusively owned.
-                spomen_poison.fill(ptr, size);
-            }
-            return ptr;
+            );
         }
 
-        /// The bucket path's sole choke point for growing/shrinking an
-        /// *existing* bucket-path allocation in place (never a move —
-        /// `Buckets.realloc` only ever grows into a larger size class,
-        /// `realloc`'s own cross-path logic handles the bucket->tree case
-        /// separately). `size` is the caller's already-clamped target; on
-        /// success, the guard ramp is (re)written at that target, exactly
-        /// mirroring HPHA's `bucket_realloc(ptr, size + MEMORY_GUARD_SIZE);
-        /// debug_replace(ptr, newPtr, size, ...)` (`Cpp/hpha.h`'s `realloc`).
+        /// The bucket path's shim for growing/shrinking an *existing* bucket-path
+        /// allocation (never a move — `Buckets.realloc` only ever grows into a
+        /// larger size class; `realloc`'s own cross-path logic handles the
+        /// bucket->tree case). `size` is the caller's already-clamped target.
         ///
         /// `ptr` must be a still-live bucket-path allocation this instance
         /// produced.
         fn bucketRealloc(self: *Self, ptr: [*]u8, size: usize) ?[*]u8 {
             const inflated = guard.inflate(config, size) orelse size;
-            const new_ptr = self.buckets.realloc(ptr, inflated) orelse return null;
-            if (config.debug) {
-                // SAFETY: `new_ptr` is a slot of at least `inflated == size +
-                // memoryGuardSize(config)` bytes, exclusively owned.
-                spomen_guard.writeGuard(config, new_ptr, size, self.nextGuardSeed());
-            }
-            return new_ptr;
+            return self.buckets.realloc(ptr, inflated);
         }
 
         /// The bucket path's `resize` counterpart. Bucket slots never actually
-        /// grow — this only ever reports the slot's own fixed, deflated size —
-        /// but the guard ramp is still (re)written unconditionally on every
-        /// call, matching HPHA's own `resize` body exactly: `size =
-        /// ptr_get_page(ptr)->elem_size() - MEMORY_GUARD_SIZE;
-        /// debug_update(ptr, size);` runs every time, not only when something
-        /// changed (`Cpp/hpha.h`'s `resize`) — the same unconditional shape
-        /// `treeResize`'s own doc explains at length for the tree path.
+        /// grow — this only ever reports the slot's own fixed, deflated size.
         ///
         /// `ptr` must be a still-live bucket-path allocation this instance
         /// produced.
-        fn bucketResize(self: *Self, ptr: [*]u8) usize {
+        fn bucketResize(_: *Self, ptr: [*]u8) usize {
             // SAFETY: `ptr` is a still-live bucket-path allocation this instance
             // produced (this function's own contract), exactly what
             // `ptrGetPage` requires; the recovered `page` is therefore live too.
             const page = bucket.ptrGetPage(ptr);
-            const real_size = page.elemSize();
-            const new_size = guard.deflate(config, real_size);
-            if (config.debug) {
-                // SAFETY: `ptr` is valid for `real_size == new_size +
-                // memoryGuardSize(config)` bytes (the whole slot), exclusively
-                // owned.
-                spomen_guard.writeGuard(config, ptr, new_size, self.nextGuardSeed());
+            return guard.deflate(config, page.elemSize());
+        }
+
+        // ---- debug hooks (`config.debug` only) -------------------------------------
+        //
+        // HPHA's `allocator::debug_add`/`debug_remove`/`debug_replace`/`debug_update`/
+        // `debug_check`/`debug_purge` (`Cpp/hpha.cpp:863-950`), called by the public
+        // methods below at exactly the points HPHA's own `alloc`/`realloc`/`resize`/
+        // `free`/`purge` call them (`Cpp/hpha.h:1264-1440`). Every call site is inside
+        // an `if (config.debug)` branch, so for `Orisnitsa(.{})` none of these bodies is
+        // ever analyzed and no `records`/counter field exists.
+        //
+        // Each hook owns one whole responsibility, so the guard seed, the record and
+        // the poison can never disagree: `debugAdd` draws the guard seed, writes the
+        // ramp, records the allocation (remembering the seed) and poisons the payload;
+        // `debugRemove` verifies the block, poisons at the *recorded* size and retires
+        // the record; `debugReplace`/`debugUpdate` rewrite the ramp with a fresh seed
+        // and retarget the record.
+        //
+        // # Callstack frame
+        // The entry points read `@returnAddress()` only under `config.debug` (it is
+        // `0` otherwise, so `Orisnitsa(.{})` carries nothing). If an entry point is
+        // inlined into user code the first captured frame is one level further up
+        // (harmless); users of the `std.mem.Allocator` vtable or the C API see a first
+        // frame inside that shim, since the shim is the entry point's caller.
+        //
+        // Hooks that record a callstack take `first_address`: the public method that
+        // was called by the user passes its own `@returnAddress()`, so a trace starts
+        // at the *caller* of `alloc`/`realloc`/`resize`/..., not somewhere inside the
+        // allocator (see `Record.captureCallstack`).
+        //
+        // # No re-entrancy guard, no global-allocator rule
+        // Unlike `orisnik` (whose `Backtrace` capture *allocates*, so an instance used
+        // as the global allocator re-enters itself and needs a `busy` flag and a
+        // no-callstack mode), nothing here can re-enter the allocator: the capture is
+        // `std.debug.captureCurrentStackTrace`, a lock-free frame walk into a fixed
+        // `[MAX_CALLSTACK_DEPTH]usize` buffer that allocates nothing, and the record
+        // store maps its pages through `os.map`, never through an allocator. So there
+        // is no `busy`/`disabled` state and no restriction on where an `Orisnitsa`
+        // may be installed.
+        //
+        // # Failure
+        // Detected corruption ends in `spomen_failure.fail` (`std.debug.panic`).
+        // Zig tests cannot catch a panic, so detection is factored into the pure
+        // `verify`, which returns an error value and is tested directly; the tests do
+        // not (and there is deliberately no seam to) continue past a detected
+        // corruption.
+
+        /// Hook-invocation counters. See `HookStats`.
+        pub fn hookStats(self: *const Self) HookStats {
+            comptime std.debug.assert(config.debug);
+            return self.stats;
+        }
+
+        /// Total bytes callers currently have outstanding, each block counted with
+        /// its guard reservation (`requested size + memoryGuardSize(config)`) —
+        /// HPHA's `requested()`, the sum of `mTotalRequestedSizeBuckets` and
+        /// `mTotalRequestedSizeTree`. Only available when `config.debug`.
+        pub fn requested(self: *const Self) usize {
+            comptime std.debug.assert(config.debug);
+            return self.requested_buckets + self.requested_tree;
+        }
+
+        /// The running total for `source`'s path.
+        fn requestedFor(self: *Self, source: Source) *usize {
+            return switch (source) {
+                .buckets => &self.requested_buckets,
+                .tree => &self.requested_tree,
+            };
+        }
+
+        /// Reacts to detected corruption: builds the diagnostic (with the record's
+        /// recorded callstack addresses, if the pointer had a record) and panics.
+        /// Never returns.
+        fn failWith(what: Corruption, ptr: [*]u8, record: ?*const Record) noreturn {
+            @branchHint(.cold);
+            var buf: [spomen_failure.MESSAGE_CAPACITY]u8 = undefined;
+            spomen_failure.fail(spomen_failure.describe(&buf, what, ptr, record));
+        }
+
+        /// `failWith` for a `verify` error: recovers the record and the compared
+        /// size from `ptr`/`orig_size`.
+        fn failVerify(self: *Self, err: VerifyError, ptr: [*]u8, orig_size: ?usize) noreturn {
+            @branchHint(.cold);
+            const record = self.records.find(ptr);
+            const what: Corruption = switch (err) {
+                error.UnknownPointer => .unknown_pointer,
+                // `orig_size` is non-null exactly when `verify` can return this.
+                error.SizeMismatch => .{ .size_mismatch = comparableSize(record.?.source, orig_size.?) },
+                error.GuardOverrun => .guard_overrun,
+            };
+            failWith(what, ptr, record);
+        }
+
+        /// `given`, as `verify` compares it against a record served by `source`: clamped
+        /// to the minimum allocation on the bucket path (the record holds the clamped
+        /// size), raw on the tree path (the record holds the raw size).
+        fn comparableSize(source: Source, given: usize) usize {
+            return switch (source) {
+                .buckets => bucket.clampSmallAllocation(given),
+                .tree => given,
+            };
+        }
+
+        /// Checks `ptr` against its record without changing anything: a record must
+        /// exist, `orig_size` (a sized free's caller-supplied size), if given, must
+        /// agree with the recorded size, and the guard ramp must be intact. The
+        /// detection half of `debugRemove`/`debugCheck`, kept a plain value so it is
+        /// directly testable.
+        ///
+        /// `orig_size` is compared the way the record holds it (`comparableSize`): a
+        /// *bucket*-path record holds the minimum-size-clamped size (`alloc(5)` records
+        /// 8), so `orig_size` is clamped before the compare; a *tree*-path record holds
+        /// the raw size (`allocAligned(5, 512)` and a tree-path `realloc(p, 5)` both
+        /// record 5), so `orig_size` is compared raw. HPHA compares the raw value
+        /// everywhere, so its own `free(p, 5)` of an `alloc(5)` would trip its assert on
+        /// a perfectly legal call — a 2007 debug-mode bug this port does not reproduce
+        /// (see `Cpp/ERRATA.md`) — while its raw compare was right for the tree path,
+        /// which is why the clamp must not be applied there.
+        ///
+        /// The block at `ptr` must still be live if a record exists for it (the
+        /// callers' contract: `ptr` is a live allocation this instance produced).
+        fn verify(self: *Self, ptr: [*]u8, orig_size: ?usize) VerifyError!*Record {
+            const record = self.records.find(ptr) orelse return error.UnknownPointer;
+            if (orig_size) |given| {
+                if (comparableSize(record.source, given) != record.size) return error.SizeMismatch;
             }
-            return new_size;
+            // SAFETY: the record describes the live allocation at `ptr` (this
+            // function's contract), valid for `size + memoryGuardSize(config)` bytes and
+            // readable for its trailing guard, which is all `checkGuard` reads.
+            if (!record.checkGuard(config)) return error.GuardOverrun;
+            return record;
+        }
+
+        /// Records a fresh allocation: draws a guard seed, writes the ramp, records
+        /// `ptr` (remembering the seed and capturing the callstack) and poisons the
+        /// payload. If the record store cannot get memory the allocation is undone
+        /// and `null` returned — a value, never a panic, exactly like HPHA's
+        /// `debug_add`. `ptr == null` (the underlying allocation failed) passes
+        /// straight through. Ports `debug_add`.
+        ///
+        /// `size` is the caller-visible size, already clamped on the bucket path.
+        fn debugAdd(self: *Self, first_address: usize, ptr: ?[*]u8, size: usize, source: Source) ?[*]u8 {
+            const p = ptr orelse return null;
+            self.stats.adds += 1;
+            // SAFETY: `p` is a live allocation this instance just produced, exactly
+            // what `querySize` requires.
+            std.debug.assert(size <= self.querySize(p));
+            const seed = self.nextGuardSeed();
+            // SAFETY: `p` is valid for `size + memoryGuardSize(config)` bytes
+            // (allocated with that inflated size), exclusively owned (not yet handed
+            // to any caller).
+            spomen_guard.writeGuard(config, p, size, seed);
+            const record = Record.initAt(first_address, p, size, source, seed);
+            if (self.records.addRecord(record)) {
+                const counter = self.requestedFor(source);
+                counter.* += size + guard.memoryGuardSize(config);
+                // SAFETY: `p` is valid for `size` bytes, exclusively owned; the guard
+                // ramp lies past them, so the two ranges are disjoint.
+                spomen_poison.fill(p, size);
+                return p;
+            }
+            // The record store could not get a page: give the block back and report
+            // failure as a value (HPHA: `bucket_free(ptr)`/`tree_free(ptr)`,
+            // `return NULL`).
+            switch (source) {
+                // SAFETY: `p` is a live bucket-path allocation, not handed out.
+                .buckets => self.buckets.free(p),
+                // SAFETY: `p` is a live tree-path allocation, not handed out.
+                .tree => self.tree.free(p),
+            }
+            return null;
+        }
+
+        /// Verifies `ptr` and retires its record, poisoning the payload at the
+        /// *recorded* size first. Called before the reclaim. `orig_size` is a sized
+        /// free's caller-supplied size. Panics on corruption (see the hooks' section
+        /// comment). Ports `debug_remove` (both overloads).
+        fn debugRemove(self: *Self, ptr: [*]u8, orig_size: ?usize) void {
+            self.stats.removes += 1;
+            if (orig_size != null) self.stats.removes_with_size += 1;
+            const record = self.verify(ptr, orig_size) catch |err| self.failVerify(err, ptr, orig_size);
+            // SAFETY: `ptr` is a live allocation valid for `record.size` bytes (its
+            // recorded size), exclusively owned by this call (about to be reclaimed).
+            spomen_poison.fill(ptr, record.size);
+            const info = self.records.remove(ptr) orelse failWith(.unknown_pointer, ptr, null);
+            const counter = self.requestedFor(info.source);
+            counter.* -= info.size + guard.memoryGuardSize(config);
+        }
+
+        /// Verifies `ptr` — a record exists and its guard is intact — without
+        /// changing anything. Called before a realloc/resize touches the block.
+        /// Ports `debug_check`.
+        fn debugCheck(self: *Self, ptr: [*]u8) void {
+            self.stats.checks += 1;
+            _ = self.verify(ptr, null) catch |err| self.failVerify(err, ptr, null);
+        }
+
+        /// Retargets `ptr`'s record to `new_ptr` after a successful realloc, writing
+        /// a fresh guard ramp at the new block. `new_ptr == null` (the realloc
+        /// failed) is a no-op: the original block and its record are untouched —
+        /// `Cpp/ERRATA.md`'s E9 correction, and HPHA's own `if (!newPtr) return;`
+        /// guard. Ports `debug_replace`.
+        fn debugReplace(self: *Self, first_address: usize, ptr: [*]u8, new_ptr: ?[*]u8, size: usize, source: Source) void {
+            const np = new_ptr orelse return;
+            self.stats.replaces += 1;
+            // SAFETY: `np` is a live allocation this instance just produced, exactly
+            // what `querySize` requires.
+            std.debug.assert(size <= self.querySize(np));
+            const seed = self.nextGuardSeed();
+            // SAFETY: `np` is valid for `size + memoryGuardSize(config)` bytes (the
+            // realloc was made with that inflated size), exclusively owned.
+            spomen_guard.writeGuard(config, np, size, seed);
+            // Built before the store is touched, so the store never observes a
+            // half-updated state.
+            const fresh = Record.initAt(first_address, np, size, source, seed);
+            const old = self.records.replace(ptr, fresh) orelse failWith(.unknown_pointer, ptr, null);
+            const old_counter = self.requestedFor(old.source);
+            old_counter.* -= old.size + guard.memoryGuardSize(config);
+            const new_counter = self.requestedFor(source);
+            new_counter.* += size + guard.memoryGuardSize(config);
+        }
+
+        /// Updates `ptr`'s record after an in-place `resize` to `size`, rewriting the
+        /// guard ramp (its position moved with the size) with a fresh seed. Runs on
+        /// *every* `resize`, whether or not the block grew, exactly like HPHA. Ports
+        /// `debug_update`.
+        fn debugUpdate(self: *Self, first_address: usize, ptr: [*]u8, size: usize) void {
+            self.stats.updates += 1;
+            // SAFETY: `ptr` is a live allocation this instance produced (the caller's
+            // contract), exactly what `querySize` requires.
+            std.debug.assert(size <= self.querySize(ptr));
+            const seed = self.nextGuardSeed();
+            // SAFETY: `ptr` is valid for `size + memoryGuardSize(config)` bytes
+            // (`size` is the block's own deflated size); it is the caller's live block,
+            // accessed single-threaded, so nothing else touches the guard region.
+            spomen_guard.writeGuard(config, ptr, size, seed);
+            const callstack = Record.captureCallstack(first_address);
+            const info = self.records.update(ptr, size, seed, callstack) orelse failWith(.unknown_pointer, ptr, null);
+            const counter = self.requestedFor(info.source);
+            // `size` may be smaller or larger than the old size, so add before
+            // subtracting.
+            counter.* = counter.* + size - info.size;
+        }
+
+        /// Returns the record store's spare pages to the OS. Ports `debug_purge`.
+        fn debugPurge(self: *Self) void {
+            self.stats.purges += 1;
+            self.records.purge();
         }
 
         /// Allocates `size` bytes at `block.DEFAULT_ALIGNMENT`. `size == 0` returns
         /// `null`. Ports `allocator::alloc(size_t)`.
         pub fn alloc(self: *Self, size: usize) ?[*]u8 {
+            const first = if (config.debug) @returnAddress() else 0;
+            return self.allocAt(first, size);
+        }
+
+        /// `alloc` with the recorded callstack starting at `first_address` (the
+        /// public entry points pass their own `@returnAddress()`, so internal
+        /// delegation — `allocAligned`, `calloc`, `realloc` — still yields a trace
+        /// that starts at the user's call).
+        fn allocAt(self: *Self, first_address: usize, size: usize) ?[*]u8 {
             self.debugAssertNotMoved();
             if (!bucket.isSmallAllocation(config, size)) {
-                return self.treeAlloc(size);
+                const raw = self.treeAlloc(size);
+                if (config.debug) return self.debugAdd(first_address, raw, size, .tree);
+                return raw;
             }
             if (size == 0) return null;
             const sz = bucket.clampSmallAllocation(size);
-            return self.bucketAlloc(sz);
+            const raw = self.bucketAlloc(sz);
+            if (config.debug) return self.debugAdd(first_address, raw, sz, .buckets);
+            return raw;
         }
 
         /// Allocates `size` bytes aligned to `alignment`. `size == 0` returns `null`;
@@ -442,17 +666,28 @@ pub fn Orisnitsa(comptime config: Config) type {
         /// hot-path-never-panics rule (`Zig/CONVENTIONS.md`'s Allocation Outcomes
         /// section).
         pub fn allocAligned(self: *Self, size: usize, alignment: usize) ?[*]u8 {
+            const first = if (config.debug) @returnAddress() else 0;
+            return self.allocAlignedAt(first, size, alignment);
+        }
+
+        /// `allocAligned` with the recorded callstack starting at `first_address`;
+        /// see `allocAt`.
+        fn allocAlignedAt(self: *Self, first_address: usize, size: usize, alignment: usize) ?[*]u8 {
             std.debug.assert(isHphaAlignment(alignment));
             self.debugAssertNotMoved();
             if (alignment <= block.DEFAULT_ALIGNMENT) {
-                return self.alloc(size);
+                return self.allocAt(first_address, size);
             }
             if (!bucket.isSmallAllocation(config, size) or alignment > bucket.MAX_SMALL_ALLOCATION) {
-                return self.treeAllocAligned(size, alignment);
+                const raw = self.treeAllocAligned(size, alignment);
+                if (config.debug) return self.debugAdd(first_address, raw, size, .tree);
+                return raw;
             }
             if (size == 0) return null;
             const sz = bucket.clampSmallAllocation(size);
-            return self.bucketAllocAligned(sz, alignment);
+            const raw = self.bucketAllocAligned(sz, alignment);
+            if (config.debug) return self.debugAdd(first_address, raw, sz, .buckets);
+            return raw;
         }
 
         /// Allocates `count * size` bytes at `block.DEFAULT_ALIGNMENT` and zeroes
@@ -473,7 +708,8 @@ pub fn Orisnitsa(comptime config: Config) type {
             const product = @mulWithOverflow(count, size);
             if (product[1] != 0) return null;
             const total = product[0];
-            const ptr = self.alloc(total) orelse return null;
+            const first = if (config.debug) @returnAddress() else 0;
+            const ptr = self.allocAt(first, total) orelse return null;
             // SAFETY: `ptr` was just allocated with room for exactly `total` bytes,
             // exclusively owned (freshly allocated, not yet handed to any other
             // caller).
@@ -488,18 +724,29 @@ pub fn Orisnitsa(comptime config: Config) type {
         /// `ptr`, if non-null, must be a still-live allocation this instance
         /// produced.
         pub fn realloc(self: *Self, ptr: ?[*]u8, size: usize) ?[*]u8 {
+            const first = if (config.debug) @returnAddress() else 0;
+            return self.reallocAt(first, ptr, size);
+        }
+
+        /// `realloc` with the recorded callstack starting at `first_address`; see
+        /// `allocAt`.
+        fn reallocAt(self: *Self, first_address: usize, ptr: ?[*]u8, size: usize) ?[*]u8 {
             self.debugAssertNotMoved();
-            const p = ptr orelse return self.alloc(size);
+            const p = ptr orelse return self.allocAt(first_address, size);
             if (size == 0) {
                 self.free(p);
                 return null;
             }
+            // HPHA verifies the block (record present, guard intact) before touching it.
+            if (config.debug) self.debugCheck(p);
             // SAFETY: `p` is a live allocation this instance produced (this function's own
             // contract), exactly what `ptrInBucket` requires.
             if (self.buckets.ptrInBucket(p)) {
                 const sz = bucket.clampSmallAllocation(size);
                 if (bucket.isSmallAllocation(config, sz)) {
-                    return self.bucketRealloc(p, sz);
+                    const new_ptr = self.bucketRealloc(p, sz);
+                    if (config.debug) self.debugReplace(first_address, p, new_ptr, sz, .buckets);
+                    return new_ptr;
                 }
                 const new_ptr = self.treeAlloc(sz) orelse return null;
                 // SAFETY: `p` is a live bucket-path allocation (`ptrInBucket`
@@ -523,11 +770,14 @@ pub fn Orisnitsa(comptime config: Config) type {
                 // independently allocated, so the two ranges never overlap.
                 @memcpy(new_ptr[0..payload_len], p[0..payload_len]);
                 self.buckets.free(p);
+                if (config.debug) self.debugReplace(first_address, p, new_ptr, sz, .tree);
                 return new_ptr;
             }
             // SAFETY: `p` is a live tree-path allocation this instance produced (not a
             // bucket pointer, per the `ptrInBucket` check above).
-            return self.treeRealloc(p, size);
+            const new_ptr = self.treeRealloc(p, size);
+            if (config.debug) self.debugReplace(first_address, p, new_ptr, size, .tree);
+            return new_ptr;
         }
 
         /// Grows, shrinks, or moves `ptr` to hold `size` bytes aligned to
@@ -539,12 +789,19 @@ pub fn Orisnitsa(comptime config: Config) type {
         /// `ptr`, if non-null, must be a still-live allocation this instance
         /// produced.
         pub fn reallocAligned(self: *Self, ptr: ?[*]u8, size: usize, alignment: usize) ?[*]u8 {
+            const first = if (config.debug) @returnAddress() else 0;
+            return self.reallocAlignedAt(first, ptr, size, alignment);
+        }
+
+        /// `reallocAligned` with the recorded callstack starting at `first_address`;
+        /// see `allocAt`.
+        fn reallocAlignedAt(self: *Self, first_address: usize, ptr: ?[*]u8, size: usize, alignment: usize) ?[*]u8 {
             std.debug.assert(isHphaAlignment(alignment));
             self.debugAssertNotMoved();
             if (alignment <= block.DEFAULT_ALIGNMENT) {
-                return self.realloc(ptr, size);
+                return self.reallocAt(first_address, ptr, size);
             }
-            const p = ptr orelse return self.allocAligned(size, alignment);
+            const p = ptr orelse return self.allocAlignedAt(first_address, size, alignment);
             if (size == 0) {
                 self.free(p);
                 return null;
@@ -559,7 +816,7 @@ pub fn Orisnitsa(comptime config: Config) type {
                 // alignment; the tree path shifts only within a block's own span),
                 // so there is no way to reach the requested alignment without
                 // moving.
-                const new_ptr = self.allocAligned(size, alignment) orelse return null;
+                const new_ptr = self.allocAlignedAt(first_address, size, alignment) orelse return null;
                 // `p` is a live allocation this instance produced (this function's
                 // own contract), exactly what `size` requires.
                 const count = @min(self.querySize(p), size);
@@ -571,6 +828,8 @@ pub fn Orisnitsa(comptime config: Config) type {
                 self.free(p);
                 return new_ptr;
             }
+            // HPHA verifies the block (record present, guard intact) before touching it.
+            if (config.debug) self.debugCheck(p);
             // SAFETY: `p` is a live allocation this instance produced.
             if (self.buckets.ptrInBucket(p)) {
                 const sz = bucket.clampSmallAllocation(size);
@@ -585,7 +844,9 @@ pub fn Orisnitsa(comptime config: Config) type {
                     // `alignment`-aligned) — this call does not re-establish that
                     // guarantee if it must move to a larger bucket, an inherited
                     // HPHA quirk, not a new one.
-                    return self.bucketRealloc(p, sz);
+                    const new_ptr = self.bucketRealloc(p, sz);
+                    if (config.debug) self.debugReplace(first_address, p, new_ptr, sz, .buckets);
+                    return new_ptr;
                 }
                 const new_ptr = self.treeAllocAligned(sz, alignment) orelse return null;
                 // SAFETY: `p` is a live bucket-path allocation (`ptrInBucket`
@@ -617,10 +878,13 @@ pub fn Orisnitsa(comptime config: Config) type {
                 const copy_len = @min(guard.deflate(config, elem_size), sz);
                 @memcpy(new_ptr[0..copy_len], p[0..copy_len]);
                 self.buckets.free(p);
+                if (config.debug) self.debugReplace(first_address, p, new_ptr, sz, .tree);
                 return new_ptr;
             }
             // SAFETY: `p` is a live tree-path allocation this instance produced.
-            return self.treeReallocAligned(p, size, alignment);
+            const new_ptr = self.treeReallocAligned(p, size, alignment);
+            if (config.debug) self.debugReplace(first_address, p, new_ptr, size, .tree);
+            return new_ptr;
         }
 
         /// Grows or shrinks `ptr` in place to the extent possible, without moving
@@ -633,13 +897,18 @@ pub fn Orisnitsa(comptime config: Config) type {
             self.debugAssertNotMoved();
             const p = ptr orelse return 0;
             std.debug.assert(size > 0);
+            if (config.debug) self.debugCheck(p);
             // SAFETY: `p` is a live allocation this instance produced (this function's own
             // contract).
             if (self.buckets.ptrInBucket(p)) {
-                return self.bucketResize(p);
+                const new_size = self.bucketResize(p);
+                if (config.debug) self.debugUpdate(@returnAddress(), p, new_size);
+                return new_size;
             }
             // SAFETY: `p` is a live tree-path allocation this instance produced.
-            return self.treeResize(p, size);
+            const new_size = self.treeResize(p, size);
+            if (config.debug) self.debugUpdate(@returnAddress(), p, new_size);
+            return new_size;
         }
 
         /// Queries the usable size of `ptr`'s allocation. `ptr == null` returns 0.
@@ -667,47 +936,27 @@ pub fn Orisnitsa(comptime config: Config) type {
 
         /// Frees `ptr`. `ptr == null` is a no-op. Ports `allocator::free(void*)`.
         ///
+        /// With `config.debug`, first verifies the block (a record exists — i.e. not a
+        /// double free or a foreign pointer — and its guard ramp is intact), poisons the
+        /// payload at its recorded size and retires the record, all *before* the
+        /// reclaim; detected corruption panics (`spomen_failure.fail`).
+        ///
         /// `ptr`, if non-null, must be a still-live allocation this instance
         /// produced.
         pub fn free(self: *Self, ptr: ?[*]u8) void {
             self.debugAssertNotMoved();
             const p = ptr orelse return;
+            // With `config.debug`: verify the block (a record exists — i.e. not a
+            // double free or a foreign pointer — and its guard ramp is intact),
+            // poison the payload at its *recorded* size and retire the record, all
+            // *before* the reclaim, exactly HPHA's `debug_remove(ptr)`-then-
+            // `bucket_free`/`tree_free` order. Detected corruption panics.
+            if (config.debug) self.debugRemove(p, null);
             // SAFETY: `p` is a live allocation this instance produced (this function's own
             // contract).
             if (self.buckets.ptrInBucket(p)) {
-                if (config.debug) {
-                    // Poisons *before* the reclaim below, matching HPHA's own
-                    // `debug_remove`-before-`bucket_free` order in
-                    // `allocator::free` — no caller-supplied size is available
-                    // on this entry point (unlike `freeWithSize`), so this uses
-                    // the slot's own current, deflated usable size rather than
-                    // any HPHA-tracked original request (which needs the
-                    // allocation-record store, a later phase, to supply).
-                    // SAFETY: `p` is a live bucket-path allocation this instance
-                    // produced (this function's own contract, and `ptrInBucket`
-                    // just confirmed), so `ptrGetPage` finds its live page.
-                    const page = bucket.ptrGetPage(p);
-                    const real_size = page.elemSize();
-                    // SAFETY: the slot is `real_size` bytes, so poisoning its
-                    // deflated (guard-excluded) span stays within it; exclusively
-                    // owned by this call (about to be reclaimed).
-                    spomen_poison.fill(p, guard.deflate(config, real_size));
-                }
                 self.buckets.free(p);
                 return;
-            }
-            if (config.debug) {
-                // Same reasoning as the bucket branch above: no record store yet,
-                // so this poisons the block's own current, deflated usable size.
-                // SAFETY: `p` is a live tree-path allocation this instance
-                // produced (this function's own contract), so
-                // `ptrGetBlockHeader` finds its live header.
-                const bl = block.ptrGetBlockHeader(p);
-                const real_size = bl.size();
-                // SAFETY: `p` is valid for `real_size` bytes, so poisoning its
-                // deflated span stays within it; exclusively owned by this call
-                // (about to be reclaimed).
-                spomen_poison.fill(p, guard.deflate(config, real_size));
             }
             // SAFETY: `p` is a live tree-path allocation this instance produced.
             self.tree.free(p);
@@ -735,6 +984,13 @@ pub fn Orisnitsa(comptime config: Config) type {
         /// pointer-based dispatch instead of underflowing the size-class index. See
         /// `freeZeroOrigSize`.
         ///
+        /// With `config.debug`, `orig_size` must additionally equal the allocation's
+        /// **current** requested size (the size its record holds — after any
+        /// `realloc`/`resize`, and after the minimum-size clamp, so `free(p, 5)` of an
+        /// `alloc(5)` is accepted): a mismatch is detected and panics. The bucket-vs-
+        /// tree routing above still uses the *original* size, so after a size-changing
+        /// `realloc`/`resize` prefer `free`, which needs neither.
+        ///
         /// `ptr`, if non-null, must be a still-live allocation this instance
         /// produced with `orig_size` at `block.DEFAULT_ALIGNMENT`, `orig_size` being
         /// that allocation's original request size, not a size from any later
@@ -748,20 +1004,10 @@ pub fn Orisnitsa(comptime config: Config) type {
                 self.freeZeroOrigSize(p);
                 return;
             }
-            if (config.debug) {
-                // Poisons *before* the reclaim below (either branch), at the
-                // caller-supplied `orig_size` — unlike `free`'s pointer-only
-                // dispatch, this one already has the exact original request
-                // size in hand, matching HPHA's own
-                // `initial_fill(ptr, record->size())` (`record->size()` is
-                // asserted equal to this function's own `origSize` parameter in
-                // HPHA's `debug_record_map::remove(ptr, size)` overload)
-                // without needing the allocation-record store this port
-                // doesn't have yet.
-                // SAFETY: `p` is a live allocation this instance produced with
-                // `orig_size` bytes (this function's own contract).
-                spomen_poison.fill(p, orig_size);
-            }
+            // With `config.debug`: verify, poison and retire the record *before* the
+            // reclaim (either branch), checking `orig_size` against the recorded size
+            // (see `verify`: compared after the minimum-size clamp).
+            if (config.debug) self.debugRemove(p, orig_size);
             if (bucket.isSmallAllocation(config, orig_size)) {
                 // Inflate before recomputing the bucket index — `alloc`'s own
                 // `bucketAlloc` chose this pointer's bucket from
@@ -794,6 +1040,9 @@ pub fn Orisnitsa(comptime config: Config) type {
         /// prefer `free` whenever `ptr`'s allocation history isn't certain to be
         /// realloc-free.
         ///
+        /// With `config.debug`, `orig_size` must also equal the allocation's current
+        /// requested size, exactly as for `freeWithSize`.
+        ///
         /// `ptr`, if non-null, must be a still-live allocation this instance
         /// produced with `orig_size`/`old_alignment`, both being that allocation's
         /// original request values, not values from any later `realloc`/`resize`
@@ -808,17 +1057,9 @@ pub fn Orisnitsa(comptime config: Config) type {
                 self.freeZeroOrigSize(p);
                 return;
             }
-            if (config.debug) {
-                // See `freeWithSize`'s identical poisoning comment — same
-                // reasoning, at the same `orig_size` (not the
-                // alignment-rounded value HPHA's own bucket-index computation
-                // uses; `initial_fill` is always called with the plain
-                // `origSize`, alignment plays no part in it —
-                // `Cpp/hpha.h`'s `free(void*, size_t, size_t)`).
-                // SAFETY: `p` is a live allocation this instance produced with
-                // `orig_size` bytes (this function's own contract).
-                spomen_poison.fill(p, orig_size);
-            }
+            // See `freeWithSize`'s identical hook comment — same call, same
+            // `orig_size` (alignment plays no part in the record check).
+            if (config.debug) self.debugRemove(p, orig_size);
             // HPHA computes `round_up(origSize, oldAlignment)` below unconditionally,
             // which is well-defined for every alignment `allocAligned` could have used
             // *except* 0 — and 0 is one upstream accepts (see `isHphaAlignment`), routing
@@ -893,6 +1134,7 @@ pub fn Orisnitsa(comptime config: Config) type {
             self.debugAssertNotMoved();
             self.tree.purge();
             self.buckets.purge();
+            if (config.debug) self.debugPurge();
         }
 
         /// Total bytes currently claimed from the OS across both paths. Ports
@@ -1042,6 +1284,7 @@ test "Orisnitsa(.{ .debug = true }) round-trips identically to the default insta
     // still match the default instantiation exactly, even though the two
     // internally claim different bucket size classes for this request.
     var orisnitsa: Orisnitsa(.{ .debug = true }) = .init();
+    defer orisnitsa.deinit();
     const ptr = orisnitsa.alloc(64) orelse return error.TestUnexpectedResult; // "OS map failed"
     @memset(ptr[0..64], 0xAB);
     try testing.expectEqual(@as(usize, 64), orisnitsa.querySize(ptr));
@@ -1055,12 +1298,20 @@ test "Orisnitsa(.{ .debug = true }) round-trips identically to the default insta
 
 const debug_config: Config = .{ .debug = true };
 
+/// Rewrites `ptr`'s guard ramp with the seed its record remembers, undoing a
+/// deliberate corruption so the block can be freed without tripping the debug check.
+fn repairGuard(orisnitsa: *Orisnitsa(debug_config), ptr: [*]u8, size: usize) void {
+    const record = orisnitsa.records.find(ptr) orelse @panic("test bug: block is not recorded");
+    spomen_guard.writeGuard(debug_config, ptr, size, record.guard_byte);
+}
+
 test "treeAlloc hides the guard reservation from the caller" {
     // `querySize(ptr)` must report exactly what was requested — the guard
     // reservation (16 bytes trailing, real block size `size +
     // memoryGuardSize(config)`) must be completely invisible from the caller's
     // side of `querySize`/`alloc`.
     var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
     const requested = bucket.MAX_SMALL_ALLOCATION + 4096;
     const ptr = orisnitsa.alloc(requested) orelse return error.TestUnexpectedResult; // "OS map failed"
     try testing.expectEqual(requested, orisnitsa.querySize(ptr));
@@ -1081,6 +1332,7 @@ test "treeAlloc ramp corruption is actually detectable" {
     // property `spomen_guard`'s own tests pin at the primitive level, exercised
     // here through the real dispatch instead of a synthetic buffer.
     var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
     const requested = bucket.MAX_SMALL_ALLOCATION + 4096;
     const ptr = orisnitsa.alloc(requested) orelse return error.TestUnexpectedResult; // "OS map failed"
     // INDEX: `requested < requested + memoryGuardSize(debug_config)`, and
@@ -1089,9 +1341,10 @@ test "treeAlloc ramp corruption is actually detectable" {
     ptr[requested] = 0;
     // `ptr` is a live tree-path allocation of exactly `requested` bytes.
     try testing.expect(!spomen_guard.checkGuard(debug_config, ptr, requested));
-    // Freed via `free` (pointer-based dispatch), not `freeWithSize`, since the
-    // corrupted guard byte is no longer this test's concern once the check
-    // above has run.
+    // A free of a corrupted block now panics (and a Zig test cannot catch that), so
+    // repair the ramp — rewrite it with the seed the record remembers — before the
+    // final free. Detection itself is covered by `verify`'s tests below.
+    repairGuard(&orisnitsa, ptr, requested);
     orisnitsa.free(ptr);
     orisnitsa.purge();
 }
@@ -1102,6 +1355,7 @@ test "treeRealloc rewrites the guard ramp at the new size" {
     // growth, neighbour merge, or allocate-copy-free) — `treeRealloc`'s own doc
     // argues this from `Tree.realloc`'s contract; this exercises it for real.
     var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
     const small = bucket.MAX_SMALL_ALLOCATION + 64;
     const big = bucket.MAX_SMALL_ALLOCATION + 8192;
     const ptr = orisnitsa.alloc(small) orelse return error.TestUnexpectedResult; // "OS map failed"
@@ -1127,6 +1381,7 @@ test "treeResize rewrites the guard ramp on growth" {
     // (16-byte-aligned) target rather than the whole merged block — mirroring
     // `orisnik`'s identical test setup, which pins the same real behaviour.
     var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
     const small = bucket.MAX_SMALL_ALLOCATION + 64;
     const ptr = orisnitsa.alloc(small) orelse return error.TestUnexpectedResult; // "OS map failed"
     // Free the immediately-following block first so `resize` has room to grow
@@ -1155,6 +1410,7 @@ test "bucketAlloc hides the guard reservation from the caller" {
     // `isSmallAllocation` boundary — see that function's own doc) is the
     // largest request that still stays on the bucket path under this config.
     var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
     const requested = bucket.MAX_SMALL_ALLOCATION - guard.memoryGuardSize(debug_config);
     const ptr = orisnitsa.alloc(requested) orelse return error.TestUnexpectedResult; // "OS map failed"
     try testing.expectEqual(requested, orisnitsa.querySize(ptr));
@@ -1172,6 +1428,7 @@ test "bucketAlloc ramp corruption is actually detectable" {
     // through entirely separate code (`bucketAlloc` vs `treeAlloc`), so each
     // earns its own real-dispatch test.
     var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
     const requested = bucket.MAX_SMALL_ALLOCATION - guard.memoryGuardSize(debug_config);
     const ptr = orisnitsa.alloc(requested) orelse return error.TestUnexpectedResult; // "OS map failed"
     // INDEX: `requested < requested + memoryGuardSize(debug_config)`, and the
@@ -1180,6 +1437,7 @@ test "bucketAlloc ramp corruption is actually detectable" {
     ptr[requested] = 0;
     // `ptr` is a live bucket-path allocation of exactly `requested` bytes.
     try testing.expect(!spomen_guard.checkGuard(debug_config, ptr, requested));
+    repairGuard(&orisnitsa, ptr, requested); // see the tree-path test: a corrupted free panics
     orisnitsa.free(ptr);
     orisnitsa.purge();
 }
@@ -1192,6 +1450,7 @@ test "bucketRealloc rewrites the guard ramp at the new size" {
     // including the "moves to a larger class" path (`Buckets.realloc`'s own
     // internal alloc-copy-free).
     var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
     const small = 8;
     const big = 200;
     const ptr = orisnitsa.alloc(small) orelse return error.TestUnexpectedResult; // "OS map failed"
@@ -1211,6 +1470,7 @@ test "bucketResize rewrites the guard ramp at the same position" {
     // this confirms the ramp survives a `resize` call intact (rewritten at the
     // same, unchanged position) rather than merely never having been disturbed.
     var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
     const ptr = orisnitsa.alloc(8) orelse return error.TestUnexpectedResult; // "OS map failed"
     const reported = orisnitsa.querySize(ptr);
     const new_size = orisnitsa.resize(ptr, 8);
@@ -1232,6 +1492,7 @@ test "freeWithSize recomputes the same guard-inflated bucket" {
     // the bucket alloc used"'s exhaustive style for the analogous non-guard
     // invariant.
     var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
     var size: usize = 1;
     while (size <= bucket.MAX_SMALL_ALLOCATION - guard.memoryGuardSize(debug_config)) : (size += 1) {
         const a = orisnitsa.alloc(size) orelse return error.TestUnexpectedResult; // "OS map failed"
@@ -1261,6 +1522,7 @@ test "bucket-to-tree realloc keeps the new guard ramp and the payload" {
     // Latent until guard-checking is wired into dispatch, when it would surface as
     // a false corruption report.
     var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
     const old = bucket.MAX_SMALL_ALLOCATION - guard.memoryGuardSize(debug_config); // a full 256-byte slot
     const new = bucket.MAX_SMALL_ALLOCATION - 6; // 250: no longer fits a bucket once guarded
     const ptr = orisnitsa.alloc(old) orelse return error.TestUnexpectedResult; // "OS map failed"
@@ -1278,6 +1540,7 @@ test "bucket-to-tree realloc keeps the new guard ramp and the payload" {
 test "bucket-to-tree realloc-aligned keeps the new guard ramp and the payload" {
     // `reallocAligned`'s twin of the test above.
     var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
     const alignment = 16;
     const old = bucket.MAX_SMALL_ALLOCATION - guard.memoryGuardSize(debug_config);
     const new = bucket.MAX_SMALL_ALLOCATION - 6;
@@ -1298,6 +1561,7 @@ test "treeAlloc poisons the fresh payload" {
     // called `spomen_poison.fill` somewhere," verified end to end through the
     // real dispatch.
     var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
     const size = bucket.MAX_SMALL_ALLOCATION + 4096;
     const ptr = orisnitsa.alloc(size) orelse return error.TestUnexpectedResult; // "OS map failed"
     for (0..size) |i| {
@@ -1312,6 +1576,7 @@ test "bucketAlloc poisons the fresh payload" {
     // path — wired through entirely separate dispatch (`bucketAlloc`, not
     // `treeAlloc`), so it earns its own real-dispatch test.
     var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
     const size = bucket.MAX_SMALL_ALLOCATION - guard.memoryGuardSize(debug_config);
     const ptr = orisnitsa.alloc(size) orelse return error.TestUnexpectedResult; // "OS map failed"
     for (0..size) |i| {
@@ -1335,6 +1600,7 @@ test "free poisons the payload before reclaim" {
     // it), and this test is the sole observer of it, before and after the
     // `free` call.
     var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
     const size = bucket.MAX_SMALL_ALLOCATION + 4096;
     const ptr = orisnitsa.alloc(size) orelse return error.TestUnexpectedResult; // "OS map failed"
     @memset(ptr[0..size], 0xAB);
@@ -1351,6 +1617,7 @@ test "calloc zero-fill overwrites the poison" {
     // it — no special-casing either way, so the caller sees zeros, never
     // poison.
     var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
     const count = 4;
     const size = 64;
     const ptr = orisnitsa.calloc(count, size) orelse return error.TestUnexpectedResult; // "OS map failed"
@@ -1359,6 +1626,489 @@ test "calloc zero-fill overwrites the poison" {
     }
     orisnitsa.free(ptr);
     orisnitsa.purge();
+}
+
+// ---- v0.2.0 Phase 4: allocation records wired into dispatch ----
+//
+// Mirrors `orisnik`'s `orisnik_debug.rs` tests. Not applicable in Zig, and why:
+// - the `busy` / `disabled` / nested-call tests and the "hooks switch off after a
+//   detected corruption" test: Zig has no re-entrancy guard and no `disabled` latch
+//   (the capture never allocates, and `fail` is a non-returning panic — see the
+//   hooks' section comment);
+// - the `GlobalAlloc` latch test and the global-allocator integration test: there is no
+//   no-callstack mode and no global-allocator rule to exercise;
+// - "overrunning the block is caught on free/realloc/resize", "double free and foreign
+//   pointers are caught" and "a sized free with the wrong size is caught": those observe
+//   a panic, which a Zig test cannot catch. Their *detection* logic is `verify`, tested
+//   directly below for every corruption kind, and the message text is tested in
+//   `spomen_failure.zig`. There is deliberately no seam that lets dispatch continue
+//   past a detected corruption.
+
+const guard_size = guard.memoryGuardSize(debug_config);
+
+test "every allocation is recorded and free retires it" {
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
+    const small = orisnitsa.alloc(24) orelse return error.TestUnexpectedResult;
+    const large = orisnitsa.alloc(1000) orelse return error.TestUnexpectedResult;
+    const aligned_small = orisnitsa.allocAligned(24, 32) orelse return error.TestUnexpectedResult;
+    const aligned_large = orisnitsa.allocAligned(1000, 128) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 4), orisnitsa.records.len());
+    for ([_][*]u8{ small, large, aligned_small, aligned_large }) |p| {
+        try testing.expect(orisnitsa.records.find(p) != null);
+        orisnitsa.free(p);
+    }
+    try testing.expectEqual(@as(usize, 0), orisnitsa.records.len());
+    try testing.expectEqual(@as(usize, 0), orisnitsa.requested());
+    orisnitsa.purge();
+}
+
+test "requested counts size plus guard and follows realloc and resize" {
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
+    const first = orisnitsa.alloc(24) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(24 + guard_size, orisnitsa.requested());
+    const second = orisnitsa.alloc(1000) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(24 + 1000 + 2 * guard_size, orisnitsa.requested());
+    // Bucket -> tree crossover: the old record's bytes leave the bucket total.
+    const first_grown = orisnitsa.realloc(first, 500) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 0), orisnitsa.requested_buckets);
+    try testing.expectEqual(500 + 1000 + 2 * guard_size, orisnitsa.requested());
+    const new_size = orisnitsa.resize(second, 1200);
+    // `resize` re-records the block at the size it actually ended up with.
+    try testing.expectEqual(500 + new_size + 2 * guard_size, orisnitsa.requested());
+    orisnitsa.free(first_grown);
+    orisnitsa.free(second);
+    try testing.expectEqual(@as(usize, 0), orisnitsa.requested());
+    orisnitsa.purge();
+}
+
+test "a bucket resize re-records the slot's real usable size" {
+    // `alloc(20)` lands in a 40-byte slot (20 + 16 guard, rounded up to the 8-byte
+    // spacing), so `resize` reports 24 usable bytes and the record follows.
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
+    const ptr = orisnitsa.alloc(20) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(20 + guard_size, orisnitsa.requested());
+    const new_size = orisnitsa.resize(ptr, 20);
+    try testing.expectEqual(@as(usize, 24), new_size);
+    try testing.expectEqual(new_size + guard_size, orisnitsa.requested());
+    const record = orisnitsa.records.find(ptr) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(new_size, record.size);
+    // The ramp was rewritten at the new position with the new seed: the block verifies.
+    _ = try orisnitsa.verify(ptr, null);
+    orisnitsa.free(ptr);
+    orisnitsa.purge();
+}
+
+test "sub-minimum requests are recorded clamped and a sized free accepts them" {
+    // `alloc(5)` records 8 (clamped). HPHA would assert on `free(p, 5)` because it
+    // compares the raw size; this port compares after the clamp, so the legal call
+    // passes (an HPHA debug-mode bug deliberately not reproduced).
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
+    const ptr = orisnitsa.alloc(5) orelse return error.TestUnexpectedResult;
+    const record = orisnitsa.records.find(ptr) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(bucket.MIN_ALLOCATION, record.size);
+    orisnitsa.freeWithSize(ptr, 5);
+    try testing.expectEqual(@as(usize, 0), orisnitsa.records.len());
+    orisnitsa.purge();
+}
+
+test "realloc rekeys the record across every path" {
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
+    // bucket -> bucket
+    var ptr = orisnitsa.alloc(24) orelse return error.TestUnexpectedResult;
+    ptr = orisnitsa.realloc(ptr, 100) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 1), orisnitsa.records.len());
+    try testing.expect(orisnitsa.records.find(ptr) != null);
+    // bucket -> tree
+    ptr = orisnitsa.realloc(ptr, 2000) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 1), orisnitsa.records.len());
+    try testing.expect(orisnitsa.records.find(ptr) != null);
+    // tree -> tree, both directions
+    ptr = orisnitsa.realloc(ptr, 9000) orelse return error.TestUnexpectedResult;
+    ptr = orisnitsa.realloc(ptr, 300) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 1), orisnitsa.records.len());
+    try testing.expect(orisnitsa.records.find(ptr) != null);
+    // Aligned variants.
+    ptr = orisnitsa.reallocAligned(ptr, 5000, 128) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 1), orisnitsa.records.len());
+    try testing.expect(orisnitsa.records.find(ptr) != null);
+    // The guard is valid at every step (a stale record would fail this free).
+    orisnitsa.free(ptr);
+    try testing.expectEqual(@as(usize, 0), orisnitsa.records.len());
+    orisnitsa.purge();
+}
+
+test "a failed realloc leaves the original allocation and record intact" {
+    // `Cpp/ERRATA.md` E9: the replace hook only ever runs on success.
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
+    const ptr = orisnitsa.alloc(24) orelse return error.TestUnexpectedResult;
+    // The bucket -> tree crossover needs a fresh arena; refuse the OS.
+    os.test_vm.failMapAfter(0);
+    defer os.test_vm.clearFailure();
+    try testing.expect(orisnitsa.realloc(ptr, 4000) == null);
+    os.test_vm.clearFailure();
+    try testing.expectEqual(@as(usize, 1), orisnitsa.records.len()); // original record survives
+    try testing.expect(orisnitsa.records.find(ptr) != null);
+    // `ptr` is still live and its guard intact, so this free must not panic.
+    orisnitsa.free(ptr);
+    try testing.expectEqual(@as(usize, 0), orisnitsa.records.len());
+    orisnitsa.purge();
+}
+
+test "a record store out of memory frees the block and returns null" {
+    // The first map serves the bucket page; the second (the record page) is refused.
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
+    os.test_vm.failMapAfter(1);
+    defer os.test_vm.clearFailure();
+    try testing.expect(orisnitsa.alloc(24) == null);
+    os.test_vm.clearFailure();
+    try testing.expectEqual(@as(usize, 0), orisnitsa.records.len());
+    try testing.expectEqual(@as(usize, 0), orisnitsa.requested());
+    // The block really was freed: with nothing live, a purge returns the page.
+    orisnitsa.purge();
+    try testing.expectEqual(@as(usize, 0), orisnitsa.allocated());
+    // And the allocator recovers.
+    const ptr = orisnitsa.alloc(24) orelse return error.TestUnexpectedResult;
+    orisnitsa.free(ptr);
+    orisnitsa.purge();
+}
+
+test "the same OOM on the tree path frees the block and returns null" {
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
+    os.test_vm.failMapAfter(1); // the arena maps; the record page is refused
+    defer os.test_vm.clearFailure();
+    try testing.expect(orisnitsa.alloc(5000) == null);
+    os.test_vm.clearFailure();
+    try testing.expectEqual(@as(usize, 0), orisnitsa.requested());
+    orisnitsa.purge();
+    try testing.expectEqual(@as(usize, 0), orisnitsa.allocated());
+}
+
+test "verify reports each corruption kind as a value" {
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
+
+    // Guard overrun, on both paths.
+    for ([_]usize{ 24, 1000 }) |size| {
+        const ptr = orisnitsa.alloc(size) orelse return error.TestUnexpectedResult;
+        _ = try orisnitsa.verify(ptr, null); // intact
+        // INDEX: `size < size + memoryGuardSize(debug_config)`, inside the block.
+        ptr[size] ^= 0xFF;
+        try testing.expectError(error.GuardOverrun, orisnitsa.verify(ptr, null));
+        try testing.expectError(error.GuardOverrun, orisnitsa.verify(ptr, size));
+        repairGuard(&orisnitsa, ptr, size);
+        _ = try orisnitsa.verify(ptr, size);
+        orisnitsa.free(ptr);
+    }
+
+    // Size mismatch: compared after the minimum-size clamp.
+    const ptr = orisnitsa.alloc(100) orelse return error.TestUnexpectedResult;
+    try testing.expectError(error.SizeMismatch, orisnitsa.verify(ptr, 64));
+    _ = try orisnitsa.verify(ptr, 100);
+    orisnitsa.free(ptr);
+    const tiny = orisnitsa.alloc(5) orelse return error.TestUnexpectedResult;
+    _ = try orisnitsa.verify(tiny, 5); // clamps to 8, which is what was recorded
+    _ = try orisnitsa.verify(tiny, 8);
+    try testing.expectError(error.SizeMismatch, orisnitsa.verify(tiny, 9));
+    orisnitsa.free(tiny);
+
+    // Unknown pointer: a double free (the record is gone) and a foreign pointer. Only
+    // the address is compared; nothing is dereferenced.
+    try testing.expectError(error.UnknownPointer, orisnitsa.verify(tiny, null));
+    var local = [_]u8{0} ** 64;
+    try testing.expectError(error.UnknownPointer, orisnitsa.verify(&local, null));
+    orisnitsa.purge();
+}
+
+// A `noinline` caller that records its own return address, so a test can tell where the
+// first captured frame must be *without* resolving any symbols. The hooks capture with
+// the public entry point's own `@returnAddress()` as `first_address`, i.e. a call site
+// inside this helper (the entry point's caller); the next frame is then this helper's
+// return address into the test. If the optimizer inlines the entry point into the helper
+// the first frame is this helper's return address itself. Either way `ret` must be one
+// of the first two frames, and no frame inside the allocator may precede it. What this
+// does NOT prove: that the frame *before* `ret` is exactly the helper's call instruction
+// (that needs symbol resolution, `report()`'s later job).
+const Entry = enum { alloc, calloc, alloc_aligned, realloc_aligned_move, resize };
+
+noinline fn callThroughHelper(o: *Orisnitsa(debug_config), entry: Entry, p: ?[*]u8, ret: *usize) ?[*]u8 {
+    ret.* = @returnAddress();
+    switch (entry) {
+        .alloc => return o.alloc(24),
+        .calloc => return o.calloc(2, 12),
+        .alloc_aligned => return o.allocAligned(24, 32),
+        .realloc_aligned_move => return o.reallocAligned(p, 100, 256),
+        .resize => {
+            _ = o.resize(p, 24);
+            return p;
+        },
+    }
+}
+
+/// Allocates 24-byte blocks until one is not 256-aligned (a bucket slot at a page base
+/// is), frees the rest and returns it: a block that `reallocAligned(_, _, 256)` must
+/// *move* rather than adjust in place.
+fn allocMisaligned(o: *Orisnitsa(debug_config)) ![*]u8 {
+    var got: [4][*]u8 = undefined;
+    for (&got) |*s| s.* = o.alloc(24) orelse return error.TestUnexpectedResult;
+    var pick: ?usize = null;
+    for (got, 0..) |s, i| {
+        if (pick == null and @intFromPtr(s) % 256 != 0) pick = i;
+    }
+    const chosen = pick orelse return error.TestUnexpectedResult;
+    for (got, 0..) |s, i| {
+        if (i != chosen) o.free(s);
+    }
+    return got[chosen];
+}
+
+fn expectStartsAt(record: *const Record, ret: usize) !void {
+    try testing.expect(ret != 0);
+    try testing.expect(record.callstack[0] == ret or record.callstack[1] == ret);
+}
+
+test "callstacks start at the caller on every entry point" {
+    if (!std.options.allow_stack_tracing) return error.SkipZigTest;
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
+    var ret: usize = 0;
+    for ([_]Entry{ .alloc, .calloc, .alloc_aligned }) |entry| {
+        const p = callThroughHelper(&orisnitsa, entry, null, &ret) orelse return error.TestUnexpectedResult;
+        try expectStartsAt(orisnitsa.records.find(p) orelse return error.TestUnexpectedResult, ret);
+        orisnitsa.free(p);
+    }
+    // `resize` recaptures on update.
+    const q = orisnitsa.alloc(24) orelse return error.TestUnexpectedResult;
+    const record = orisnitsa.records.find(q) orelse return error.TestUnexpectedResult;
+    record.callstack = [_]usize{0} ** spomen_record.MAX_CALLSTACK_DEPTH;
+    _ = callThroughHelper(&orisnitsa, .resize, q, &ret);
+    try expectStartsAt(record, ret);
+    orisnitsa.free(q);
+    // The misaligned-move path of `reallocAligned` records the *new* block from the
+    // user's call, not from inside the internal `allocAlignedAt` delegation. The second
+    // slot of a bucket page is not 256-aligned, so this really takes the move branch.
+    const misaligned = try allocMisaligned(&orisnitsa);
+    const moved = callThroughHelper(&orisnitsa, .realloc_aligned_move, misaligned, &ret) orelse return error.TestUnexpectedResult;
+    try expectStartsAt(orisnitsa.records.find(moved) orelse return error.TestUnexpectedResult, ret);
+    orisnitsa.free(moved);
+    orisnitsa.purge();
+}
+
+test "purge returns the record store's spare pages" {
+    var orisnitsa: Orisnitsa(debug_config) = .init();
+    defer orisnitsa.deinit();
+    const ptr = orisnitsa.alloc(24) orelse return error.TestUnexpectedResult;
+    orisnitsa.free(ptr);
+    // The freed record leaves an empty-but-mapped book page behind ...
+    try testing.expect(orisnitsa.records.book.cur != null);
+    orisnitsa.stats = .{};
+    orisnitsa.purge();
+    // ... which `debugPurge` returns (deleting the hook call would leave `cur` set).
+    try testing.expectEqual(@as(usize, 1), orisnitsa.stats.purges);
+    try testing.expect(orisnitsa.records.book.cur == null);
+    // Usable after the record book was fully purged.
+    const again = orisnitsa.alloc(24) orelse return error.TestUnexpectedResult;
+    orisnitsa.free(again);
+    orisnitsa.purge();
+}
+
+fn expectStats(o: *Orisnitsa(debug_config), want: HookStats) !void {
+    try testing.expectEqual(want, o.stats);
+    o.stats = .{};
+}
+
+test "every public operation runs exactly its hooks (dispatch wiring)" {
+    // Zig cannot catch the panic a missing hook would otherwise be observed through, so
+    // the wiring is pinned by counting hook invocations after each operation, at the
+    // call sites HPHA has (`Cpp/hpha.h:1264-1440`).
+    var o: Orisnitsa(debug_config) = .init();
+    defer o.deinit();
+
+    // alloc / calloc / allocAligned (all four routes): one add each, nothing else.
+    const a = o.alloc(24) orelse return error.TestUnexpectedResult;
+    try expectStats(&o, .{ .adds = 1 });
+    const b = o.alloc(5000) orelse return error.TestUnexpectedResult;
+    try expectStats(&o, .{ .adds = 1 });
+    const c = o.calloc(2, 12) orelse return error.TestUnexpectedResult;
+    try expectStats(&o, .{ .adds = 1 });
+    const d = o.allocAligned(24, 32) orelse return error.TestUnexpectedResult;
+    try expectStats(&o, .{ .adds = 1 });
+    const e = o.allocAligned(5000, 128) orelse return error.TestUnexpectedResult;
+    try expectStats(&o, .{ .adds = 1 });
+    // A failed allocation is not an add.
+    os.test_vm.failMapAfter(0);
+    try testing.expect(o.alloc(1 << 20) == null);
+    os.test_vm.clearFailure();
+    try expectStats(&o, .{});
+
+    // free: one remove, no size carried.
+    o.free(a);
+    try expectStats(&o, .{ .removes = 1 });
+
+    // realloc within the bucket path: one check, one replace, no add.
+    const c2 = o.realloc(c, 100) orelse return error.TestUnexpectedResult;
+    try expectStats(&o, .{ .checks = 1, .replaces = 1 });
+    // bucket -> tree crossover: same hooks, and still no add/remove.
+    const c3 = o.realloc(c2, 2000) orelse return error.TestUnexpectedResult;
+    try expectStats(&o, .{ .checks = 1, .replaces = 1 });
+    // tree -> tree.
+    const b2 = o.realloc(b, 9000) orelse return error.TestUnexpectedResult;
+    try expectStats(&o, .{ .checks = 1, .replaces = 1 });
+    // reallocAligned in place (tree path, already aligned).
+    const e2 = o.reallocAligned(e, 6000, 128) orelse return error.TestUnexpectedResult;
+    try expectStats(&o, .{ .checks = 1, .replaces = 1 });
+
+    // resize: one check, one update (both paths).
+    _ = o.resize(c3, 2000);
+    try expectStats(&o, .{ .checks = 1, .updates = 1 });
+    _ = o.resize(d, 24);
+    try expectStats(&o, .{ .checks = 1, .updates = 1 });
+
+    // realloc(null, n) is an alloc; realloc(p, 0) is a free (and does not check).
+    const f = o.realloc(null, 40) orelse return error.TestUnexpectedResult;
+    try expectStats(&o, .{ .adds = 1 });
+    try testing.expect(o.realloc(f, 0) == null);
+    try expectStats(&o, .{ .removes = 1 });
+
+    // The misaligned move of `reallocAligned`: a fresh aligned allocation and a free of
+    // the old block — one add, one remove — and, exactly like HPHA, no check.
+    const filler = o.alloc(24) orelse return error.TestUnexpectedResult;
+    const odd = try allocMisaligned(&o);
+    o.stats = .{};
+    const moved = o.reallocAligned(odd, 100, 256) orelse return error.TestUnexpectedResult;
+    try expectStats(&o, .{ .adds = 1, .removes = 1 });
+
+    // freeWithSize / freeWithSizeAligned: one remove *carrying the size*.
+    o.freeWithSize(filler, 24);
+    try expectStats(&o, .{ .removes = 1, .removes_with_size = 1 });
+    o.freeWithSizeAligned(moved, 100, 256);
+    try expectStats(&o, .{ .removes = 1, .removes_with_size = 1 });
+    // A zero orig_size recovers through plain `free`: a remove without a size.
+    const g = o.alloc(24) orelse return error.TestUnexpectedResult;
+    o.stats = .{};
+    o.freeWithSize(g, 0);
+    try expectStats(&o, .{ .removes = 1 });
+
+    o.free(d);
+    o.free(c3);
+    o.free(b2);
+    o.free(e2);
+    o.stats = .{};
+    // purge: one purge hook.
+    o.purge();
+    try expectStats(&o, .{ .purges = 1 });
+    try testing.expectEqual(@as(usize, 0), o.requested());
+}
+
+test "a failed realloc runs the check but never the replace hook" {
+    var o: Orisnitsa(debug_config) = .init();
+    defer o.deinit();
+    const p = o.alloc(24) orelse return error.TestUnexpectedResult;
+    o.stats = .{};
+    os.test_vm.failMapAfter(0);
+    defer os.test_vm.clearFailure();
+    try testing.expect(o.realloc(p, 4000) == null);
+    os.test_vm.clearFailure();
+    try expectStats(&o, .{ .checks = 1 });
+    o.free(p);
+    o.purge();
+}
+
+test "E9 on the tree path: a failed tree realloc keeps the original and its record" {
+    var o: Orisnitsa(debug_config) = .init();
+    defer o.deinit();
+    const p = o.alloc(5000) orelse return error.TestUnexpectedResult;
+    const q = o.allocAligned(5000, 128) orelse return error.TestUnexpectedResult;
+    o.stats = .{};
+    // Bigger than the arena the blocks live in, so the tree can neither grow them in
+    // place nor find room, and must map a new arena — which the OS refuses. (`q` is
+    // 128-aligned, so `reallocAligned` reaches the check instead of taking the
+    // misaligned-move branch.)
+    os.test_vm.failMapAfter(0);
+    defer os.test_vm.clearFailure();
+    try testing.expect(o.realloc(p, 1 << 20) == null);
+    try testing.expect(o.reallocAligned(q, 1 << 20, 128) == null);
+    os.test_vm.clearFailure();
+    try expectStats(&o, .{ .checks = 2 }); // checked, but never replaced
+    try testing.expectEqual(@as(usize, 2), o.records.len());
+    for ([_][*]u8{ p, q }) |blk| {
+        const record = o.records.find(blk) orelse return error.TestUnexpectedResult;
+        try testing.expectEqual(@as(usize, 5000), record.size);
+        _ = try o.verify(blk, 5000); // ramp still intact
+    }
+    o.free(p);
+    o.free(q);
+    try testing.expectEqual(@as(usize, 0), o.requested());
+    o.purge();
+}
+
+test "the record-store OOM path also frees an aligned block" {
+    var o: Orisnitsa(debug_config) = .init();
+    defer o.deinit();
+    // Bucket path: the first map serves the page, the second (the record page) fails.
+    os.test_vm.failMapAfter(1);
+    defer os.test_vm.clearFailure();
+    try testing.expect(o.allocAligned(24, 32) == null);
+    os.test_vm.clearFailure();
+    // Tree path, aligned.
+    os.test_vm.failMapAfter(1);
+    try testing.expect(o.allocAligned(5000, 128) == null);
+    os.test_vm.clearFailure();
+    try testing.expectEqual(@as(usize, 0), o.records.len());
+    try testing.expectEqual(@as(usize, 0), o.requested());
+    o.purge();
+    try testing.expectEqual(@as(usize, 0), o.allocated());
+}
+
+test "verify compares a tree-path record raw and a bucket-path record clamped" {
+    var o: Orisnitsa(debug_config) = .init();
+    defer o.deinit();
+
+    // Tree path via a large alignment records the RAW size, even below the minimum:
+    // clamping the caller's size there would falsely report a mismatch.
+    const t5 = o.allocAligned(5, 4096) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 5), (o.records.find(t5) orelse return error.TestUnexpectedResult).size);
+    _ = try o.verify(t5, 5);
+    try testing.expectError(error.SizeMismatch, o.verify(t5, 8)); // clamped value is NOT the record
+    const t3 = o.allocAligned(3, 512) orelse return error.TestUnexpectedResult;
+    _ = try o.verify(t3, 3);
+    try testing.expectError(error.SizeMismatch, o.verify(t3, 4));
+    o.freeWithSizeAligned(t3, 3, 512); // the sized free must not falsely trip
+    o.freeWithSizeAligned(t5, 5, 4096);
+
+    // Bucket path records the clamped size: a sub-minimum request verifies both ways.
+    const b3 = o.allocAligned(3, 16) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(bucket.MIN_ALLOCATION, (o.records.find(b3) orelse return error.TestUnexpectedResult).size);
+    _ = try o.verify(b3, 3);
+    _ = try o.verify(b3, 8);
+    try testing.expectError(error.SizeMismatch, o.verify(b3, 9));
+    o.freeWithSizeAligned(b3, 3, 16);
+
+    // A tree-path realloc down to a sub-minimum size records 5 raw too.
+    const big = o.alloc(5000) orelse return error.TestUnexpectedResult;
+    const shrunk = o.realloc(big, 5) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 5), (o.records.find(shrunk) orelse return error.TestUnexpectedResult).size);
+    _ = try o.verify(shrunk, 5);
+    try testing.expectError(error.SizeMismatch, o.verify(shrunk, 8));
+    o.free(shrunk);
+    o.purge();
+}
+
+test "the default instantiation carries no debug state" {
+    comptime {
+        std.debug.assert(@FieldType(Orisnitsa(.{}), "records") == void);
+        std.debug.assert(@FieldType(Orisnitsa(.{}), "requested_buckets") == void);
+        std.debug.assert(@FieldType(Orisnitsa(.{}), "requested_tree") == void);
+    }
+    var orisnitsa: Orisnitsa(.{}) = .init();
+    orisnitsa.deinit(); // a no-op without `config.debug`
 }
 
 // ---- v0.1.1 regression tests (docs/audits/2026-08-29-pre-v0.2.0-audit.md) ----

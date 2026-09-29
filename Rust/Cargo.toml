@@ -57,6 +57,15 @@ debug-allocator = []
 # functions and three constants, declared directly in src/os.rs.
 libc = "0.2"
 
+# Global-allocator integration test (see the file's own doc). No libtest harness: a global
+# allocator is process-wide and `Orisnik` is single-threaded by contract, so `main` must be
+# the only thread.
+[[test]]
+name = "debug_global_allocator"
+path = "tests/debug_global_allocator.rs"
+harness = false
+required-features = ["debug-allocator"]
+
 # The Grit-ORIS lint floor (see Rust/CONVENTIONS.md). CI runs
 # `cargo clippy --all-targets -- -D warnings`, so every `warn` below is a hard
 # error there. NOTE: unlike the sibling parser crates, an allocator does NOT

@@ -60,9 +60,9 @@ pub(crate) unsafe fn write_guard(ptr: NonNull<u8>, requested_size: usize, seed: 
 ///
 /// This is a **self-consistency** check only: it does not compare against the
 /// allocation's originally-recorded seed byte. That comparison is [`check_guard_seeded`]
-/// (used by `Record::check_guard`), which needs the allocation-record store — built, but
-/// not yet wired into dispatch — to supply the seed; this unseeded form is what remains
-/// possible without it. It still catches the overwhelming majority
+/// (used by `Record::check_guard`), which needs the allocation-record store (the allocator's
+/// hooks use it) to supply the seed; this unseeded form is what remains possible without
+/// one. It still catches the overwhelming majority
 /// of real overflow corruption: an overrun almost never happens to also land on a
 /// perfectly incrementing 16-byte sequence starting from whatever the corrupted first
 /// guard byte now reads as. `hpha.cpp`'s own `check_guard` early-exits on the first
@@ -71,11 +71,12 @@ pub(crate) unsafe fn write_guard(ptr: NonNull<u8>, requested_size: usize, seed: 
 /// # Safety
 /// `ptr` must be valid for `requested_size + MEMORY_GUARD_SIZE` bytes, readable for at
 /// least the trailing [`MEMORY_GUARD_SIZE`] of them.
-// Not called from any dispatch path: the check that will guard `free`/`realloc` is the
-// seeded one, driven by the allocation-record store (`Record::check_guard`), which
-// supplies the original size and seed once Phase 4 wires it in. Kept as the
-// store-free fallback and exercised by this module's own tests.
-#[allow(dead_code)]
+// Test-only: the check that guards `free`/`realloc`/`resize` in the allocator is the
+// seeded one, driven by the allocation-record store (`Record::check_guard`). This
+// store-free, self-consistency form remains as an independent oracle for the tests
+// (`spomen::guard`'s own, and `orisnik.rs`'s dispatch-level ramp tests) that need to ask
+// "is this ramp still intact?" without going through the allocator.
+#[cfg(test)]
 #[must_use]
 pub(crate) unsafe fn check_guard(ptr: NonNull<u8>, requested_size: usize) -> bool {
     // SAFETY: `requested_size` is within `ptr`'s valid span (caller's contract).
@@ -103,7 +104,7 @@ pub(crate) unsafe fn check_guard(ptr: NonNull<u8>, requested_size: usize) -> boo
 }
 
 /// Checks that the guard ramp trailing at `ptr + requested_size` is *exactly* the one
-/// [`write_guard`] wrote for `seed` — the strict form of [`check_guard`], possible only
+/// [`write_guard`] wrote for `seed` — the strict form of `check_guard` (test-only, the unseeded self-consistency check), possible only
 /// once something remembers the seed (`spomen`'s allocation record does, see
 /// `spomen::record`). Ports `debug_record::check_guard`, which compares every byte
 /// against `mGuardByte++` and early-exits on the first mismatch.

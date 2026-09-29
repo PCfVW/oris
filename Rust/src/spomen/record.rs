@@ -22,15 +22,28 @@
 //! has drop glue and the record book must move it with `ptr::read`/`ptr::write` and drop
 //! it exactly once — see [`crate::spomen::book`].
 //!
-//! # Re-entrancy (a constraint on the dispatch layer)
-//! [`Backtrace::force_capture`] **allocates** through the global allocator. If an
-//! `Orisnik` with `debug-allocator` is itself installed as `#[global_allocator]`, wiring
-//! this store into `alloc`/`free` makes every capture re-enter the allocator — and, left
-//! unhandled, recurse without bound or observe a half-updated store. The store methods
-//! therefore capture *before* touching any state, but breaking the recursion itself is
-//! the dispatch layer's job (decided when it wires this in): e.g. a re-entrancy guard
-//! that skips recording for allocations made while capturing, or a fixed frame buffer as
-//! `orisnitsa` uses (which never allocates).
+//! # `#[global_allocator]` and callstacks
+//! [`Backtrace::force_capture`] **allocates**, and takes a process-wide, non-reentrant
+//! lock inside std while it does. If an `Orisnik` with `debug-allocator` is itself the
+//! `#[global_allocator]`, that is a **deadlock** waiting for application code that is
+//! capturing a backtrace of its own (a panic hook with `RUST_BACKTRACE=1`, an explicit
+//! `Backtrace::capture`): std holds its lock while it allocates; that allocation reaches
+//! our hook; the hook tries to capture and blocks on the same lock, forever. No flag
+//! inside the hook can see this, because the outer capture is not ours. (The
+//! *recursion* one might expect — capturing inside `alloc` re-entering `alloc` — is not
+//! the hazard: it is tamed by the dispatch layer's `busy` flag, see `orisnik_debug.rs`.)
+//!
+//! So an instance that has been used through the `GlobalAlloc` interface records **no
+//! callstack** ([`Record::callstack`] is `None`): the record still tracks the pointer, the
+//! requested size, the source and the guard seed, so guard-overrun, double-free and
+//! size-mismatch detection all still work — only the "allocated at:" trace is absent.
+//! Owned instances (the ordinary test/debug use, the `Allocator` trait, the C-ABI) are
+//! unaffected: std's backtrace machinery allocates from the *system* allocator, not from
+//! them. `orisnitsa` needs no such rule — its capture walks frames into a fixed buffer
+//! with no lock and no allocation.
+//!
+//! The store methods also capture *before* touching any state, so nothing that runs while
+//! a record is being built can observe a half-updated store.
 //!
 //! This module also makes `debug-allocator` require `std` (for `std::backtrace`); the
 //! crate is not `no_std`, so nothing else changes.
@@ -80,8 +93,10 @@ pub(crate) struct Record {
     /// The first byte of this allocation's guard ramp — the seed
     /// [`crate::spomen::guard::write_guard`] was given.
     pub(crate) guard_byte: u8,
-    /// Where this allocation was made from.
-    pub(crate) callstack: Backtrace,
+    /// Where this allocation was made from, or `None` when the allocator is in use as a
+    /// `#[global_allocator]` and capturing would risk a deadlock (see the module doc's
+    /// "global allocator" section).
+    pub(crate) callstack: Option<Backtrace>,
 }
 
 // SAFETY: `node` is Record's first field (repr(C) guarantees offset 0).
@@ -139,7 +154,7 @@ impl Record {
     /// `guard_byte`.
     #[must_use]
     pub(crate) fn new(ptr: NonNull<u8>, size: usize, source: Source, guard_byte: u8) -> Self {
-        Self::with_callstack(ptr, size, source, guard_byte, capture_callstack())
+        Self::with_callstack(ptr, size, source, guard_byte, Some(capture_callstack()))
     }
 
     /// [`Record::new`] with the callstack supplied by the caller.
@@ -149,7 +164,7 @@ impl Record {
         size: usize,
         source: Source,
         guard_byte: u8,
-        callstack: Backtrace,
+        callstack: Option<Backtrace>,
     ) -> Self {
         Self {
             node: NodeBase::UNLINKED,

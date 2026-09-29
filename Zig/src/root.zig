@@ -80,6 +80,7 @@ const spomen_poison = @import("spomen_poison.zig");
 const spomen_record = @import("spomen_record.zig");
 const spomen_book = @import("spomen_book.zig");
 const spomen_store = @import("spomen_store.zig");
+const spomen_failure = @import("spomen_failure.zig");
 const rand = @import("rand.zig");
 const capi = @import("capi.zig");
 
@@ -107,6 +108,7 @@ test {
     std.testing.refAllDecls(spomen_record);
     std.testing.refAllDecls(spomen_book);
     std.testing.refAllDecls(spomen_store);
+    std.testing.refAllDecls(spomen_failure);
     std.testing.refAllDecls(rand);
     std.testing.refAllDecls(orisnitsa_mod);
     std.testing.refAllDecls(allocator_mod);

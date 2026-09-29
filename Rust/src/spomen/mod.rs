@@ -11,20 +11,15 @@
 //! `debug_assert!` Invariants section and `ROADMAP.md`'s v0.2.0 milestone.
 //!
 //! Already landed: guard-byte writing/checking ([`guard`]) and payload poisoning
-//! ([`poison`]), plus the allocation-record store ([`record`], [`book`], [`store`]:
-//! per-allocation records with callstack capture, indexed by address). Still to come
-//! across v0.2.0's remaining phases: wiring the store into the allocator's dispatch
-//! layer, `OrisError`, and the `check()`/`report()` diagnostics.
+//! ([`poison`]); the allocation-record store ([`record`], [`book`], [`store`]:
+//! per-allocation records with callstack capture, indexed by address); and the hooks that
+//! wire them into the allocator (`orisnik_debug.rs`), with fail-fast reporting of
+//! detected corruption ([`failure`]). Still to come across v0.2.0's remaining phase:
+//! leak detection on drop, `OrisError`, and the `check()`/`report()` diagnostics.
 
+pub(crate) mod book;
+pub(crate) mod failure;
 pub(crate) mod guard;
 pub(crate) mod poison;
-// The allocation-record store is built and tested here but not yet called from the
-// dispatch layer (`orisnik.rs`) — wiring it in is the next phase of v0.2.0 — so every
-// item is dead outside its own tests until then. Remove these three `allow`s (and the
-// one on `check_guard`) when Phase 4 lands.
-#[allow(dead_code)]
-pub(crate) mod book;
-#[allow(dead_code)]
 pub(crate) mod record;
-#[allow(dead_code)]
 pub(crate) mod store;

@@ -168,6 +168,29 @@ transitions) would see it.
 
 ---
 
+### E10 — under `DEBUG_ALLOCATOR`, a sized `free` of a sub-minimum allocation asserts
+
+**HPHA:** `allocator::alloc(size_t size)` (`hpha.h`) clamps a small request up to
+`MIN_ALLOCATION` (`size = clamp_small_allocation(size)`) *before* `debug_add(ptr, size,
+…)`, so the debug record for `alloc(5)` holds size **8**. `free(void* ptr, size_t
+origSize)` passes the caller's `origSize` — 5 — unclamped to `debug_remove(ptr, origSize)`,
+whose `debug_record_map::remove(void* ptr, size_t size)` does `assert(size ==
+record->size())`.
+
+**Why it is wrong:** the call is exactly what the sized-free contract asks for (the size
+the allocation was made with), yet the debug build's assertion fires: 5 ≠ 8. Any request
+below `MIN_ALLOCATION` (1–7 bytes) followed by a sized free trips it. Release builds have
+no such assert, so the same program runs cleanly there.
+
+**Ports:** compare the caller's size the way the record holds it: after the same minimum-size clamp for a bucket-path record, so `free(p, 5)` of an `alloc(5)` passes; raw for a tree-path record, because the tree path never clamps (`alloc_aligned(5, 4096)` records 5, and HPHA's raw compare is correct there — an unconditional clamp would *introduce* a false report). A genuinely wrong size (`free(p, 64)` of an `alloc(100)`) is still detected. See `Orisnik::verify` / `Orisnitsa.verify` (the hooks'
+detection step).
+
+**Trace-visible:** **No.** The assertion sits on a debug-only path and changes no
+allocator state; where HPHA's assert would have aborted, the ports continue.
+
+**Fixed in:** v0.2.0.
+
+
 ## B. Defects the ports preserve
 
 ### E6 — `ptr_in_bucket` can report a false positive
@@ -229,7 +252,7 @@ mis-aligning.
 
 ### E9 — `debug_replace` loses a live allocation's record when a realloc fails
 
-**Status: not yet addressed. In scope for v0.2.0.**
+**Status: resolved in v0.2.0 (Phase 4) — see the correction note below: the defect this entry describes does not exist, and the ports carry HPHA's own `if (!newPtr) return;` guard in `debug_replace`.**
 
 This is the one entry where the source in this directory is *behind* the author's own
 later work, and it lands directly in the v0.2.0 debug-allocator milestone.
@@ -277,7 +300,7 @@ record that choice here and in `NOTICE.md`. Adopting the 2007 form would mean kn
 porting a defect the author had already fixed — and the failure mode (a lost record for a
 live block) is precisely the thing v0.2.0's leak detection exists to catch.
 
-**Trace-visible:** N/A for v0.1.x — nothing in the debug subsystem is ported yet.
+**Trace-visible:** N/A — the debug subsystem changes no allocator state, and a failed realloc leaves the original block and its record untouched in both ports (`Orisnik::debug_replace`/`Orisnitsa.debugReplace`).
 
 > **Correction (added while planning v0.2.0, 2026-09-28).** The analysis above is
 > **wrong** — the described defect does not occur, because the "no null check" claim at

@@ -117,6 +117,8 @@ impl RecordBook {
 
     /// Number of live records.
     #[must_use]
+    // Reached only through `RecordStore::len` (itself dead until Phase 5) and tests.
+    #[allow(dead_code)]
     pub(crate) fn len(&self) -> usize {
         self.len.get()
     }

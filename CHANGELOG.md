@@ -12,6 +12,55 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Added
 
+- **Debug hooks wired into the allocator (v0.2.0, Phase 4).** With `debug-allocator` /
+  `Orisnitsa(.{ .debug = true })` the record store from Phase 3 is now live: every
+  allocation is recorded (address, requested size, source, guard seed, callstack) and every
+  free, realloc, resize and purge goes through HPHA's own hooks — `debug_add`,
+  `debug_remove`, `debug_replace`, `debug_update`, `debug_check`, `debug_purge` — at exactly
+  the points and in exactly the order HPHA calls them. The hooks own the guard seed, the
+  ramp write and the poisoning, so the three can no longer disagree; that code moved out of
+  the Phase 2 size-class wrappers, which are back to plain inflate shims. `free` now
+  verifies the block *before* reclaiming it: a record must exist (else: double free or a
+  foreign pointer), a sized free's size must match, and the guard ramp must still equal the
+  recorded seed (else: something wrote past the end of the block). Payloads are poisoned at
+  the *recorded* size, which retires Phase 2's "poison the usable size" approximation.
+  Detected corruption is fail-fast (`panic!` / `std.debug.panic`); detection itself is a
+  plain value (`verify`), so it is testable in both ports. `requested()` reports HPHA's
+  running total of requested bytes (each block plus its guard reservation); if the record
+  store cannot get a page, `alloc` frees the block and returns `None`/`null` — a value, as
+  in HPHA. A failed `realloc` leaves the original allocation *and* its record untouched
+  (the `Cpp/ERRATA.md` E9 correction). Without the feature the hooks are no-ops (Rust:
+  `#[inline]` stand-ins the compiler removes; Zig: never analysed).
+
+  Two things in `orisnik` that `orisnitsa` does not need. (1) *Re-entrancy:* a `busy` flag
+  makes nested allocator calls made while a hook runs skip the hooks. No hook allocates
+  from its own instance today, so this is an enforced invariant, tested directly, that the
+  coming `report()` (which formats strings while iterating the store) will rely on.
+  (2) *`#[global_allocator]`:* std's backtrace lock is process-wide and non-reentrant, and
+  std allocates while holding it, so an allocator that captures a backtrace inside `alloc`
+  **deadlocks** against application code that is itself capturing one (a panic hook with
+  `RUST_BACKTRACE=1`, an explicit `Backtrace::capture`) — found by
+  `tests/debug_global_allocator.rs`, which force-captures a backtrace from user code with
+  `Orisnik` as the process's allocator (it hung before this rule). An instance used through `GlobalAlloc` therefore records **no
+  callstack**; every other record field, and so every detection above, still works. Such a
+  program must be built with `panic = "abort"`. `orisnitsa` captures into a fixed buffer
+  with no lock and no allocation, so it has neither concern.
+
+  A defect in HPHA's own debug mode is fixed rather than reproduced (`Cpp/ERRATA.md` E10):
+  `alloc(5)` records size 8 (it clamps first), but `free(p, 5)` compared the raw 5 against
+  it and asserted on a perfectly legal call. Both ports compare the way the record holds the
+  size: clamped for a bucket-path record, raw for a tree-path one (an aligned request past
+  `MAX_SMALL_ALLOCATION` alignment goes to the tree, which never clamps — an unconditional
+  clamp would have introduced a false report there; caught in review, pinned by a test in each
+  port).
+
+  `orisnitsa` specifics: a debug instance must be `deinit()`ed or its record pages leak;
+  `RecordStore.replace(ptr, fresh)` and `update(..., callstack)` changed signature; and
+  `os.test_vm.failMapAfter` budgets need one extra map under debug (the record page). Zig
+  cannot catch a panic, so detection is tested through the pure `verify`, and dispatch wiring
+  through debug-only hook-invocation counters (`stats`) that never let a corrupted free
+  continue.
+
 - **Allocation-record store and callstack capture (v0.2.0, Phase 3).** The data structures
   behind HPHA's `debug_record_map`, for `debug-allocator` (Rust: feature-gated) and
   `Orisnitsa(.{ .debug = true })` (Zig: the record modules are non-generic and always

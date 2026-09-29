@@ -17,10 +17,13 @@ Oris is a two-port monorepo; each port builds independently with its own toolcha
 - **`--features debug-allocator`** enables `spomen`, the port of HPHA's
   `DEBUG_ALLOCATOR` mode (guard bytes, allocation-record tracking, leak detection,
   `check()`/`report()`) landing across v0.2.0 (`ROADMAP.md`) — stable, no nightly
-  needed. Guard bytes, payload poisoning and the allocation-record store (with callstack
-  capture) are implemented; wiring the store into the allocator, leak detection and
-  `check()`/`report()` are still to come, so nothing here *reports* a detected overrun
-  yet. Build and test it with
+  needed. Guard bytes, payload poisoning, allocation records (with callstack capture) and
+  the hooks that use them are implemented: a guard overrun, a double free, a foreign
+  pointer or a wrong sized-free size now **panics** with a diagnostic naming the block and
+  where it was allocated. Leak detection on drop and `check()`/`report()` are still to
+  come. Installed as a `#[global_allocator]`, build with `panic = "abort"`, and note that
+  such an instance records no callstacks (see `Rust/CONVENTIONS.md`). Build and test it
+  with
   `cargo test --features debug-allocator` (Miri:
   `MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows" cargo +nightly miri test
   --features debug-allocator`).
@@ -52,8 +55,9 @@ orisnik = "0.1"
   `debug-allocator` feature — `spomen`, landing across v0.2.0 (`ROADMAP.md`). No
   `zig build` flag needed; the default `orisnitsa.Orisnitsa` export stays the
   non-debug `Orisnitsa(.{})`. Same status as the Rust side above: guard bytes and
-  payload poisoning, and the allocation-record store are implemented; the rest of
-  `spomen` is still to come. Exercise
+  payload poisoning, allocation records and the hooks that use them are implemented
+  (detected corruption panics); leak detection on `deinit` and `check()`/`report()` are
+  still to come. Exercise
   it with `zig build test` (the debug instantiation is covered by the test suite).
 
 ```sh
