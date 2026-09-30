@@ -16,7 +16,7 @@ Oris is a two-port monorepo; each port builds independently with its own toolcha
   are all stable.
 - **`--features debug-allocator`** enables `spomen`, the port of HPHA's
   `DEBUG_ALLOCATOR` mode (guard bytes, allocation-record tracking, leak detection,
-  `check()`/`report()`), implemented on `main` for the unreleased v0.2.0 (`ROADMAP.md`; not in
+  `check()`/`report()`), new in v0.2.0 (`ROADMAP.md`; not in
   0.1.x) — stable, no nightly needed. Guard bytes, payload poisoning, allocation records (with callstack capture) and
   the hooks that use them are implemented: a guard overrun, a double free, a foreign
   pointer or a wrong sized-free size now **panics** with a diagnostic naming the block and
@@ -46,7 +46,7 @@ Once published, depend on it from crates.io:
 
 ```toml
 [dependencies]
-orisnik = "0.1"
+orisnik = "0.2"
 ```
 
 ## Zig — `orisnitsa`
@@ -55,7 +55,7 @@ orisnik = "0.1"
   `std.mem.Allocator` vtable shape is version-sensitive while Zig is pre-1.0, so the
   pin is load-bearing.
 - **`OrisnitsaWith(.{ .debug = true })`** is the Zig analog of `orisnik`'s
-  `debug-allocator` feature — `spomen`, implemented on `main` for the unreleased v0.2.0
+  `debug-allocator` feature — `spomen`, new in v0.2.0
   (`ROADMAP.md`). No
   `zig build` flag needed; the default `orisnitsa.Orisnitsa` export stays the
   non-debug `Orisnitsa(.{})`. Same status as the Rust side above: guard bytes and

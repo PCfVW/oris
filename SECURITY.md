@@ -16,8 +16,7 @@ because they live in the opt-in debug subsystem (`spomen`: a Rust feature and a 
 `comptime` toggle) that is **entirely compiled out when disabled**.
 
 > These describe Oris's **security model**, realized starting at v0.1.0 (the
-> guard-byte debug subsystem is implemented on `main` for the unreleased v0.2.0 — see
-> [`ROADMAP.md`](ROADMAP.md)).
+> guard-byte debug subsystem arrived in v0.2.0 — see [`ROADMAP.md`](ROADMAP.md)).
 
 ## CWEs addressed at no release-time cost
 
@@ -68,7 +67,8 @@ allocator:
 
 | Version | Supported |
 |---|---|
-| 0.1.1 | ✅ |
+| 0.2.0 | ✅ |
+| 0.1.1 | ⚠️ — superseded; upgrade to 0.2.0 (adds the opt-in debug allocator; no security fix was needed) |
 | 0.1.0 | ⚠️ — superseded; upgrade to 0.1.1, which fixes an integer-overflow path that under-allocates on very large requests (F1) and a `calloc` overflow that memsets past the block. See [`CHANGELOG.md`](CHANGELOG.md) |
 | < 0.1.0 | ❌ — pre-release / name-reservation stubs only |
 

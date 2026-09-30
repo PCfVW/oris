@@ -9,7 +9,7 @@ A Rust port of [Oris](https://github.com/PCfVW/oris) — a Rust and Zig port of 
 [![License](https://img.shields.io/crates/l/orisnik)](https://github.com/PCfVW/oris/blob/main/LICENSE-MIT)
 [![Zig sibling: orisnitsa](https://img.shields.io/badge/zig%20sibling-orisnitsa-f7a41d?logo=zig)](https://github.com/PCfVW/oris/releases)
 
-**v0.1.1 is released on crates.io.** See the [project repo](https://github.com/PCfVW/oris) for the Zig sibling and full history.
+**v0.2.0 is released on crates.io.** See the [project repo](https://github.com/PCfVW/oris) for the Zig sibling and full history.
 
 ## What's here
 
@@ -19,12 +19,11 @@ A Rust port of [Oris](https://github.com/PCfVW/oris) — a Rust and Zig port of 
   - **`oris_*`** — a C-shaped API (`oris_new`, `oris_alloc`, `oris_free`, `oris_realloc`, ...), instance-scoped via an explicit handle — never a hidden global. `cargo build --release` also emits real linkable `liborisnik.so`/`.dylib`/`orisnik.dll` + `liborisnik.a`/`orisnik.lib` artifacts (`crate-type = ["lib", "cdylib", "staticlib"]`); pair with [`include/oris.h`](include/oris.h) (vendored here — byte-identical to [the canonical copy](https://github.com/PCfVW/oris/blob/main/include/oris.h), so this package is self-contained) to link from C/C++.
   - **`unsafe impl GlobalAlloc`** — opt in as a `#[global_allocator]`.
   - **`unsafe impl core::alloc::Allocator`** — optional, behind the `nightly` Cargo feature, for `Box::new_in`/`Vec::new_in`.
-- 94 tests. The **entire public surface** runs under Miri
-  (`-Zmiri-strict-provenance -Zmiri-tree-borrows`): 93 pass there, and the only five
-  skipped are `os.rs`'s own real-syscall tests, which Miri cannot interpret, plus the
-  manual C++ oracle tool.
+- 115 tests (212 with `debug-allocator`). The **entire public surface** runs under Miri
+  (`-Zmiri-strict-provenance -Zmiri-tree-borrows`); the only tests skipped there are `os.rs`'s
+  own real-syscall tests, which Miri cannot interpret, plus the manual C++ oracle tool.
 - **64-bit platforms only** — enforced at compile time (see `src/block.rs`'s module doc).
-- **Debug allocator (unreleased, on `main` for v0.2.0):** the opt-in `debug-allocator` Cargo feature ports HPHA's `DEBUG_ALLOCATOR` — trailing guard bytes, payload poisoning, an allocation-record book with callstack capture, `check()` / `report()` / `OrisError`, and leak detection when the allocator is dropped. Detected corruption (a guard overrun, a double free, a foreign pointer, a wrong sized free) and leaks panic; installed as a `#[global_allocator]`, build with `panic = "abort"`. Off by default and entirely compiled out. **[User guide](https://github.com/PCfVW/oris/blob/main/docs/debug-allocator.md)** — what it catches, how to read its messages, the `#[global_allocator]` recipe — and a runnable example: `cargo run --example catch_an_overrun --features debug-allocator`; build details in [`INSTALL.md`](https://github.com/PCfVW/oris/blob/main/INSTALL.md).
+- **Debug allocator (v0.2.0):** the opt-in `debug-allocator` Cargo feature ports HPHA's `DEBUG_ALLOCATOR` — trailing guard bytes, payload poisoning, an allocation-record book with callstack capture, `check()` / `report()` / `OrisError`, and leak detection when the allocator is dropped. Detected corruption (a guard overrun, a double free, a foreign pointer, a wrong sized free) and leaks panic; installed as a `#[global_allocator]`, build with `panic = "abort"`. Off by default and entirely compiled out. **[User guide](https://github.com/PCfVW/oris/blob/main/docs/debug-allocator.md)** — what it catches, how to read its messages, the `#[global_allocator]` recipe — and a runnable example: `cargo run --example catch_an_overrun --features debug-allocator`; build details in [`INSTALL.md`](https://github.com/PCfVW/oris/blob/main/INSTALL.md).
 
 ## Quick start
 

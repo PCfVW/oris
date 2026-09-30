@@ -6,9 +6,7 @@ opt-in `debug-allocator` Cargo feature of `orisnik`; in Zig it is the `debug` fi
 `comptime` config of `orisnitsa`. With it off (the default) none of it exists in the build:
 no fields, no code, no cost.
 
-> **Status:** implemented on `main`; it ships with v0.2.0, which is not released yet. Until
-> then depend on the repository (see below). The names in this guide are the ones v0.2.0 will
-> have.
+> **Status:** released in v0.2.0. Earlier versions (0.1.x) do not have it.
 
 ## What it does
 
@@ -36,12 +34,11 @@ continuing with). `check()` is the way to *ask* instead, and get an error back.
 
 ## Turning it on
 
-**Rust** — `Cargo.toml` (v0.2.0 is not on crates.io yet, so point at the repository; once it
-ships this becomes `orisnik = { version = "0.2", features = ["debug-allocator"] }`):
+**Rust** — `Cargo.toml`:
 
 ```toml
 [dependencies]
-orisnik = { git = "https://github.com/PCfVW/oris", features = ["debug-allocator"] }
+orisnik = { version = "0.2", features = ["debug-allocator"] }
 ```
 
 **Zig** — instantiate the generic instead of using the plain `Orisnitsa`:

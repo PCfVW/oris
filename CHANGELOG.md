@@ -10,6 +10,8 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-30
+
 ### Added
 
 - **User documentation for the debug allocator (v0.2.0).**
@@ -658,6 +660,7 @@ requires; findings are numbered as in
     cross-validation, reconstructed and re-verified live: all 3000 steps match
     byte-for-byte across every C++/Rust/Zig pairing.
 
-[Unreleased]: https://github.com/PCfVW/oris/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/PCfVW/oris/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/PCfVW/oris/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/PCfVW/oris/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/PCfVW/oris/releases/tag/v0.1.0
