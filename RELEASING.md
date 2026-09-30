@@ -10,6 +10,29 @@ version matches the tag — a mismatch fails the job immediately rather than pub
 a silently-inconsistent release. That check is a safety net, not a substitute for
 doing step 1 correctly.
 
+## 0. Verification status — read before trusting a green tick
+
+What each platform has actually been shown to do. Update this section when a gap closes.
+
+| Surface | Windows | Linux | macOS (incl. Apple silicon) |
+|---|---|---|---|
+| v0.1.x core, both ports | CI | CI | CI |
+| v0.2.0 debug allocator, Rust: unit tests, clippy, rustdoc, MSRV 1.85 | local + CI | local (WSL Ubuntu) + CI | **CI only, first push** |
+| `tests/debug_global_allocator.rs` (`harness = false`, real `#[global_allocator]`) | local | local (WSL) | **never run** |
+| Miri, `--features debug-allocator` | — | local (WSL), ~20 min | — (host-agnostic) |
+| Zig `zig build test`, all four optimize modes, incl. the leak probe and the example | local | local (WSL) | **never run** |
+| Leak probe's termination check (`build.zig`) | exit code 3, verified | SIGABRT, verified | **assumed** SIGABRT, from reading the Zig std source |
+| C smoke test, both ports | CI | local (WSL) + CI | CI |
+| `zig build docs`, Rust example | local | local (WSL) | **never run** |
+
+Also never run anywhere: the *hosted-runner* versions of every new lane (`miri-debug`,
+the debug-allocator steps in `rust-ci.yml`, the example and docs steps in `zig-ci.yml`, the
+new steps in the two publish workflows) until the first push — they were written and checked
+as text plus local equivalents. The first CI run on a PR is therefore the real test, and on
+macOS the suspects, in order, are the leak probe's SIGABRT check, the `harness = false`
+global-allocator test, and the 64 KiB-page assumption on Apple silicon (the v0.1.x core has
+run there, the debug subsystem has not).
+
 ## 1. Bump versions
 
 Three places, kept in sync by hand:
