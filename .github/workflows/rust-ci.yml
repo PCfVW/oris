@@ -48,6 +48,14 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Tests
         run: cargo test
+      # The opt-in debug allocator (`spomen`) is the crate's largest `unsafe`/aliasing
+      # surface and is `cfg`-gated out of every step above, so it needs its own lint and
+      # test pass — including `tests/debug_global_allocator.rs`, a `harness = false`
+      # binary that runs the allocator as this process's own `#[global_allocator]`.
+      - name: Clippy (debug-allocator)
+        run: cargo clippy --all-targets --features debug-allocator -- -D warnings
+      - name: Tests (debug-allocator)
+        run: cargo test --features debug-allocator
 
   miri:
     # The allocator's soundness gate: Miri models provenance and aliasing, the
@@ -66,6 +74,29 @@ jobs:
           workspaces: Rust
       - name: Miri test (strict provenance + tree borrows, default + nightly features)
         run: cargo miri test --features nightly
+        env:
+          MIRIFLAGS: "-Zmiri-strict-provenance -Zmiri-tree-borrows"
+
+  miri-debug:
+    # The same soundness gate for the debug allocator (`--features debug-allocator`):
+    # its teardown and record store are where Tree Borrows found real undefined
+    # behaviour (see `Rust/src/list.rs`'s "`Drop` and `&mut self`" section), so it is
+    # gated separately rather than folded into the job above. Slow — roughly twenty
+    # minutes, most of it heavy record-store tests — hence its own job, in parallel.
+    # `tests/debug_global_allocator.rs` compiles to an empty `main` under Miri (the real
+    # OS mapping cannot be interpreted), so it costs nothing here.
+    name: Miri debug-allocator (nightly)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: Rust
+      - name: Miri test (strict provenance + tree borrows, debug-allocator)
+        run: cargo miri test --features debug-allocator
         env:
           MIRIFLAGS: "-Zmiri-strict-provenance -Zmiri-tree-borrows"
 
@@ -106,12 +137,18 @@ jobs:
         run: cargo doc --no-deps
         env:
           RUSTDOCFLAGS: "-D warnings"
+      # Feature-gated items only exist in this build, so an intra-doc link that resolves
+      # only with the feature (or only without it) is caught here.
+      - name: Doc (deny warnings, debug-allocator, private items)
+        run: cargo doc --no-deps --features debug-allocator --document-private-items
+        env:
+          RUSTDOCFLAGS: "-D warnings"
 
   # Aggregator gate: a single stable check to require in branch protection,
   # so the ruleset never needs editing when the matrix above changes.
   ci-success:
     name: Rust CI success
-    needs: [check, miri, docs, nightly-feature]
+    needs: [check, miri, miri-debug, docs, nightly-feature]
     if: always()
     runs-on: ubuntu-latest
     defaults:
@@ -127,6 +164,7 @@ jobs:
         if: |
           needs.check.result != 'success' ||
           needs.miri.result != 'success' ||
+          needs.miri-debug.result != 'success' ||
           needs.docs.result != 'success' ||
           needs.nightly-feature.result != 'success'
         run: |

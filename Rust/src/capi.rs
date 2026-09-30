@@ -10,8 +10,10 @@
 //! With the `debug-allocator` feature these entry points run the debug hooks, so a detected
 //! corruption (guard overrun, double free, foreign pointer, or an `oris_free_with_size*`
 //! size that disagrees with the allocation) panics — which aborts at the `extern "C"`
-//! boundary — and the handle, being an owned instance, records callstacks. `orisnitsa`'s
-//! C-ABI is fixed to the non-debug configuration and has no debug surface.
+//! boundary — and the handle, being an owned instance, records callstacks. So does
+//! `oris_destroy` if allocations are still live at that point (a leak): they are reported
+//! to stderr and the process aborts. `orisnitsa`'s C-ABI is fixed to the non-debug
+//! configuration and has no debug surface.
 //!
 //! `#[unsafe(no_mangle)]` (edition 2024's unsafe-attribute syntax, `Rust/CONVENTIONS.md`'s
 //! MSRV lint guard note) keeps every symbol name stable for C linkage.
@@ -267,8 +269,8 @@ mod tests {
     // `cargo test` still reaches the real `VirtualAlloc`/`mmap`. That is what lets
     // these tests run under the soundness gate at all — before v0.1.1 they were all
     // `#[cfg_attr(miri, ignore)]`. Each therefore ends by returning its pages with
-    // `purge()`: the allocator holds them until asked (matching HPHA), which the
-    // stand-in correctly reports to Miri as still-live memory.
+    // `purge()`, which asserts `allocated() == 0` explicitly. (`Drop` also releases idle
+    // pages now, so Miri's leak check no longer *depends* on it, but the assertion does.)
 
     #[test]
     fn c_abi_round_trip_alloc_realloc_free_purge() {
@@ -329,9 +331,9 @@ mod tests {
         // produced with 64 bytes at the default alignment.
         unsafe { oris_free_with_size(handle, calloc_ptr, 64) };
 
-        // `oris_destroy` does not return outstanding pages to the OS (its own doc
-        // says so); a C caller that wants them back calls `oris_purge` first. Doing
-        // that here both matches the documented pattern and asserts it works.
+        // `oris_destroy` returns idle pages itself now, so a C caller no longer needs
+        // `oris_purge` first; purging here anyway lets the test assert that everything
+        // was reclaimable (`oris_allocated` reaches 0) before the handle goes away.
         // SAFETY: `handle` is live.
         unsafe { oris_purge(handle) };
         // SAFETY: `handle` is live.

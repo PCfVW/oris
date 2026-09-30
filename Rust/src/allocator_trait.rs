@@ -174,8 +174,8 @@ mod tests {
     // `cargo test` still reaches the real `VirtualAlloc`/`mmap`. That is what lets
     // these tests run under the soundness gate at all — before v0.1.1 they were all
     // `#[cfg_attr(miri, ignore)]`. Each therefore ends by returning its pages with
-    // `purge()`: the allocator holds them until asked (matching HPHA), which the
-    // stand-in correctly reports to Miri as still-live memory.
+    // `purge()`, which asserts `allocated() == 0` explicitly. (`Drop` also releases idle
+    // pages now, so Miri's leak check no longer *depends* on it, but the assertion does.)
     // `Layout::size() == 0` is exercised separately below without touching the OS at
     // all, since `allocate`'s own zero-size branch never calls into `Orisnik`.
 

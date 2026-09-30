@@ -5,8 +5,8 @@
 //! Ports the single-threaded slice of `allocator`'s public surface, mirroring
 //! `orisnik`'s `orisnik.rs` — `MULTITHREADED` (mutex-guarded buckets/tree) is out
 //! of scope until v2.x, see `ROADMAP.md`. `DEBUG_ALLOCATOR` (guard bytes,
-//! allocation records, `check()`/`report()`) is v0.2.0's own milestone, landing
-//! incrementally behind `config.debug` (`guard.zig`, `spomen_guard.zig`,
+//! allocation records, `check()`/`report()`) is implemented behind `config.debug`
+//! (`guard.zig`, `spomen_guard.zig`,
 //! `spomen_poison.zig`, `spomen_record.zig`/`spomen_book.zig`/`spomen_store.zig`,
 //! `spomen_failure.zig`). The `tree*`/`bucket*` methods below are pure size-class
 //! shims (they only fold the guard reservation in and out); the debug *hooks*
@@ -1334,8 +1334,9 @@ pub fn Orisnitsa(comptime config: Config) type {
         }
 
         /// Returns every fully-unused page/arena to the OS. Never called
-        /// automatically — call periodically if reclaiming idle memory matters.
-        /// Ports `allocator::purge`.
+        /// automatically, except that `deinit` does the equivalent (see `deinit`) —
+        /// call periodically if reclaiming idle memory matters. Ports
+        /// `allocator::purge`.
         pub fn purge(self: *Self) void {
             self.debugAssertNotMoved();
             self.tree.purge();

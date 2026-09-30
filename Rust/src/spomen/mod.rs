@@ -10,11 +10,11 @@
 //! build without the feature links none of it. See `Rust/CONVENTIONS.md`'s
 //! `debug_assert!` Invariants section and `ROADMAP.md`'s v0.2.0 milestone.
 //!
-//! Already landed: guard-byte writing/checking ([`guard`]) and payload poisoning
+//! Contents: guard-byte writing/checking ([`guard`]) and payload poisoning
 //! ([`poison`]); the allocation-record store ([`record`], [`book`], [`store`]:
 //! per-allocation records with callstack capture, indexed by address); and the hooks that
 //! wire them into the allocator (`orisnik_debug.rs`), with fail-fast reporting of
-//! detected corruption ([`failure`]); and, last, the diagnostics: [`error`]'s `OrisError`, the
+//! detected corruption ([`failure`]); and the diagnostics: [`error`]'s `OrisError`, the
 //! public `Orisnik::check`/`report`/`write_report`, and leak detection on `Drop`
 //! (`orisnik_debug.rs`). This completes v0.2.0's debug allocator.
 

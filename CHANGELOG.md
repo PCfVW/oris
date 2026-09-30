@@ -43,6 +43,11 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
   address. `orisnitsa` has no aliasing model
   to satisfy: its `deinit` simply calls `purge`.
 
+  A deliberate divergence from HPHA's destructor: it `assert`s the heap empty in *any*
+  assert-enabled build, whereas the ports check for leaks only under the debug allocator
+  (and there always, not as a compiled-out `assert`); without it, dropping is silent, as it
+  was. The report also goes to stderr, where HPHA `printf`s to stdout.
+
   Two consequences worth stating. After a corruption has been *detected* the hooks are off and
   records may be stale (a caller who caught the panic can free the block, which then no longer
   retires its record), so `check()` refuses with an error rather than read freed memory; and
@@ -90,7 +95,7 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
   Three things in `orisnik` that `orisnitsa` does not need. (1) *Re-entrancy:* a `busy` flag
   makes nested allocator calls made while a hook runs skip the hooks. No hook allocates
   from its own instance today, so this is an enforced invariant, tested directly, that the
-  coming `report()` (which formats strings while iterating the store) will rely on.
+  `report()`/`write_report` (Phase 5), which format strings while iterating the store, rely on.
   (2) *`#[global_allocator]`:* std's backtrace lock is process-wide and non-reentrant, and
   std allocates while holding it, so an allocator that captures a backtrace inside `alloc`
   **deadlocks** against application code that is itself capturing one (a panic hook with
@@ -143,7 +148,8 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
   capture allocates and takes std's non-reentrant backtrace lock; Phase 4 resolved that by
   recording no callstack for an `Orisnik` used through `GlobalAlloc` (see the Phase 4 entry
   above); the store already captures before it mutates any state. Symbol resolution is
-  deferred to `report()`. Miri supports both the capture and symbol
+  left to display time (`orisnik`'s `report()` prints the `Backtrace`, which resolves symbols
+  when formatted; `orisnitsa`'s prints raw return addresses). Miri supports both the capture and symbol
   resolution (the latter only when run with `-Zmiri-isolation-error=warn`, because std
   asks for the current directory first): one test drives real, heap-owning backtraces
   through swap-remove, replace, update and drop under Miri, and the name-checking test
@@ -153,7 +159,7 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
   free-slot `RecordPage`. Found by Miri while building it: `Drop::drop(&mut self)`
   must not unlink intrusive-list nodes (a foreign write to a protected tag under Tree
   Borrows); `RecordBook::drop` releases its pages without unlinking, and
-  `list.rs`'s module doc now records the rule for the `Drop for Orisnik` still to come.
+  `list.rs`'s module doc now records the rule that `Drop for Orisnik` applies (Phase 5).
 - **Payload poisoning (v0.2.0, Phase 2 — completes this phase).** Behind
   `debug-allocator`/`config.debug`: fresh allocations and freed blocks both get
   filled with a repeating `{0xFF, 0xC0, 0xC0, 0xFF}` pattern (a quiet-NaN bit
@@ -253,7 +259,7 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
   (`-Zmiri-strict-provenance -Zmiri-tree-borrows`) on the Rust side. The bucket
   path followed in this phase's later commits, and the allocation records, callstack
   capture and dispatch hooks in Phases 3 and 4; leak detection and `check()`/`report()`
-  remain.
+  followed in Phase 5.
 - **The `debug-allocator` / `spomen` toggle scaffolding (v0.2.0, Phase 1).**
   Behavior-inert groundwork for porting HPHA's `DEBUG_ALLOCATOR` mode: `orisnik`
   gains a `debug-allocator` Cargo feature (same shape as the existing `nightly`)

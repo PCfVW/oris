@@ -4,15 +4,14 @@
 //! detection, and the `check()`/`report()` diagnostics (see
 //! `Zig/CONVENTIONS.md`'s "The `spomen` Debug Subsystem" section). This module
 //! itself defines only `Config`, the `comptime` toggle `Orisnitsa`/`Buckets`/
-//! `Tree` are generic over. The instrumentation lives in sibling files, landing
-//! incrementally across v0.2.0: guard bytes (`guard.zig`, `spomen_guard.zig`) and
+//! `Tree` are generic over. The instrumentation lives in sibling files: guard bytes (`guard.zig`, `spomen_guard.zig`) and
 //! payload poisoning (`spomen_poison.zig`) are implemented, as is allocation-record
 //! storage (`spomen_record.zig`, `spomen_book.zig`, `spomen_store.zig`, including
 //! raw callstack capture), wired into `Orisnitsa`'s dispatch through the
 //! `debug*` hooks (`orisnitsa.zig`), with corruption reported by
 //! `spomen_failure.zig`. `Orisnitsa.check()`, `report()` and leak detection at
-//! `deinit()` are implemented too. Still to come: resolving callstack addresses to
-//! symbols (`report()` prints raw return addresses).
+//! `deinit()` are implemented too. Not implemented: resolving callstack addresses to
+//! symbols (`report()` prints raw return addresses; feed them to `addr2line`).
 
 /// The `comptime` configuration `Orisnitsa`/`Buckets`/`Tree` are generic type
 /// constructors over — `Orisnitsa(config)`, not a plain `Orisnitsa` value with a

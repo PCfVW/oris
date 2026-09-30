@@ -25,8 +25,9 @@ this. Treat such changes as touching that gate.
 
 The invariant covers the allocator's own state. Debug-only diagnostic storage (the record-book
 pages, callstack contents) is outside it: record size and page capacity differ between the
-ports, and a Rust instance used through `GlobalAlloc` records no callstack. See `ROADMAP.md`'s
-scope note.
+ports, and a Rust instance used through `GlobalAlloc` records no callstack. Rotation counts across
+`Drop`/`deinit` are not comparable either (`orisnik` releases memory by read-only walks, `orisnitsa`
+calls `purge`): compare state before teardown. See `ROADMAP.md`'s scope note.
 
 ## License header
 

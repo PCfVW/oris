@@ -16,15 +16,15 @@ Oris is a two-port monorepo; each port builds independently with its own toolcha
   are all stable.
 - **`--features debug-allocator`** enables `spomen`, the port of HPHA's
   `DEBUG_ALLOCATOR` mode (guard bytes, allocation-record tracking, leak detection,
-  `check()`/`report()`) landing across v0.2.0 (`ROADMAP.md`) — stable, no nightly
-  needed. Guard bytes, payload poisoning, allocation records (with callstack capture) and
+  `check()`/`report()`), implemented on `main` for the unreleased v0.2.0 (`ROADMAP.md`; not in
+  0.1.x) — stable, no nightly needed. Guard bytes, payload poisoning, allocation records (with callstack capture) and
   the hooks that use them are implemented: a guard overrun, a double free, a foreign
   pointer or a wrong sized-free size now **panics** with a diagnostic naming the block and
   where it was allocated. `Orisnik::check()` audits every live block on request
   (`Result<(), OrisError>`), `report()` prints the live blocks to stderr, and dropping an
   instance that still has live allocations is a **leak**: it is reported, the idle memory is
-  released, and it panics. Installed as a `#[global_allocator]`, build with `panic = "abort"`, and note that
-  such an instance records no callstacks (see `Rust/CONVENTIONS.md`). Build and test it
+  released, and it panics. Installed as a `#[global_allocator]`, build with
+  `panic = "abort"`, and note that such an instance records no callstacks (see `Rust/CONVENTIONS.md`). Build and test it
   with
   `cargo test --features debug-allocator` (Miri:
   `MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows" cargo +nightly miri test
@@ -54,7 +54,8 @@ orisnik = "0.1"
   `std.mem.Allocator` vtable shape is version-sensitive while Zig is pre-1.0, so the
   pin is load-bearing.
 - **`Orisnitsa(.{ .debug = true })`** is the Zig analog of `orisnik`'s
-  `debug-allocator` feature — `spomen`, landing across v0.2.0 (`ROADMAP.md`). No
+  `debug-allocator` feature — `spomen`, implemented on `main` for the unreleased v0.2.0
+  (`ROADMAP.md`). No
   `zig build` flag needed; the default `orisnitsa.Orisnitsa` export stays the
   non-debug `Orisnitsa(.{})`. Same status as the Rust side above: guard bytes and
   payload poisoning, allocation records, the hooks that use them, `check()`/`report()` and

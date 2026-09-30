@@ -510,7 +510,7 @@ impl Orisnik {
     ///
     /// - It writes into `self` (the `busy` flag) **before** reading anything else: a write
     ///   *after* a foreign read of a protected tag is undefined.
-    /// - It walks the record **book** (a plain array of pages, in allocation order), never
+    /// - It walks the record **book** (a plain array of pages, in storage order), never
     ///   the record tree: the tree's leaves point at its sentinel, and reading the sentinel
     ///   through those stored pointers — foreign to the retagged `Box` an `oris_destroy`ed
     ///   instance lives in — makes the box's deallocation undefined. The order of the leak

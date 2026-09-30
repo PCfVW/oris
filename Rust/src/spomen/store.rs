@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! The allocation-record map: every live allocation's [`Record`], indexed by address.
 //! Ports `Cpp/hpha.h`'s `debug_record_map` (`add`, `remove`, `replace`, `update`, plus
-//! the lookup its `check`/`find` use).
+//! the lookup its `check`/`find` use), and adds the walks `check()`/`report()` and the
+//! drop-time leak audit need: `first`/`next` (address order) and `for_each_live` (storage
+//! order, which never touches the address index).
 //!
 //! Records live densely in a [`RecordBook`] and are indexed by an
 //! [`IntrusiveMultiRbTree`] keyed on the payload address, exactly as in HPHA ("a

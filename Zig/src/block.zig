@@ -9,7 +9,7 @@
 //! stored — HPHA keeps no separate "next block" pointer). `FreeNode`/`SmallFreeNode`
 //! are placed at a block's `mem()` only while it is free, reusing its own payload as
 //! the red-black tree / list bookkeeping storage for that block — zero overhead over
-//! the block simply being free. `tree.zig` (Phase 5) owns the multi-block operations
+//! the block simply being free. `tree.zig` owns the multi-block operations
 //! (`splitBlock`/`shiftBlock`/`coalesceBlock`, `tree*`); this module owns a single
 //! block's own layout and physical-neighbour chain.
 //!
@@ -58,7 +58,7 @@ const SIZE_MASK: usize = ~@as(usize, 0b11);
 /// # Invariants
 /// - `size()` is always a multiple of 4 (in practice always a multiple of
 ///   `@sizeOf(BlockHeader)`, since every block boundary is block-header-aligned —
-///   `tree.zig`, Phase 5, always rounds requested sizes up to a multiple of
+///   `tree.zig` always rounds requested sizes up to a multiple of
 ///   `@sizeOf(BlockHeader)` before installing them, mirroring HPHA's own
 ///   `tree_alloc`'s `round_up(size, sizeof(block_header))`; every `// ALIGN:`
 ///   comment below on a `*BlockHeader` cast relies on this caller contract, not on

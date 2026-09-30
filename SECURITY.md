@@ -30,7 +30,7 @@ because they live in the opt-in debug subsystem (`spomen`: a Rust feature and a 
 | **CWE-415** | Double free | Allocation-record tracking flags a free of an already-free block | **debug only** |
 | **CWE-590** | Free of a pointer not owned by this allocator | Ownership / record check on free | **debug only** |
 | **CWE-416** | Use after free | Debug poisoning surfaces reuse-after-free; Miri catches it in tests | **debug only** + CI |
-| **CWE-401** | Memory leak | Leak detection on allocator drop / `deinit`; `std.testing.allocator` (Zig) and Miri (Rust) enforce it in CI | **debug only** + CI |
+| **CWE-401** | Memory leak | Leak detection on allocator drop / `deinit`; `std.testing.allocator` (Zig) enforces it in CI; for Rust, Miri's leak check and the local release gauntlet | **debug only** + CI |
 
 ### The one exception to "OOM is a value, never a panic"
 
@@ -41,7 +41,11 @@ alignment, so a violated assumption here would not fail — it would silently co
 heap from that point on. Aborting is the safer outcome, and the condition is one no
 supported platform can produce (Windows' allocation granularity *is* 64 KiB; the Unix
 path trims its own mapping to alignment before returning). Every *other* failure on
-every path, allocation failure included, is a value. (The one further exception is the opt-in debug subsystem, which fails fast: with `debug-allocator` / `Orisnitsa(.{ .debug = true })`, *detected heap corruption* — a guard overrun, a double free, a foreign pointer or a wrong sized free — panics; a Rust instance installed as the global allocator must then be built with `panic = "abort"`.)
+every path, allocation failure included, is a value. (The one further exception is the opt-in debug subsystem, which fails fast: with
+`debug-allocator` / `Orisnitsa(.{ .debug = true })`, *detected heap corruption* — a guard overrun, a
+double free, a foreign pointer or a wrong sized free — and *a leak at drop / `deinit`* panic; a Rust
+instance installed as the global allocator must then be built with `panic = "abort"`, and
+`oris_destroy` under `debug-allocator` aborts on a leak.)
 
 "Debug only" means the check ships in the debug subsystem and is **eliminated from
 release builds** (Rust: the `debug-allocator` feature off; Zig: the `comptime` debug

@@ -1003,7 +1003,8 @@ impl Orisnik {
         unsafe { self.free(Some(ptr)) };
     }
 
-    /// Returns every fully-unused page/arena to the OS. Never called automatically (except that dropping the allocator does the equivalent, see [`Drop`]) —
+    /// Returns every fully-unused page/arena to the OS. Never called automatically, except
+    /// that dropping the allocator does the equivalent (see the type's `# Dropping` section) —
     /// call periodically if reclaiming idle memory matters. Ports `allocator::purge`.
     pub fn purge(&self) {
         self.debug_assert_not_moved();
@@ -1121,8 +1122,8 @@ mod tests {
     // `cargo test` still reaches the real `VirtualAlloc`/`mmap`. That is what lets
     // these tests run under the soundness gate at all — before v0.1.1 they were all
     // `#[cfg_attr(miri, ignore)]`. Each therefore ends by returning its pages with
-    // `purge()`: the allocator holds them until asked (matching HPHA), which the
-    // stand-in correctly reports to Miri as still-live memory.
+    // `purge()`, which asserts `allocated() == 0` explicitly. (`Drop` also releases idle
+    // pages now, so Miri's leak check no longer *depends* on it, but the assertion does.)
 
     #[test]
     fn alloc_zero_returns_none() {
@@ -1639,8 +1640,8 @@ mod tests {
         unsafe { ptr.as_ptr().write_bytes(0x5A, old) };
         // SAFETY: `ptr` is a live bucket-path allocation `orisnik` produced, already
         // aligned to `alignment`.
-        let moved =
-            unsafe { orisnik.realloc_aligned(Some(ptr), new, alignment) }.expect("OS map failed");
+        let realloced = unsafe { orisnik.realloc_aligned(Some(ptr), new, alignment) };
+        let moved = realloced.expect("OS map failed");
         // SAFETY: `moved` is a live tree-path allocation of exactly `new` bytes.
         let ramp_intact = unsafe { crate::spomen::guard::check_guard(moved, new) };
         assert!(

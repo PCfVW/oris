@@ -20,8 +20,9 @@
 //! backtrace lock is process-wide and non-reentrant, and capturing inside an allocator
 //! deadlocks against application code that is itself capturing one), and detected
 //! corruption panics — so build the program with `panic = "abort"`, since unwinding out of
-//! a global allocator is undefined behaviour. See `Rust/CONVENTIONS.md`, the `spomen`
-//! hooks paragraph.
+//! a global allocator is undefined behaviour. A `static` allocator is never dropped, so
+//! leak detection at `Drop` never runs for it: call `check()`/`report()` yourself. See
+//! `Rust/CONVENTIONS.md`, the `spomen` hooks paragraph.
 
 use crate::block::DEFAULT_ALIGNMENT;
 use crate::orisnik::Orisnik;

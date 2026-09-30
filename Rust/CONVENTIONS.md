@@ -166,7 +166,7 @@ comment at a call site is the *discharge* of that contract.
 ### `# Errors` Doc Section
 
 Public fallible methods that genuinely return `Result<T>` (configuration, the debug
-`check()`/`report()` paths) include an `# Errors` section. Each bullet: `Returns`
+`check()`/`write_report` paths) include an `# Errors` section. Each bullet: `Returns`
 + `` [`OrisError::Variant`] `` + `if`/`on`/`when`. The hot allocation path does **not** use
 `Result` — see [Allocation outcomes, not `Result`](#allocation-outcomes-not-result).
 
@@ -425,9 +425,11 @@ Two consequences for new tests:
   prohibitive, and then scale the workload instead where you can (see
   `randomized_alloc_free_stress_matches_the_hpha_benchmark_shape`, which runs a reduced `N`
   under Miri rather than skipping).
-- **End an allocating test with `purge()`.** The allocator holds pages until asked, matching
-  HPHA — which the stand-in correctly reports to Miri as still-live memory, i.e. a leak. Calling
-  `purge()` is both what a well-behaved embedder does and a stronger assertion than omitting it.
+- **End an allocating test with `purge()` where the point is to prove reclamation.** Dropping the
+  allocator returns idle pages too (v0.2.0), so Miri's leak check no longer *depends* on `purge()`;
+  but `purge()` followed by `assert_eq!(allocated(), 0)` remains the stronger assertion, and it is
+  what a well-behaved embedder does. A test that deliberately leaves a block live must release that
+  page by hand (see `release_leaked_bucket_page`).
 
 `os::test_vm` also carries the out-of-memory injector (`fail_map_after`) that covers every
 `None` return on the `system_alloc` path; those tests are Miri-covered too, since a refused map
@@ -493,7 +495,7 @@ Out-of-memory is a **value**, not an exception:
   `core::alloc::Allocator::allocate`'s `Result<_, AllocError>` shape (where `AllocError` is a
   zero-data marker).
 - `OrisError` and `# Errors` apply **only** to the off-hot-path surfaces: configuration, and
-  the `debug-allocator` feature's `check()` / `report()` diagnostics. Those follow the
+  the `debug-allocator` feature's `check()` / `write_report` diagnostics. Those follow the
   house error-wording rules below.
 
 ### Error Message Wording (diagnostic paths only)
@@ -514,6 +516,11 @@ Lowercase, no trailing period, include the offending value, wrap externals with 
 > Given an identical allocation/deallocation sequence at the public API level, `orisnik` and
 > `orisnitsa` produce **identical internal state transitions** — same bucket-page spawns, same
 > tree-rotation count, same coalescing operations, same final RSS.
+
+(Scope: the allocator's own state, compared *before* teardown. Debug-only diagnostic storage —
+record-book pages, callstack contents — is outside it, and so are rotation counts across `Drop` /
+`deinit`: `orisnik` releases memory by read-only walks, `orisnitsa` calls `purge`; only the final result,
+every idle page released, is common. See the roadmap's scope note.)
 
 This constrains how Rust code is written, not just what it computes:
 

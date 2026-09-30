@@ -274,10 +274,9 @@ int main() {
 
 	benchmark1(h);
 
-	// Not part of Lazarov's original — added because oris_destroy()'s own doc
-	// prescribes purging first to reclaim outstanding OS pages, and because it
-	// turns "did the process survive" into one further, cheap, concrete check:
-	// every one of the 512 Ki allocations driven above must be reclaimable.
+	// Not part of Lazarov's original — added because it turns "did the process
+	// survive" into one further, cheap, concrete check: every one of the 512 Ki
+	// allocations driven above must be reclaimable by oris_purge().
 	oris_purge(h);
 	printf("\nallocated after purge: %zu (expected 0)\n", oris_allocated(h));
 	assert(oris_allocated(h) == 0);

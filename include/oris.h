@@ -38,8 +38,9 @@ OrisAllocator *oris_new(void);
 /* Destroys an allocator instance created by oris_new(). handle == NULL is a
  * no-op. Destroying the instance returns every fully-idle OS page/arena to the
  * OS (no oris_purge() is needed first); a page that still holds a live
- * allocation is left mapped, since that allocation was leaked. handle must not
- * be used again after this call. */
+ * allocation is left mapped, since that allocation was leaked. (A Rust build with
+ * the debug-allocator feature instead reports each leak and aborts the process.)
+ * handle must not be used again after this call. */
 void oris_destroy(OrisAllocator *handle);
 
 /* Allocates size bytes at the allocator's default alignment. size == 0

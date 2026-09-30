@@ -336,8 +336,10 @@ Rust port's annotation on the same loop.
 > `orisnitsa` produce **identical internal state transitions** — same bucket-page spawns, same
 > tree-rotation count, same coalescing operations, same final RSS.
 >
-> (Scope: the allocator's own state. Debug-only diagnostic storage — record-book pages, callstack
-> contents — is outside it; see the roadmap's scope note.)
+> (Scope: the allocator's own state, compared *before* teardown. Debug-only diagnostic storage —
+> record-book pages, callstack contents — is outside it, and so are rotation counts across `Drop` /
+> `deinit`: `orisnik` releases memory by read-only walks, `orisnitsa` calls `purge`; only the final
+> result, every idle page released, is common. See the roadmap's scope note.)
 
 This constrains how Zig code is written, not just what it computes:
 
@@ -466,7 +468,8 @@ map over an `IntrusiveMultiRbTree`) — are the exception to "only reachable ins
   captures on the dispatch path: it takes a prebuilt `Record` (`addRecord`, `replace(ptr, fresh)`)
   or a prebuilt callstack (`update`), which `orisnitsa.zig` builds with `Record.initAt` /
   `Record.captureCallstack` from the *public method's own* `@returnAddress()`, so a trace starts at
-  the caller of `alloc`/`realloc`/`resize`. Symbol resolution is deferred to `report()`.
+  the caller of `alloc`/`realloc`/`resize`. Symbol resolution is not done: `report()` prints raw return
+  addresses (feed them to `addr2line`).
 
 **The hooks** (`debugAdd`, `debugRemove`, `debugReplace`, `debugUpdate`, `debugCheck`, `debugPurge`
 — HPHA's `debug_*`) live in `orisnitsa.zig`, are called only inside `if (config.debug)` at exactly
@@ -506,8 +509,9 @@ shims. Contracts to keep:
   without `config.debug`. Pages that still hold a live block stay mapped. With `config.debug`, live
   blocks at `deinit` are a **leak**, in this order: (1) if `records.len() > 0`, print to stderr a
   summary line, the first problem the audit finds, and the report — head, one line per live record,
-  foot — before the record store is released, mirroring HPHA's check-then-report (this is not about
-  readability: `purge` never frees a page that holds a live block). Unlike the public `check`
+  foot — before the record store is released, mirroring HPHA's check-then-report (the records must outlive
+  the audit; `purge` never frees a page that holds a live block, so the order relative to `purge` is
+  otherwise immaterial). Unlike the public `check`
   (**address** order), this audit and listing walk **storage** order (`RecordStore.forEachLive`: the
   order the records sit in the book, which a removal from the middle perturbs), so the "first
   problem" is the first in storage order and the two ports list leaked blocks alike; (2)
@@ -563,8 +567,8 @@ Per the roadmap, `orisnitsa` exposes three layers over one core:
    sound only for blocks this instance produced.
 3. **An `Orisnitsa` owning type** (орисница — the allocator, feminine twin) that holds the
    governed address space (`stopanstvo`, стопанство — "the heap as a whole") and exposes
-   `.allocator()` to hand out the vtable, plus `deinit()` for teardown and leak reporting under
-   the [debug subsystem](#comptime-toggles). Its sub-allocators (`bucket`, `tree`) are
+   `.allocator()` to hand out the vtable, plus `deinit()`, which returns the idle memory in every build
+   and, under the [debug subsystem](#comptime-toggles), audits and reports leaks. Its sub-allocators (`bucket`, `tree`) are
    collectively the *orisnitsi*.
 
 Pin the targeted Zig version in `build.zig.zon` and `INSTALL.md` — target **Zig 0.16.0**

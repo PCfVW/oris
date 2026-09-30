@@ -9,7 +9,7 @@
 //! separate "next block" pointer). `FreeNode`/`SmallFreeNode` are placed at
 //! `BlockHeader::mem()` only while a block is free, reusing its own payload as the
 //! red-black tree / list bookkeeping storage for that block — zero overhead over the
-//! block being free at all. `tree.rs` (Phase 5) owns the multi-block operations
+//! block being free at all. `tree.rs` owns the multi-block operations
 //! (`split_block`/`shift_block`/`coalesce_block`, `tree_*`); this module owns a single
 //! block's own layout and physical-neighbour chain.
 //!
@@ -49,7 +49,7 @@ const SIZE_MASK: usize = !0b11;
 // cast in this module (`next`, `ptr_get_block_header`, `FreeNode::get_block`) needs
 // the *stronger* guarantee that block boundaries are 8-byte (`DEFAULT_ALIGNMENT`)
 // aligned. That stronger guarantee is a caller contract, not something this module
-// enforces itself: `tree.rs` (Phase 5) always rounds requested sizes up to a multiple
+// enforces itself: `tree.rs` always rounds requested sizes up to a multiple
 // of `size_of::<BlockHeader>()` (16 bytes) before installing them — mirroring HPHA's
 // own `tree_alloc`'s `round_up(size, sizeof(block_header))` — so every block's `size`
 // is in practice always a multiple of 16, hence of `DEFAULT_ALIGNMENT` (8). Every
