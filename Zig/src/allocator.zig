@@ -36,124 +36,132 @@ const std = @import("std");
 const block = @import("block.zig");
 const orisnitsa = @import("orisnitsa.zig");
 
-/// The concrete, default (non-debug) instantiation `root.zig` exports as
-/// `Orisnitsa` — `allocator()` hands out a `std.mem.Allocator` for exactly this
-/// one, matching `capi.zig`'s identical choice. See `spomen.zig`'s `Config`.
-const Orisnitsa = orisnitsa.Orisnitsa(.{});
+/// The default (non-debug) instantiation `root.zig` exports as `Orisnitsa` — what this
+/// file's own tests use. `allocator()` itself accepts a pointer to *any* instantiation
+/// (`root.zig`'s `OrisnitsaWith(config)`), the debug one included. See `spomen.zig`'s `Config`.
+const Default = orisnitsa.Orisnitsa(.{});
 
 /// Hands out a `std.mem.Allocator` backed by `self`. Not a method on `Orisnitsa`
 /// itself (which would need this file to import `orisnitsa.zig` and be imported
 /// back by it) — kept as a free function here so the dependency stays one-way:
 /// `allocator.zig` depends on `orisnitsa.zig`, never the reverse.
-pub fn allocator(self: *Orisnitsa) std.mem.Allocator {
-    return .{ .ptr = self, .vtable = &vtable };
+///
+/// `self` is a pointer to any `Orisnitsa(config)` instantiation; the vtable is generated per
+/// instantiation, so a debug instance (`OrisnitsaWith(.{ .debug = true })`) can be handed out
+/// the same way as the default one.
+pub fn allocator(self: anytype) std.mem.Allocator {
+    const O = @typeInfo(@TypeOf(self)).pointer.child;
+    return .{ .ptr = self, .vtable = &Impl(O).vtable };
 }
 
-/// The single vtable every `allocator()`-returned `std.mem.Allocator` shares —
-/// stateless (all state lives in the `.ptr` each call carries), so one instance
-/// serves every `Orisnitsa`.
-const vtable = std.mem.Allocator.VTable{
-    .alloc = allocImpl,
-    .resize = resizeImpl,
-    .remap = remapImpl,
-    .free = freeImpl,
-};
+fn Impl(comptime O: type) type {
+    return struct {
+        /// The vtable every `allocator()`-returned `std.mem.Allocator` for one `Orisnitsa`
+        /// instantiation `O` shares — stateless (all state lives in the `.ptr` each call carries).
+        const vtable = std.mem.Allocator.VTable{
+            .alloc = allocImpl,
+            .resize = resizeImpl,
+            .remap = remapImpl,
+            .free = freeImpl,
+        };
 
-/// `VTable.alloc` — see the module doc.
-fn allocImpl(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
-    // Ignored: under `config.debug` the recorded callstack starts inside this shim (see
-    // `orisnitsa.zig`'s "Callstack frame" note); threading `ret_addr` through to the hooks is
-    // a possible refinement.
-    _ = ret_addr;
-    // SAFETY: `ctx` is the `.ptr` field of a `std.mem.Allocator` built only by
-    // `allocator()` above from a live `*Orisnitsa`, and this vtable is reachable
-    // only through such an `Allocator`, so the erased pointee really is a live
-    // `Orisnitsa`; the caller keeps that instance alive and unmoved (`Orisnitsa`'s
-    // address-stability contract), and the single-threaded contract rules out
-    // concurrent access.
-    // ALIGN: `ctx` is always exactly the `*Orisnitsa` `allocator()` stored as
-    // `.ptr` — a live, `@alignOf(Orisnitsa)`-aligned value before it was
-    // type-erased to `*anyopaque`; `@alignCast` only re-establishes what the
-    // type system lost, not a new guarantee.
-    const self: *Orisnitsa = @ptrCast(@alignCast(ctx));
-    const align_bytes = alignment.toByteUnits();
-    if (align_bytes <= block.DEFAULT_ALIGNMENT) {
-        return self.alloc(len);
-    }
-    return self.allocAligned(len, align_bytes);
-}
+        /// `VTable.alloc` — see the module doc.
+        fn allocImpl(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+            // Ignored: under `config.debug` the recorded callstack starts inside this shim (see
+            // `orisnitsa.zig`'s "Callstack frame" note); threading `ret_addr` through to the hooks is
+            // a possible refinement.
+            _ = ret_addr;
+            // SAFETY: `ctx` is the `.ptr` field of a `std.mem.Allocator` built only by
+            // `allocator()` above from a live `*O`, and this vtable is reachable
+            // only through such an `Allocator`, so the erased pointee really is a live
+            // `Orisnitsa`; the caller keeps that instance alive and unmoved (`Orisnitsa`'s
+            // address-stability contract), and the single-threaded contract rules out
+            // concurrent access.
+            // ALIGN: `ctx` is always exactly the `*O` `allocator()` stored as
+            // `.ptr` — a live, `@alignOf(Orisnitsa)`-aligned value before it was
+            // type-erased to `*anyopaque`; `@alignCast` only re-establishes what the
+            // type system lost, not a new guarantee.
+            const self: *O = @ptrCast(@alignCast(ctx));
+            const align_bytes = alignment.toByteUnits();
+            if (align_bytes <= block.DEFAULT_ALIGNMENT) {
+                return self.alloc(len);
+            }
+            return self.allocAligned(len, align_bytes);
+        }
 
-/// `VTable.resize` — see the module doc's "`resize` vs `remap`" section.
-fn resizeImpl(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
-    // `Orisnitsa.resize` needs no alignment: it only ever grows/shrinks a block
-    // already installed at its own (already-aligned) address, never
-    // re-deriving alignment from scratch — matching HPHA's own `tree_resize`/
-    // bucket `elemSize` query, neither of which takes an alignment parameter.
-    _ = alignment;
-    _ = ret_addr;
-    // SAFETY: `ctx` is a live `*Orisnitsa` from `allocator()`, as in `allocImpl`.
-    // ALIGN: see `allocImpl`'s identical cast for why this is sound.
-    const self: *Orisnitsa = @ptrCast(@alignCast(ctx));
-    // `Orisnitsa.resize` asserts `size > 0` (as HPHA's own `resize` does), and a
-    // zero-length resize has no meaningful in-place answer anyway: reporting "no"
-    // leaves `memory` untouched and owned by the caller, which is exactly what
-    // `false` means here. Never forwarded, so the assert is unreachable from this
-    // vtable rather than merely usually-unreached.
-    if (new_len == 0) return false;
-    const actual = self.resize(memory.ptr, new_len);
-    return actual >= new_len;
-}
+        /// `VTable.resize` — see the module doc's "`resize` vs `remap`" section.
+        fn resizeImpl(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+            // `Orisnitsa.resize` needs no alignment: it only ever grows/shrinks a block
+            // already installed at its own (already-aligned) address, never
+            // re-deriving alignment from scratch — matching HPHA's own `tree_resize`/
+            // bucket `elemSize` query, neither of which takes an alignment parameter.
+            _ = alignment;
+            _ = ret_addr;
+            // SAFETY: `ctx` is a live `*O` from `allocator()`, as in `allocImpl`.
+            // ALIGN: see `allocImpl`'s identical cast for why this is sound.
+            const self: *O = @ptrCast(@alignCast(ctx));
+            // `Orisnitsa.resize` asserts `size > 0` (as HPHA's own `resize` does), and a
+            // zero-length resize has no meaningful in-place answer anyway: reporting "no"
+            // leaves `memory` untouched and owned by the caller, which is exactly what
+            // `false` means here. Never forwarded, so the assert is unreachable from this
+            // vtable rather than merely usually-unreached.
+            if (new_len == 0) return false;
+            const actual = self.resize(memory.ptr, new_len);
+            return actual >= new_len;
+        }
 
-/// `VTable.remap` — see the module doc's "`resize` vs `remap`" section.
-fn remapImpl(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
-    _ = ret_addr;
-    // SAFETY: `ctx` is a live `*Orisnitsa` from `allocator()`, as in `allocImpl`.
-    // ALIGN: see `allocImpl`'s identical cast for why this is sound.
-    const self: *Orisnitsa = @ptrCast(@alignCast(ctx));
-    if (new_len == 0) {
-        // `Orisnitsa.realloc(ptr, 0)` *frees* and returns null — but `null` out of
-        // `remap` means "no advantage over you doing alloc+copy+free yourself",
-        // i.e. the caller is explicitly told it still owns `memory`. Forwarding
-        // would hand back that answer about a block already on a free list, and the
-        // caller's own later `free` would be a double free. Declining without
-        // touching `memory` reports the same "no" honestly.
-        return null;
-    }
-    const align_bytes = alignment.toByteUnits();
-    if (align_bytes <= block.DEFAULT_ALIGNMENT) {
-        return self.realloc(memory.ptr, new_len);
-    }
-    return self.reallocAligned(memory.ptr, new_len, align_bytes);
-}
+        /// `VTable.remap` — see the module doc's "`resize` vs `remap`" section.
+        fn remapImpl(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+            _ = ret_addr;
+            // SAFETY: `ctx` is a live `*O` from `allocator()`, as in `allocImpl`.
+            // ALIGN: see `allocImpl`'s identical cast for why this is sound.
+            const self: *O = @ptrCast(@alignCast(ctx));
+            if (new_len == 0) {
+                // `Orisnitsa.realloc(ptr, 0)` *frees* and returns null — but `null` out of
+                // `remap` means "no advantage over you doing alloc+copy+free yourself",
+                // i.e. the caller is explicitly told it still owns `memory`. Forwarding
+                // would hand back that answer about a block already on a free list, and the
+                // caller's own later `free` would be a double free. Declining without
+                // touching `memory` reports the same "no" honestly.
+                return null;
+            }
+            const align_bytes = alignment.toByteUnits();
+            if (align_bytes <= block.DEFAULT_ALIGNMENT) {
+                return self.realloc(memory.ptr, new_len);
+            }
+            return self.reallocAligned(memory.ptr, new_len, align_bytes);
+        }
 
-/// `VTable.free`.
-fn freeImpl(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
-    // Deliberately routes through `Orisnitsa.free` (the page-marker/block-header
-    // dispatch), not the `freeWithSize*` shortcuts: those require `orig_size` to
-    // be the pointer's *original* allocation size, an invariant this vtable's
-    // own contract does not provide — `memory.len` here only matches the
-    // block's *current* size, which can differ after a `resize`/`remap` (a
-    // large-then-shrunk block stays tree-allocated even once its current size
-    // would fit a bucket, and `freeWithSize` has no way to tell the two cases
-    // apart from size alone). `free`'s pointer-based dispatch is correct
-    // regardless of any resize/remap history — mirrors `orisnik`'s own
-    // `global_alloc.rs`/`allocator_trait.rs`, both of which make the identical
-    // choice for the identical reason.
-    _ = alignment;
-    _ = ret_addr;
-    // SAFETY: `ctx` is a live `*Orisnitsa` from `allocator()`, as in `allocImpl`.
-    // ALIGN: see `allocImpl`'s identical cast for why this is sound.
-    const self: *Orisnitsa = @ptrCast(@alignCast(ctx));
-    // SAFETY: `memory` was returned by this vtable's `alloc`/`remap` (the
-    // `std.mem.Allocator.free` contract), so `memory.ptr` is a still-live
-    // allocation this instance produced, which is what `Orisnitsa.free` requires.
-    self.free(memory.ptr);
+        /// `VTable.free`.
+        fn freeImpl(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+            // Deliberately routes through `Orisnitsa.free` (the page-marker/block-header
+            // dispatch), not the `freeWithSize*` shortcuts: those require `orig_size` to
+            // be the pointer's *original* allocation size, an invariant this vtable's
+            // own contract does not provide — `memory.len` here only matches the
+            // block's *current* size, which can differ after a `resize`/`remap` (a
+            // large-then-shrunk block stays tree-allocated even once its current size
+            // would fit a bucket, and `freeWithSize` has no way to tell the two cases
+            // apart from size alone). `free`'s pointer-based dispatch is correct
+            // regardless of any resize/remap history — mirrors `orisnik`'s own
+            // `global_alloc.rs`/`allocator_trait.rs`, both of which make the identical
+            // choice for the identical reason.
+            _ = alignment;
+            _ = ret_addr;
+            // SAFETY: `ctx` is a live `*O` from `allocator()`, as in `allocImpl`.
+            // ALIGN: see `allocImpl`'s identical cast for why this is sound.
+            const self: *O = @ptrCast(@alignCast(ctx));
+            // SAFETY: `memory` was returned by this vtable's `alloc`/`remap` (the
+            // `std.mem.Allocator.free` contract), so `memory.ptr` is a still-live
+            // allocation this instance produced, which is what `Orisnitsa.free` requires.
+            self.free(memory.ptr);
+        }
+    };
 }
 
 const testing = std.testing;
 
 test "std.mem.Allocator round-trip at the default alignment" {
-    var orisnitsa_instance: Orisnitsa = .init();
+    var orisnitsa_instance: Default = .init();
     const a = allocator(&orisnitsa_instance);
     const mem = try a.alloc(u8, 64);
     @memset(mem, 0xAB);
@@ -163,7 +171,7 @@ test "std.mem.Allocator round-trip at the default alignment" {
 }
 
 test "std.mem.Allocator round-trip over-aligned" {
-    var orisnitsa_instance: Orisnitsa = .init();
+    var orisnitsa_instance: Default = .init();
     const a = allocator(&orisnitsa_instance);
     const mem = try a.alignedAlloc(u8, comptime std.mem.Alignment.fromByteUnits(256), 96);
     try testing.expectEqual(@as(usize, 0), @intFromPtr(mem.ptr) % 256);
@@ -174,7 +182,7 @@ test "std.mem.Allocator round-trip over-aligned" {
 }
 
 test "std.mem.Allocator resize never moves and reports failure honestly" {
-    var orisnitsa_instance: Orisnitsa = .init();
+    var orisnitsa_instance: Default = .init();
     const a = allocator(&orisnitsa_instance);
     // Force the tree path so there's a following free block to grow into.
     const size = 4096;
@@ -188,7 +196,7 @@ test "std.mem.Allocator resize never moves and reports failure honestly" {
 }
 
 test "std.mem.Allocator smoke test via ArrayList" {
-    var orisnitsa_instance: Orisnitsa = .init();
+    var orisnitsa_instance: Default = .init();
     const a = allocator(&orisnitsa_instance);
     var list: std.ArrayList(u32) = .empty;
     for (0..2000) |i| {
@@ -214,7 +222,7 @@ test "raw remap/resize to zero length do not free the block" {
     // so it cannot reach the guard under test. Mirrors `orisnik`'s own F6 test,
     // which likewise calls `GlobalAlloc::realloc` directly rather than through a
     // container.
-    var orisnitsa_instance: Orisnitsa = .init();
+    var orisnitsa_instance: Default = .init();
     const a = allocator(&orisnitsa_instance);
     const mem = try a.alloc(u8, 64);
     const alignment: std.mem.Alignment = .fromByteUnits(@alignOf(u8));

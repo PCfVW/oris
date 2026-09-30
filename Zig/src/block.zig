@@ -38,7 +38,9 @@ const rbtree = @import("rbtree.zig");
 const list = @import("list.zig");
 
 comptime {
-    std.debug.assert(@bitSizeOf(usize) == 64);
+    if (@bitSizeOf(usize) != 64) {
+        @compileError("orisnitsa targets 64-bit platforms only — see block.zig's module doc");
+    }
 }
 
 /// Default alignment for the allocator's public API, and the alignment

@@ -26,7 +26,7 @@
 //! const orisnitsa = @import("orisnitsa");
 //!
 //! var backing: orisnitsa.Orisnitsa = .init();
-//! defer backing.deinit(); // required: returns the idle OS pages/arenas (every build)
+//! defer backing.deinit(); // must be called: returns the idle OS pages/arenas (every build)
 //! const gpa = orisnitsa.allocator(&backing);
 //!
 //! var list: std.ArrayList(u8) = .empty;
@@ -53,6 +53,12 @@ const allocator_mod = @import("allocator.zig");
 /// surface source-compatible with every pre-v0.2.0 consumer. See `orisnitsa.zig`
 /// and `spomen.zig`'s `Config`.
 pub const Orisnitsa = orisnitsa_mod.Orisnitsa(.{});
+/// The generic behind `Orisnitsa`: `OrisnitsaWith(.{ .debug = true })` is the debug allocator
+/// (guard bytes, allocation records, `check()`/`report()`, leak detection in `deinit()`);
+/// `OrisnitsaWith(.{})` is exactly `Orisnitsa`. Every instantiation works with `allocator()`.
+pub const OrisnitsaWith = orisnitsa_mod.Orisnitsa;
+/// The `comptime` configuration `OrisnitsaWith` takes. See `spomen.zig`.
+pub const Config = @import("spomen.zig").Config;
 /// Hands out a `std.mem.Allocator` backed by an `Orisnitsa` instance. See
 /// `allocator.zig`.
 pub const allocator = allocator_mod.allocator;
@@ -90,6 +96,19 @@ const spomen_store = @import("spomen_store.zig");
 const spomen_failure = @import("spomen_failure.zig");
 const rand = @import("rand.zig");
 const capi = @import("capi.zig");
+
+test "a consumer can instantiate the debug allocator and hand it out as a std.mem.Allocator" {
+    // Only what this file exports: the way an importing package reaches the debug allocator.
+    const Debug = OrisnitsaWith(.{ .debug = true });
+    var backing: Debug = .init();
+    const gpa = allocator(&backing);
+    const memory = try gpa.alloc(u8, 40);
+    try backing.check(null);
+    gpa.free(memory);
+    backing.deinit();
+    // The default instantiation is the very type `Orisnitsa` names.
+    try std.testing.expect(OrisnitsaWith(.{}) == Orisnitsa);
+}
 
 test {
     // `refAllDecls` must be called with each *imported module* as its own argument,

@@ -23,11 +23,17 @@ Every `.rs` file begins with `// SPDX-License-Identifier: MIT OR Apache-2.0` as 
    anything under `spomen/` changes: `cargo clippy --all-targets --features debug-allocator --
    -D warnings` and `cargo test --features debug-allocator` (the latter also runs
    `tests/debug_global_allocator.rs`, a `harness = false` binary that is skipped under Miri).
-3. `cargo test`
+3. `cargo test` — and `cargo test --release` (with and without `--features debug-allocator`) when
+   `Drop`, the debug hooks or anything behind `debug_assertions` changes: the release profile
+   compiles out the address-stability tripwire and so runs different code. Also
+   `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --features debug-allocator
+   --document-private-items` when doc comments change (feature-gated items only resolve there).
 4. `cargo +nightly miri test --features nightly` (and, for the debug subsystem, `--features
    debug-allocator`) with `-Zmiri-strict-provenance` and
    `-Zmiri-tree-borrows` — the soundness gate for the allocator's `unsafe`, provenance, and
-   aliasing code, across both the default surface and the `nightly` `Allocator` trait impl. See
+   aliasing code, across both the default surface and the `nightly` `Allocator` trait impl. The
+   debug-allocator run is slow (about twenty minutes): for a targeted change, run just the
+   affected tests first (`cargo +nightly miri test --features debug-allocator <filter>`). See
    `CONVENTIONS.md` § *Miri: the verification gate*. A new or modified `unsafe` block is
    *pending* until a Miri-covered test exercises it.
 5. Update `CHANGELOG.md` — a bullet under `[Unreleased]` for any user-visible change.

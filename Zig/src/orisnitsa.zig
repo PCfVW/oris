@@ -230,8 +230,10 @@ pub fn Orisnitsa(comptime config: Config) type {
         /// `purge()`) — and, with `config.debug`, first audits and reports any
         /// allocation still live, then fails on a leak once everything else has been
         /// released (HPHA's destructor asserts). Pages that still hold a live block stay
-        /// mapped. Zig has no `Drop`, so the owner must call this; the instance must not
-        /// be used afterwards. Without `config.debug` nothing is checked or printed.
+        /// mapped. Zig has no `Drop`, so the owner **must** call this, exactly once, and not use
+        /// the instance afterwards: in the default build it would merely behave as after
+        /// `purge()`, but with `config.debug` the record store has been released, and neither
+        /// is a supported state. Without `config.debug` nothing is checked or printed.
         ///
         /// Order (debug): (1) if `records.len() > 0`, print to stderr a summary line, the
         /// first problem the audit finds and the report (head, one line per live record,
@@ -1485,7 +1487,7 @@ test "Orisnitsa(.{ .debug = true }) round-trips identically to the default insta
     // Proves the generic parameterization actually compiles and works for a
     // non-default Config, not just Orisnitsa(.{}) — see Zig/CONVENTIONS.md's
     // "comptime Toggles" section. `size == 64` stays on the bucket path, which
-    // now carries its own guard ramp too (`bucketAlloc`, see the Phase 2 tests
+    // now carries its own guard ramp too (`bucketAlloc`, see the v0.2.0 Phase 2 tests
     // below) — but that reservation is invisible through this observable
     // surface (`querySize`, `free`, `purge`), so the round-trip below must
     // still match the default instantiation exactly, even though the two
@@ -2829,7 +2831,7 @@ test "a clean deinit returns zero leaks and leaves no mappings" {
     try testing.expectEqual(before, os.test_vm.liveMappings());
 }
 
-// ---- Phase 5 review follow-ups: teardown output, orders, golden report ----
+// ---- v0.2.0 Phase 5 review follow-ups: teardown output, orders, golden report ----
 
 fn teardownText(o: *Orisnitsa(debug_config), aw: *std.Io.Writer.Allocating) !usize {
     aw.clearRetainingCapacity();
@@ -3028,11 +3030,17 @@ test "report golden output" {
     var failed = false;
     defer finishDebug(&o, &failed);
     errdefer failed = true;
+    // Which of the two blocks has the lower address depends on the OS's mappings (a bucket
+    // page versus a tree arena), so the expected text follows the sorted order, sizes included.
     var blocks = [_][*]u8{
         o.alloc(24) orelse return error.TestUnexpectedResult,
         o.alloc(100) orelse return error.TestUnexpectedResult,
     };
-    std.mem.sort([*]u8, &blocks, {}, ptrLess);
+    var sizes = [_]usize{ 24, 100 };
+    if (@intFromPtr(blocks[0]) > @intFromPtr(blocks[1])) {
+        std.mem.swap([*]u8, &blocks[0], &blocks[1]);
+        std.mem.swap(usize, &sizes[0], &sizes[1]);
+    }
     (o.records.find(blocks[0]) orelse return error.TestUnexpectedResult).callstack = .{ 0x1000, 0x2000, 0, 0, 0, 0, 0, 0 };
     (o.records.find(blocks[1]) orelse return error.TestUnexpectedResult).callstack = .{ 0, 0, 0, 0, 0, 0, 0, 0 };
     const expected = try std.fmt.allocPrint(
@@ -3041,10 +3049,10 @@ test "report golden output" {
             "Total requested size={d} bytes\n" ++
             "Total allocated size={d} bytes\n" ++
             "Currently allocated blocks:\n" ++
-            "ptr=0x{x}, size=24\n  0x1000\n  0x2000\n" ++
-            "ptr=0x{x}, size=100\n" ++
+            "ptr=0x{x}, size={d}\n  0x1000\n  0x2000\n" ++
+            "ptr=0x{x}, size={d}\n" ++
             "===========================================================\n",
-        .{ o.requested(), o.allocated(), @intFromPtr(blocks[0]), @intFromPtr(blocks[1]) },
+        .{ o.requested(), o.allocated(), @intFromPtr(blocks[0]), sizes[0], @intFromPtr(blocks[1]), sizes[1] },
     );
     defer testing.allocator.free(expected);
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);

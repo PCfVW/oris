@@ -1384,7 +1384,7 @@ mod tests {
         unsafe { guard_start.write(0) };
         // SAFETY: `ptr` is a live tree-path allocation of exactly `requested` bytes.
         assert!(!unsafe { crate::spomen::guard::check_guard(ptr, requested) });
-        // Since Phase 4 the dispatch itself catches the overrun: `free` panics (before it
+        // Since v0.2.0 Phase 4 the dispatch itself catches the overrun: `free` panics (before it
         // reclaims anything) and switches the hooks off, so a second `free` releases the
         // block for real.
         // SAFETY: `ptr` is a live allocation `orisnik` produced.

@@ -753,7 +753,7 @@ fn boxed(allocator: std.mem.Allocator, key: i32, id: u32) !*TestNode {
 /// Structural checker: no red-red violations, equal black-height on every root-to-nil
 /// path, BST order property holds. Ports `DEBUG_MULTI_RBTREE`'s
 /// `check()`/`check_height()`, kept always-available under test rather than gated,
-/// per the plan's Phase 3 test strategy.
+/// per the plan's v0.1.0 Phase 3 test strategy.
 fn checkInvariants(tree: *IntrusiveMultiRbTree(TestNode)) void {
     const head = tree.headPtr();
     testing.expect(!head.red()) catch @panic("sentinel must be black");
@@ -1029,7 +1029,7 @@ test "next walks the equal-key chain and wraps" {
 // walks in the C++ reference.
 //
 // A manual cross-validation tool, not a correctness assertion: it was run once
-// (during this port's Phase 3 development) and diffed byte-for-byte against a fresh
+// (during this port's v0.1.0 Phase 3 development) and diffed byte-for-byte against a fresh
 // run of `orisnik`'s own already-C++-oracle-validated trace (same PRNG, same
 // decision logic, same print format on both sides) — transitively validating this
 // port against the C++ reference through Rust's own prior validation, without

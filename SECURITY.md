@@ -16,7 +16,8 @@ because they live in the opt-in debug subsystem (`spomen`: a Rust feature and a 
 `comptime` toggle) that is **entirely compiled out when disabled**.
 
 > These describe Oris's **security model**, realized starting at v0.1.0 (the
-> guard-byte debug subsystem lands in v0.2.0 — see [`ROADMAP.md`](ROADMAP.md)).
+> guard-byte debug subsystem is implemented on `main` for the unreleased v0.2.0 — see
+> [`ROADMAP.md`](ROADMAP.md)).
 
 ## CWEs addressed at no release-time cost
 
@@ -42,7 +43,7 @@ heap from that point on. Aborting is the safer outcome, and the condition is one
 supported platform can produce (Windows' allocation granularity *is* 64 KiB; the Unix
 path trims its own mapping to alignment before returning). Every *other* failure on
 every path, allocation failure included, is a value. (The one further exception is the opt-in debug subsystem, which fails fast: with
-`debug-allocator` / `Orisnitsa(.{ .debug = true })`, *detected heap corruption* — a guard overrun, a
+`debug-allocator` / `OrisnitsaWith(.{ .debug = true })`, *detected heap corruption* — a guard overrun, a
 double free, a foreign pointer or a wrong sized free — and *a leak at drop / `deinit`* panic; a Rust
 instance installed as the global allocator must then be built with `panic = "abort"`, and
 `oris_destroy` under `debug-allocator` aborts on a leak.)

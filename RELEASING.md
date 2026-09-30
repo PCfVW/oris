@@ -32,7 +32,13 @@ place, empty, for the next cycle.
   still hold name-reservation stubs") no longer applies once this release lands —
   reword or remove it.
 
-## 4. Update the three README status paragraphs
+## 4. Update the README status paragraphs and the roadmap
+
+- `ROADMAP.md`: flip the milestone's header to `✅ *Released <date>*` (as v0.1.0's is) and
+  drop its "Progress (unreleased)" line.
+- Refresh the test counts quoted in the root `README.md`, `Rust/README.md` and `Zig/README.md`
+  (they describe the released version), and turn any "unreleased, on `main`" wording into
+  plain present tense.
 
 - Root `README.md`'s Status section ("Not yet released...").
 - `Rust/README.md` ("not yet published to crates.io... the 0.0.0 release currently
@@ -49,6 +55,15 @@ place, empty, for the next cycle.
   `cargo test --features debug-allocator` and
   `cargo +nightly miri test --features debug-allocator` (same `MIRIFLAGS`) — the opt-in debug
   subsystem, including the global-allocator integration test
+  (the Miri debug-allocator run takes about twenty minutes — start it early), plus
+  `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps` both with and without
+  `--features debug-allocator --document-private-items`, and `cargo clippy --release
+  --all-targets` / `cargo test --release` in both feature configurations (the release profile
+  compiles out the address-stability tripwire, so it exercises different code)
+- `cargo +1.85 clippy --all-targets -- -D warnings` (and with `--features debug-allocator`)
+  and `cargo +1.85 test` — the MSRV
+- The C smoke test, `tests/c-abi/smoke.c`, against **both** ports' built libraries (see
+  `.github/workflows/c-abi-ci.yml` for the exact commands)
 - `zig fmt --check build.zig build.zig.zon src`
 - `zig build test` and `zig build test -Doptimize=ReleaseSafe`, then
   `zig build -Doptimize=ReleaseFast`

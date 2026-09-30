@@ -11,6 +11,12 @@
 //! `unsafe impl GlobalAlloc` (opt in as a `#[global_allocator]`), and an optional
 //! `unsafe impl core::alloc::Allocator` behind the `nightly` Cargo feature.
 //!
+//! An opt-in **debug allocator** ports HPHA's `DEBUG_ALLOCATOR` mode behind the
+//! `debug-allocator` Cargo feature (unreleased; see `CHANGELOG.md`): trailing guard bytes,
+//! payload poisoning, an allocation-record book with callstack capture, the `check()` and
+//! `report()` methods on [`Orisnik`], the `OrisError` they return, and leak detection when
+//! an instance is dropped. With the feature off it is compiled out entirely.
+//!
 //! ```no_run
 //! use orisnik::Orisnik;
 //!

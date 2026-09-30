@@ -16,6 +16,8 @@
 //!    rehashing, zeroed and over-aligned allocations) must leave `requested()` exactly
 //!    where it started, and must have moved it while allocations were live (so the check
 //!    cannot pass vacuously with the hooks doing nothing).
+//! 3. **`check()` finds the healthy heap healthy.** After the workload, the record audit
+//!    over every live allocation of the process itself must come back `Ok`.
 //!
 //! It does **not** exercise the `busy` re-entrancy flag: with callstack capture off in
 //! global mode, no hook allocates, so there is no recursion to break. That flag is

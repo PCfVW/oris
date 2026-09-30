@@ -36,6 +36,34 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_mod_tests.step);
 
+    // The debug allocator's leak panic cannot be caught in-process (Zig panics do not unwind,
+    // and the test runner would die with it), so `src/leak_probe.zig` — a program that leaks
+    // one block and calls `deinit()` — is run here and required to *fail*, reporting the leak.
+    // Skipped in ReleaseSmall, where a panic is a bare trap with no message to check.
+    if (optimize != .ReleaseSmall) {
+        const probe = b.addExecutable(.{
+            .name = "leak_probe",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/leak_probe.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        if (target.result.os.tag != .windows) {
+            probe.root_module.link_libc = true;
+        }
+        const run_probe = b.addRunArtifact(probe);
+        run_probe.expectStdErrMatch("memory leaked: 1 allocation(s) still live");
+        run_probe.expectStdErrMatch("REPORT =====");
+        // How a panic ends the process is the OS's: an exit status on Windows, SIGABRT elsewhere.
+        if (target.result.os.tag == .windows) {
+            run_probe.expectExitCode(3);
+        } else {
+            run_probe.addCheck(.{ .expect_term = .{ .signal = std.posix.SIG.ABRT } });
+        }
+        test_step.dependOn(&run_probe.step);
+    }
+
     // Static and shared C-linkable libraries, built from a *separate* module
     // rooted directly at `capi.zig`, not `mod` (rooted at `root.zig`). Zig only
     // auto-exports `export fn`s that live in a module's own root file — an

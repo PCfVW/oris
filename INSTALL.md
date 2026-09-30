@@ -53,14 +53,14 @@ orisnik = "0.1"
 - **Toolchain:** Zig **0.16.0**, pinned in `Zig/build.zig.zon`. The
   `std.mem.Allocator` vtable shape is version-sensitive while Zig is pre-1.0, so the
   pin is load-bearing.
-- **`Orisnitsa(.{ .debug = true })`** is the Zig analog of `orisnik`'s
+- **`OrisnitsaWith(.{ .debug = true })`** is the Zig analog of `orisnik`'s
   `debug-allocator` feature — `spomen`, implemented on `main` for the unreleased v0.2.0
   (`ROADMAP.md`). No
   `zig build` flag needed; the default `orisnitsa.Orisnitsa` export stays the
   non-debug `Orisnitsa(.{})`. Same status as the Rust side above: guard bytes and
   payload poisoning, allocation records, the hooks that use them, `check()`/`report()` and
   leak detection are all implemented (detected corruption and leaks panic). Every
-  `Orisnitsa` should be `deinit()`ed: that returns its idle memory to the OS, and a debug
+  `Orisnitsa` **must** be `deinit()`ed: that returns its idle memory to the OS, and a debug
   instance also frees its record pages and fails on leaked blocks. Exercise
   it with `zig build test` (the debug instantiation is covered by the test suite).
 

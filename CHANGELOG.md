@@ -13,7 +13,7 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 ### Added
 
 - **Leak detection, `check()`, `report()` and `OrisError` (v0.2.0, Phase 5 — completes the
-  debug allocator).** With `debug-allocator` / `Orisnitsa(.{ .debug = true })`:
+  debug allocator).** With `debug-allocator` / `OrisnitsaWith(.{ .debug = true })`:
   `check()` audits every live allocation — its recorded size must fit the block and its
   guard ramp must be intact — and returns the first problem in address order as an error
   (`Orisnik::check` → `Result<(), OrisError>`, `#[non_exhaustive] OrisError { Os, Corruption }`,
@@ -70,7 +70,7 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
   `oris_destroy` under `debug-allocator` aborts on a leak, as the panic cannot cross the
   `extern "C"` boundary.
 - **Debug hooks wired into the allocator (v0.2.0, Phase 4).** With `debug-allocator` /
-  `Orisnitsa(.{ .debug = true })` the record store from Phase 3 is now live: every
+  `OrisnitsaWith(.{ .debug = true })` the record store from Phase 3 is now live: every
   allocation is recorded (address, requested size, source, guard seed, callstack) and every
   free, realloc, resize and purge goes through HPHA's own hooks — `debug_add`,
   `debug_remove`, `debug_replace`, `debug_update`, `debug_check`, `debug_purge` — at exactly
@@ -126,7 +126,7 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 - **Allocation-record store and callstack capture (v0.2.0, Phase 3).** The data structures
   behind HPHA's `debug_record_map`, for `debug-allocator` (Rust: feature-gated) and
-  `Orisnitsa(.{ .debug = true })` (Zig: the record modules are non-generic and always
+  `OrisnitsaWith(.{ .debug = true })` (Zig: the record modules are non-generic and always
   compiled; unwired when this phase landed — Phase 4, above, wired them into the dispatch
   layer). A `Record` remembers one live allocation — address,
   the size the caller requested, which sub-allocator served it (`Source`), the seed of
@@ -284,6 +284,26 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Fixed
 
+- **The Zig debug allocator was unreachable from an importing package (v0.2.0 Phase 1–5;
+  found while writing the leak probe).** `root.zig` exported only the concrete default
+  `Orisnitsa`, so `Orisnitsa(.{ .debug = true })` — the spelling `INSTALL.md` and the READMEs
+  gave — compiled only inside the package, and `allocator()` accepted only the default type.
+  `root.zig` now exports `OrisnitsaWith` (the generic) and `Config`, `allocator()` accepts a
+  pointer to any instantiation (its vtable is generated per type), and a root-level test
+  drives the debug allocator through the public names only. The docs use `OrisnitsaWith`.
+- **Review follow-ups (Phase 5).** A Rust drop after a detected corruption used to be silent
+  about the records it then declined to audit; it now prints one line saying so (a caught
+  corruption panic no longer makes the leaks behind it vanish without a word). The Rust report
+  no longer leaves a blank line after a record's callstack (as in Zig's). The Zig leak panic,
+  which no in-process test can catch, is now pinned by `zig build test` running
+  `src/leak_probe.zig` and requiring it to fail with the leak report (exit code 3 on Windows,
+  SIGABRT elsewhere; skipped in ReleaseSmall, where a panic is a bare trap). The Zig
+  `report golden output` test assumed the 24-byte block sat at the lower address, which
+  only the Windows mappings happened to satisfy — found by the first Linux run, fixed. A
+  32-bit build of the Zig port now stops at a `@compileError` with a message, like Rust's.
+  The remaining differences between the ports' diagnostic output — a Rust callstack begins
+  with the allocator's own frames, a Zig one is trimmed to the caller; Zig does not yet resolve
+  symbols — are documented in `ROADMAP.md`.
 - **Dropping a used-then-moved `Orisnik` hung release builds (Rust, v0.2.0 Phase 5; found
   by the Phase 5 consistency review).** The teardown walks structures whose sentinels bind
   to the instance's address; a value that had served requests and was then moved (returned

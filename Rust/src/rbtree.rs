@@ -17,7 +17,7 @@
 //! list *distinct* from `list.rs`'s `IntrusiveList` (no separate sentinel: any member
 //! can be a valid entry point, and the attached member is simply the one whose
 //! `parent` is non-null). This is why [`NodeBase::parent`] is nullable — see
-//! `tag.rs`'s `TaggedPtr` doc for why that required revisiting the Phase 1 design.
+//! `tag.rs`'s `TaggedPtr` doc for why that required revisiting the v0.1.0 Phase 1 design.
 //!
 //! # Sentinel design
 //! Same lazy-self-init pattern as `list.rs`'s `IntrusiveList`, for the same Tree
@@ -1209,7 +1209,7 @@ mod tests {
     /// Structural checker: no red-red violations, equal black-height on every root-to-
     /// nil path, BST order property holds, chain membership matches key equality.
     /// Ports `DEBUG_MULTI_RBTREE`'s `check()`/`check_height()`, kept always-available
-    /// under test rather than gated, per the plan's Phase 3 test strategy.
+    /// under test rather than gated, per the plan's v0.1.0 Phase 3 test strategy.
     fn check_invariants<T: RbNode<Key = i32>>(tree: &IntrusiveMultiRbTree<T>) {
         let head = tree.head_ptr();
         // SAFETY: `head` is live and linked.
@@ -1393,7 +1393,7 @@ mod tests {
     ///
     /// This is a manual cross-validation tool, not an automated test — three ways:
     ///
-    /// 1. **Against C++.** Run once (during this port's Phase 3 development) against
+    /// 1. **Against C++.** Run once (during this port's v0.1.0 Phase 3 development) against
     ///    a companion C++ harness that links the real, unmodified `Cpp/hpha.cpp` and
     ///    runs the identical PRNG-driven sequence through the actual
     ///    `intrusive_multi_rbtree`, printing the same format. All 3000 steps matched
@@ -1402,7 +1402,7 @@ mod tests {
     ///    `"oracle cross-validation trace (manual tool, not an assertion)"` test
     ///    emits this exact same format (same PRNG, same decision logic, same print
     ///    shape) and was diffed byte-for-byte against a fresh run of this test during
-    ///    `orisnitsa`'s own Phase 3 — transitively validating the Zig port against
+    ///    `orisnitsa`'s own v0.1.0 Phase 3 — transitively validating the Zig port against
     ///    the C++ reference through this test's own prior validation, without
     ///    rebuilding the C++ harness. This is the live, ongoing use of this trace
     ///    format; re-run it on either side of a tree-shape change to either port.

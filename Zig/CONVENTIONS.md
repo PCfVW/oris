@@ -415,8 +415,9 @@ Rust port's Cargo feature gate is exact: `orisnitsa.Orisnitsa` (`root.zig`'s pub
 > }
 > ```
 >
-> A caller who needs the debug instantiation writes `Orisnitsa(.{ .debug = true })`; every
-> existing caller of the plain `Orisnitsa` type keeps compiling unchanged against
+> A caller who needs the debug instantiation writes `OrisnitsaWith(.{ .debug = true })` —
+> `root.zig`'s re-export of this generic (inside the package it is spelled `Orisnitsa(config)`),
+> and `allocator()` accepts a pointer to any instantiation; every existing caller of the plain `Orisnitsa` type keeps compiling unchanged against
 > `root.zig`'s `Orisnitsa(.{})` re-export. `capi.zig`'s C-ABI is fixed to `Orisnitsa(.{})` — no
 > debug C-ABI surface is planned. Only genericize what the toggle structurally requires: a type
 > that stores no debug-only state of its own in a given phase (`Page`, `Bucket`, `BlockHeader`)

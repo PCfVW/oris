@@ -56,7 +56,7 @@ This invariant is the property that justifies maintaining two ports rather than 
 
 **Theme:** Observability and safety.
 
-**Progress (unreleased):** every v0.2.0 bullet below is implemented in both ports — guard bytes with overflow detection, allocation-record tracking, callstack capture, leak detection on drop / deinit, `report()` and `check()`, the build toggle, and fail-fast detection of overruns, double frees, foreign pointers and wrong sized frees. What remains before release is the release itself (version bumps, the changelog cut, the tag).
+**Progress (unreleased):** every v0.2.0 bullet below is implemented in both ports — guard bytes with overflow detection, allocation-record tracking, callstack capture, leak detection on drop / deinit, `report()` and `check()`, the build toggle, and fail-fast detection of overruns, double frees, foreign pointers and wrong sized frees. What remains before release: the CI lanes for the debug subsystem (added to `rust-ci.yml` and `rust-publish.yml`, but proven so far only by local runs on Windows and WSL Linux — macOS and the hosted runners are untested until the first push), and the release itself (version bumps, the changelog cut, the tag, `RELEASING.md`).
 
 - Port HPHA's `DEBUG_ALLOCATOR` mode in both languages
 - **Memory guard bytes** with overflow detection
@@ -65,6 +65,8 @@ This invariant is the property that justifies maintaining two ports rather than 
 - **Leak detection** on allocator drop / deinit
 - **`report()` and `check()` diagnostic methods**
 - **Build-time toggleable:** Rust feature flag; Zig `comptime` bool — both with zero-cost-when-disabled guarantees
+- **Known divergence:** a Rust callstack begins with the capture call and the allocator's own frames (`std::backtrace::Backtrace` cannot skip frames), a Zig one is trimmed to the caller.
+- **Known gap, deferred:** the Zig port prints callstacks as raw return addresses (`symbols not resolved`); the Rust port resolves them through `std::backtrace`. Symbol resolution for Zig (via `std.debug`) is not part of v0.2.0.
 - Cross-port parity: same allocation sequence produces same debug-record contents (address, requested size, source, guard seed), modulo callstack contents (platform-specific symbols; no callstack for a Rust instance used as a `#[global_allocator]`) and record-page capacity — see the invariant's scope note above
 
 ### v0.3.0 — Invariant verification and benchmarks

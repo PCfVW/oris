@@ -416,6 +416,11 @@ impl Orisnik {
     ///
     /// After a detected corruption the records may be stale, so the report may list blocks
     /// that have since been freed; it only reads recorded data, never the blocks themselves.
+    ///
+    /// Each callstack is a `std::backtrace::Backtrace`, which cannot skip frames, so it begins
+    /// with the capture call and the allocator's own frames (about ten of them) before reaching
+    /// the caller's; `orisnitsa` trims to the caller where it can. Diagnostic content only —
+    /// outside the cross-port invariant (see `ROADMAP.md`'s scope note).
     pub fn report(&self) {
         let _busy = self.hold_busy();
         // A failed write to stderr has nowhere to be reported; the report is best-effort.
@@ -496,7 +501,10 @@ impl Orisnik {
         let address = record_ref.ptr.as_ptr().addr();
         write!(out, "ptr={address:#x}, size={}", record_ref.size)?;
         if let Some(trace) = &record_ref.callstack {
-            write!(out, "\n{trace}")?;
+            // `Backtrace`'s `Display` ends in a newline of its own; trimmed so that a record
+            // with a callstack is followed by no blank line, as in `orisnitsa`'s report.
+            let text = trace.to_string();
+            write!(out, "\n{}", text.trim_end())?;
         }
         writeln!(out)
     }
@@ -505,8 +513,9 @@ impl Orisnik {
     /// `check()`-then-`report()` order (releasing idle memory would not disturb a live block;
     /// only the records must outlive the audit): if any allocation is still live, audits it
     /// and prints the report to stderr — HPHA's `~allocator`'s `check(); report();`. Returns how many
-    /// allocations leaked. Does nothing after a detected corruption (the hooks are off, so
-    /// the records may be stale).
+    /// allocations leaked. After a detected corruption (the hooks are off, so the records may
+    /// be stale) it audits nothing and returns `0`, but prints one line saying that the records
+    /// were skipped.
     ///
     /// Two constraints shape it, both from Tree Borrows (see `list.rs`'s "`Drop` and
     /// `&mut self`" section):
@@ -527,6 +536,20 @@ impl Orisnik {
     /// `Drop` would print. Same constraints, same return value.
     fn debug_teardown_to<W: core::fmt::Write + ?Sized>(&self, sink: &mut W) -> usize {
         if self.disabled.get() {
+            // The records may be stale, so nothing is audited, reported or failed on — but a
+            // caught corruption panic must not make the leaks behind it vanish without a
+            // word, so say what was skipped. (`len` reads a counter, not a record.)
+            let unaudited = self.records.len();
+            if unaudited > 0 {
+                let _ = writeln!(
+                    sink,
+                    concat!(
+                        "orisnik: dropped after a detected corruption with {} record(s) ",
+                        "still on the books; they were not audited, so any leak among them is not reported"
+                    ),
+                    unaudited
+                );
+            }
             return 0;
         }
         self.busy.set(true);
@@ -1520,6 +1543,10 @@ mod tests {
         let owned = Orisnik::new();
         let ptr = alloc(&owned, 24);
         let text = report_text(&owned);
+        assert!(
+            !text.contains("\n\n"),
+            "no blank line after a record's callstack: {text}"
+        );
         if cfg!(miri) {
             // Miri records the cheap, disabled backtrace (see `capture_callstack`).
             assert!(text.contains("disabled backtrace"), "{text}");
@@ -1621,7 +1648,18 @@ mod tests {
         // Deliberate double free: detected, and the hooks are off from here on.
         assert!(panic_message(|| free(&orisnik, victim)).is_some());
         assert!(orisnik.disabled.get());
-        // The records may be stale now, so the still-live block is not reported as a leak.
+        // The records may be stale now, so the still-live block is not reported as a leak —
+        // but the teardown says it skipped them, rather than staying silent.
+        let mut text = String::new();
+        assert_eq!(orisnik.debug_teardown_to(&mut text), 0);
+        assert!(
+            text.contains("dropped after a detected corruption with 1 record(s)"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("REPORT"),
+            "no report of possibly-stale records: {text}"
+        );
         assert!(panic_message(move || drop(orisnik)).is_none());
         release_leaked_bucket_page(leaked);
         assert_eq!(test_vm::live_mappings(), before);
