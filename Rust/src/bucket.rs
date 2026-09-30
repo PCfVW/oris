@@ -25,6 +25,7 @@
 //! `os::map` first); tests call it directly against a heap-backed buffer, giving full
 //! Miri coverage of the part that actually varies by allocation pattern.
 
+use crate::home::Home;
 use crate::list::{IntrusiveList, ListLink, ListNode};
 use crate::os;
 use core::cell::Cell;
@@ -495,6 +496,9 @@ impl Bucket {
 /// All 32 bucket size classes, plus the bucket path's running allocated-byte total.
 /// Ports the bucket-related slice of `allocator` (`mBuckets`,
 /// `mTotalAllocatedSizeBuckets`, and the free `bucket_*` methods).
+// `buckets` starting with the struct's own name is the clearest name for "the array of
+// buckets"; the lint only fires now that a third field (`home`) exists.
+#[allow(clippy::struct_field_names)]
 pub(crate) struct Buckets {
     /// One [`Bucket`] per size class, indexed by [`bucket_spacing_function`] and its
     /// variants.
@@ -506,6 +510,9 @@ pub(crate) struct Buckets {
     /// suffices here — unlike the list/tree sentinels, this field never stores a
     /// pointer, so it has none of their Tree-Borrows persistence hazard.
     allocated_bytes: Cell<usize>,
+    /// Where this value stood when it first mapped a page; lets `Drop` refuse to walk
+    /// sentinels that a later move left pointing at the old address (see [`Home`]).
+    home: Home,
 }
 
 impl Buckets {
@@ -520,6 +527,7 @@ impl Buckets {
         Self {
             buckets: [const { Bucket::new() }; NUM_BUCKETS],
             allocated_bytes: Cell::new(0),
+            home: Home::new(),
         }
     }
 
@@ -530,10 +538,18 @@ impl Buckets {
         self.allocated_bytes.get()
     }
 
+    /// `false` iff this value mapped a page and has been moved since, so that its page
+    /// lists' sentinels are stale and must not be walked (see [`Home`]).
+    #[must_use]
+    pub(crate) fn is_at_home(&self) -> bool {
+        self.home.holds(self)
+    }
+
     /// Maps one fresh `PAGE_SIZE` OS page. Ports `allocator::bucket_system_alloc`.
     #[must_use]
     fn system_alloc(&self) -> Option<NonNull<u8>> {
         let ptr = os::map(os::PAGE_SIZE)?;
+        self.home.latch(self);
         self.allocated_bytes
             .set(self.allocated_bytes.get() + os::PAGE_SIZE);
         Some(ptr)

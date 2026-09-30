@@ -151,7 +151,9 @@ pub(crate) const fn is_hpha_alignment(alignment: usize) -> bool {
 /// Because the teardown walks structures whose sentinels bind to the instance's address,
 /// the non-move rule of `# Address stability` now matters for a value that is merely *dropped*
 /// too: an `Orisnik` that has served a request and is then moved (returned from a builder,
-/// say) must not be dropped at its new address. `debug_assertions` builds catch it.
+/// say) must not be dropped at its new address. `debug_assertions` builds panic when they
+/// see it; every build (the check is not compiled out) refuses to walk the stale structures
+/// and leaks the instance's memory instead, exactly as such a value did before `Drop` existed.
 ///
 /// # With `debug-allocator`
 /// Behind the `debug-allocator` Cargo feature this type becomes HPHA's `DEBUG_ALLOCATOR`
@@ -1096,6 +1098,12 @@ impl Drop for Orisnik {
         // leaked. The tripwire writes only `origin`, and only when still unlatched — a
         // write before any foreign read, hence sound inside `drop` (see `list.rs`).
         self.debug_assert_not_moved();
+        // The tripwire above exists only in `debug_assertions` builds; this check is the
+        // release-build counterpart, so it must be always on. It reads latches written only
+        // when memory was mapped (see `home.rs`), and refuses to walk stale sentinels.
+        if !(self.buckets.is_at_home() && self.tree.is_at_home()) {
+            return;
+        }
         #[cfg(feature = "debug-allocator")]
         let leaked = self.debug_teardown();
         // Buckets first: their walk only dereferences pointers derived from `self` afresh,
@@ -2395,6 +2403,63 @@ mod tests {
         // SAFETY: `block` lives in a mapping of `size` bytes starting at `base`, left mapped
         // by the drop; nothing uses it any more.
         unsafe { crate::os::unmap(NonNull::new(base).expect("non-null"), size) };
+    }
+
+    /// A value that mapped memory and was then moved has sentinels naming its old address, so
+    /// walking them in `Drop` would chase stale links forever (release builds, where the
+    /// `debug_assert!` tripwire is compiled out) or unmap garbage (an abort during the tripwire's
+    /// own unwind, with `debug-allocator`). `Drop` must instead return and leak.
+    #[test]
+    fn dropping_a_used_then_moved_instance_leaks_instead_of_walking_stale_sentinels() {
+        let before = mappings();
+        let orisnik = Orisnik::new();
+        let small = take(&orisnik, 24);
+        let large = take(&orisnik, 5000);
+        give(&orisnik, small);
+        give(&orisnik, large);
+        #[cfg(feature = "debug-allocator")]
+        let record_pages = orisnik.records.page_bases();
+        let moved = Box::new(orisnik);
+        // A `debug_assertions` build panics on the tripwire; a release build returns
+        // silently. Neither may hang, abort, or unmap anything.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(moved)));
+        #[cfg(feature = "debug-allocator")]
+        let extra = isize::try_from(record_pages.len()).expect("a handful of pages");
+        #[cfg(not(feature = "debug-allocator"))]
+        let extra = 0;
+        assert_eq!(
+            mappings(),
+            before + 2 + extra,
+            "the stale walk must not run"
+        );
+        release_mapping_of(small, crate::os::PAGE_SIZE);
+        release_mapping_of(large, crate::os::PAGE_SIZE);
+        #[cfg(feature = "debug-allocator")]
+        for base in record_pages {
+            // SAFETY: `base` is a record-book page mapping the moved book leaked.
+            unsafe { crate::os::unmap(base, crate::os::PAGE_SIZE) };
+        }
+        assert_eq!(mappings(), before);
+    }
+
+    /// The tripwire itself must fire when a used-then-moved instance is dropped. (Zig cannot
+    /// test its counterpart: an assertion failure there is uncatchable.)
+    #[test]
+    #[cfg(debug_assertions)]
+    fn dropping_a_moved_instance_trips_the_address_stability_tripwire() {
+        let orisnik = Orisnik::new();
+        // Latches the address without touching any list, so dropping the moved value is
+        // harmless even if the tripwire were missing (the test then fails cleanly).
+        let _ = orisnik.allocated();
+        let moved = Box::new(orisnik);
+        let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(moved)))
+            .expect_err("the tripwire must fire in Drop");
+        let message = error
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| error.downcast_ref::<&str>().map(|text| (*text).to_owned()))
+            .unwrap_or_default();
+        assert!(message.contains("has been moved"), "{message}");
     }
 
     /// `[fence][head: freed, cached][kept: live][rest: free, in the tree][fence]`: the arena

@@ -348,4 +348,25 @@ mod tests {
         // SAFETY: null trivially satisfies `oris_destroy`'s "or null" contract.
         unsafe { oris_destroy(core::ptr::null_mut()) };
     }
+
+    /// `oris_destroy` must actually release the instance (running `Drop`), returning idle
+    /// memory with no prior `oris_purge()`. The C smoke test cannot see this: it only detects
+    /// crashes. (Zig's counterpart is `capi.test.oris_destroy returns idle memory...`.)
+    #[test]
+    fn oris_destroy_returns_idle_memory_without_a_prior_purge() {
+        let before = crate::os::test_vm::live_mappings();
+        let handle = oris_new();
+        // SAFETY: `handle` is live.
+        let big = unsafe { oris_alloc(handle, 5000) };
+        // SAFETY: `handle` is live.
+        let small = unsafe { oris_alloc(handle, 100) };
+        assert!(crate::os::test_vm::live_mappings() > before);
+        // SAFETY: `big` is a live allocation of the live `handle`, freed once.
+        unsafe { oris_free(handle, big) };
+        // SAFETY: `small` is a live allocation of the live `handle`, freed once.
+        unsafe { oris_free(handle, small) };
+        // SAFETY: `handle` is live and is not used after this call.
+        unsafe { oris_destroy(handle) };
+        assert_eq!(crate::os::test_vm::live_mappings(), before);
+    }
 }

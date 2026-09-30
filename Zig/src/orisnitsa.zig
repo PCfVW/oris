@@ -244,7 +244,7 @@ pub fn Orisnitsa(comptime config: Config) type {
         /// part is `deinitReturningLeaks`, which the tests call.
         pub fn deinit(self: *Self) void {
             const leaked = self.deinitReturningLeaks();
-            if (config.debug and leaked > 0) spomen_failure.failOnLeak(leaked);
+            if (spomen_failure.leakIsFatal(config.debug, leaked)) spomen_failure.failOnLeak(leaked);
         }
 
         /// `deinit` without the final panic: audits and reports leaks (debug), releases
@@ -1492,8 +1492,8 @@ test "Orisnitsa(.{ .debug = true }) round-trips identically to the default insta
     // internally claim different bucket size classes for this request.
     var orisnitsa: Orisnitsa(.{ .debug = true }) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     const ptr = orisnitsa.alloc(64) orelse return error.TestUnexpectedResult; // "OS map failed"
     @memset(ptr[0..64], 0xAB);
     try testing.expectEqual(@as(usize, 64), orisnitsa.querySize(ptr));
@@ -1511,8 +1511,9 @@ const debug_config: Config = .{ .debug = true };
 /// panic, which would kill the whole test runner (exit code 3) and bury the assertion that
 /// really failed. So this tears down quietly (`deinitReturningLeaks`) and only escalates a
 /// leak to the panic when the test body otherwise *succeeded* (`failed` is set by an
-/// `errdefer`, which runs first). Use:
-/// `var failed = false; errdefer failed = true; defer finishDebug(&o, &failed);`.
+/// `errdefer`). Defers run in reverse order, so the `errdefer` must be declared **after**
+/// the `defer` to run first. Use:
+/// `var failed = false; defer finishDebug(&o, &failed); errdefer failed = true;`.
 fn finishDebug(o: *Orisnitsa(debug_config), failed: *const bool) void {
     const leaked = o.deinitReturningLeaks();
     if (leaked > 0 and !failed.*) spomen_failure.failOnLeak(leaked);
@@ -1532,8 +1533,8 @@ test "treeAlloc hides the guard reservation from the caller" {
     // side of `querySize`/`alloc`.
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     const requested = bucket.MAX_SMALL_ALLOCATION + 4096;
     const ptr = orisnitsa.alloc(requested) orelse return error.TestUnexpectedResult; // "OS map failed"
     try testing.expectEqual(requested, orisnitsa.querySize(ptr));
@@ -1555,8 +1556,8 @@ test "treeAlloc ramp corruption is actually detectable" {
     // here through the real dispatch instead of a synthetic buffer.
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     const requested = bucket.MAX_SMALL_ALLOCATION + 4096;
     const ptr = orisnitsa.alloc(requested) orelse return error.TestUnexpectedResult; // "OS map failed"
     // INDEX: `requested < requested + memoryGuardSize(debug_config)`, and
@@ -1580,8 +1581,8 @@ test "treeRealloc rewrites the guard ramp at the new size" {
     // argues this from `Tree.realloc`'s contract; this exercises it for real.
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     const small = bucket.MAX_SMALL_ALLOCATION + 64;
     const big = bucket.MAX_SMALL_ALLOCATION + 8192;
     const ptr = orisnitsa.alloc(small) orelse return error.TestUnexpectedResult; // "OS map failed"
@@ -1608,8 +1609,8 @@ test "treeResize rewrites the guard ramp on growth" {
     // `orisnik`'s identical test setup, which pins the same real behaviour.
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     const small = bucket.MAX_SMALL_ALLOCATION + 64;
     const ptr = orisnitsa.alloc(small) orelse return error.TestUnexpectedResult; // "OS map failed"
     // Free the immediately-following block first so `resize` has room to grow
@@ -1639,8 +1640,8 @@ test "bucketAlloc hides the guard reservation from the caller" {
     // largest request that still stays on the bucket path under this config.
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     const requested = bucket.MAX_SMALL_ALLOCATION - guard.memoryGuardSize(debug_config);
     const ptr = orisnitsa.alloc(requested) orelse return error.TestUnexpectedResult; // "OS map failed"
     try testing.expectEqual(requested, orisnitsa.querySize(ptr));
@@ -1659,8 +1660,8 @@ test "bucketAlloc ramp corruption is actually detectable" {
     // earns its own real-dispatch test.
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     const requested = bucket.MAX_SMALL_ALLOCATION - guard.memoryGuardSize(debug_config);
     const ptr = orisnitsa.alloc(requested) orelse return error.TestUnexpectedResult; // "OS map failed"
     // INDEX: `requested < requested + memoryGuardSize(debug_config)`, and the
@@ -1683,8 +1684,8 @@ test "bucketRealloc rewrites the guard ramp at the new size" {
     // internal alloc-copy-free).
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     const small = 8;
     const big = 200;
     const ptr = orisnitsa.alloc(small) orelse return error.TestUnexpectedResult; // "OS map failed"
@@ -1705,8 +1706,8 @@ test "bucketResize rewrites the guard ramp at the same position" {
     // same, unchanged position) rather than merely never having been disturbed.
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     const ptr = orisnitsa.alloc(8) orelse return error.TestUnexpectedResult; // "OS map failed"
     const reported = orisnitsa.querySize(ptr);
     const new_size = orisnitsa.resize(ptr, 8);
@@ -1729,8 +1730,8 @@ test "freeWithSize recomputes the same guard-inflated bucket" {
     // invariant.
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     var size: usize = 1;
     while (size <= bucket.MAX_SMALL_ALLOCATION - guard.memoryGuardSize(debug_config)) : (size += 1) {
         const a = orisnitsa.alloc(size) orelse return error.TestUnexpectedResult; // "OS map failed"
@@ -1761,8 +1762,8 @@ test "bucket-to-tree realloc keeps the new guard ramp and the payload" {
     // a false corruption report.
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     const old = bucket.MAX_SMALL_ALLOCATION - guard.memoryGuardSize(debug_config); // a full 256-byte slot
     const new = bucket.MAX_SMALL_ALLOCATION - 6; // 250: no longer fits a bucket once guarded
     const ptr = orisnitsa.alloc(old) orelse return error.TestUnexpectedResult; // "OS map failed"
@@ -1781,8 +1782,8 @@ test "bucket-to-tree realloc-aligned keeps the new guard ramp and the payload" {
     // `reallocAligned`'s twin of the test above.
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     const alignment = 16;
     const old = bucket.MAX_SMALL_ALLOCATION - guard.memoryGuardSize(debug_config);
     const new = bucket.MAX_SMALL_ALLOCATION - 6;
@@ -1804,8 +1805,8 @@ test "treeAlloc poisons the fresh payload" {
     // real dispatch.
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     const size = bucket.MAX_SMALL_ALLOCATION + 4096;
     const ptr = orisnitsa.alloc(size) orelse return error.TestUnexpectedResult; // "OS map failed"
     for (0..size) |i| {
@@ -1821,8 +1822,8 @@ test "bucketAlloc poisons the fresh payload" {
     // `treeAlloc`), so it earns its own real-dispatch test.
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     const size = bucket.MAX_SMALL_ALLOCATION - guard.memoryGuardSize(debug_config);
     const ptr = orisnitsa.alloc(size) orelse return error.TestUnexpectedResult; // "OS map failed"
     for (0..size) |i| {
@@ -1847,8 +1848,8 @@ test "free poisons the payload before reclaim" {
     // `free` call.
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     const size = bucket.MAX_SMALL_ALLOCATION + 4096;
     const ptr = orisnitsa.alloc(size) orelse return error.TestUnexpectedResult; // "OS map failed"
     @memset(ptr[0..size], 0xAB);
@@ -1866,8 +1867,8 @@ test "calloc zero-fill overwrites the poison" {
     // poison.
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     const count = 4;
     const size = 64;
     const ptr = orisnitsa.calloc(count, size) orelse return error.TestUnexpectedResult; // "OS map failed"
@@ -1899,8 +1900,8 @@ const guard_size = guard.memoryGuardSize(debug_config);
 test "every allocation is recorded and free retires it" {
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     const small = orisnitsa.alloc(24) orelse return error.TestUnexpectedResult;
     const large = orisnitsa.alloc(1000) orelse return error.TestUnexpectedResult;
     const aligned_small = orisnitsa.allocAligned(24, 32) orelse return error.TestUnexpectedResult;
@@ -1918,8 +1919,8 @@ test "every allocation is recorded and free retires it" {
 test "requested counts size plus guard and follows realloc and resize" {
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     const first = orisnitsa.alloc(24) orelse return error.TestUnexpectedResult;
     try testing.expectEqual(24 + guard_size, orisnitsa.requested());
     const second = orisnitsa.alloc(1000) orelse return error.TestUnexpectedResult;
@@ -1942,8 +1943,8 @@ test "a bucket resize re-records the slot's real usable size" {
     // spacing), so `resize` reports 24 usable bytes and the record follows.
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     const ptr = orisnitsa.alloc(20) orelse return error.TestUnexpectedResult;
     try testing.expectEqual(20 + guard_size, orisnitsa.requested());
     const new_size = orisnitsa.resize(ptr, 20);
@@ -1963,8 +1964,8 @@ test "sub-minimum requests are recorded clamped and a sized free accepts them" {
     // passes (an HPHA debug-mode bug deliberately not reproduced).
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     const ptr = orisnitsa.alloc(5) orelse return error.TestUnexpectedResult;
     const record = orisnitsa.records.find(ptr) orelse return error.TestUnexpectedResult;
     try testing.expectEqual(bucket.MIN_ALLOCATION, record.size);
@@ -1976,8 +1977,8 @@ test "sub-minimum requests are recorded clamped and a sized free accepts them" {
 test "realloc rekeys the record across every path" {
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     // bucket -> bucket
     var ptr = orisnitsa.alloc(24) orelse return error.TestUnexpectedResult;
     ptr = orisnitsa.realloc(ptr, 100) orelse return error.TestUnexpectedResult;
@@ -2006,8 +2007,8 @@ test "a failed realloc leaves the original allocation and record intact" {
     // `Cpp/ERRATA.md` E9: the replace hook only ever runs on success.
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     const ptr = orisnitsa.alloc(24) orelse return error.TestUnexpectedResult;
     // The bucket -> tree crossover needs a fresh arena; refuse the OS.
     os.test_vm.failMapAfter(0);
@@ -2026,8 +2027,8 @@ test "a record store out of memory frees the block and returns null" {
     // The first map serves the bucket page; the second (the record page) is refused.
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     os.test_vm.failMapAfter(1);
     defer os.test_vm.clearFailure();
     try testing.expect(orisnitsa.alloc(24) == null);
@@ -2046,8 +2047,8 @@ test "a record store out of memory frees the block and returns null" {
 test "the same OOM on the tree path frees the block and returns null" {
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     os.test_vm.failMapAfter(1); // the arena maps; the record page is refused
     defer os.test_vm.clearFailure();
     try testing.expect(orisnitsa.alloc(5000) == null);
@@ -2060,8 +2061,8 @@ test "the same OOM on the tree path frees the block and returns null" {
 test "verify reports each corruption kind as a value" {
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
 
     // Guard overrun, on both paths.
     for ([_]usize{ 24, 1000 }) |size| {
@@ -2146,8 +2147,8 @@ test "callstacks start at the caller on every entry point" {
     if (!std.options.allow_stack_tracing) return error.SkipZigTest;
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     var ret: usize = 0;
     for ([_]Entry{ .alloc, .calloc, .alloc_aligned }) |entry| {
         const p = callThroughHelper(&orisnitsa, entry, null, &ret) orelse return error.TestUnexpectedResult;
@@ -2174,8 +2175,8 @@ test "callstacks start at the caller on every entry point" {
 test "purge returns the record store's spare pages" {
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&orisnitsa, &failed);
+    errdefer failed = true;
     const ptr = orisnitsa.alloc(24) orelse return error.TestUnexpectedResult;
     orisnitsa.free(ptr);
     // The freed record leaves an empty-but-mapped book page behind ...
@@ -2202,8 +2203,8 @@ test "every public operation runs exactly its hooks (dispatch wiring)" {
     // call sites HPHA has (`Cpp/hpha.h:1264-1440`).
     var o: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&o, &failed);
+    errdefer failed = true;
 
     // alloc / calloc / allocAligned (all four routes): one add each, nothing else.
     const a = o.alloc(24) orelse return error.TestUnexpectedResult;
@@ -2286,8 +2287,8 @@ test "every public operation runs exactly its hooks (dispatch wiring)" {
 test "a failed realloc runs the check but never the replace hook" {
     var o: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&o, &failed);
+    errdefer failed = true;
     const p = o.alloc(24) orelse return error.TestUnexpectedResult;
     o.stats = .{};
     os.test_vm.failMapAfter(0);
@@ -2302,8 +2303,8 @@ test "a failed realloc runs the check but never the replace hook" {
 test "E9 on the tree path: a failed tree realloc keeps the original and its record" {
     var o: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&o, &failed);
+    errdefer failed = true;
     const p = o.alloc(5000) orelse return error.TestUnexpectedResult;
     const q = o.allocAligned(5000, 128) orelse return error.TestUnexpectedResult;
     o.stats = .{};
@@ -2332,8 +2333,8 @@ test "E9 on the tree path: a failed tree realloc keeps the original and its reco
 test "the record-store OOM path also frees an aligned block" {
     var o: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&o, &failed);
+    errdefer failed = true;
     // Bucket path: the first map serves the page, the second (the record page) fails.
     os.test_vm.failMapAfter(1);
     defer os.test_vm.clearFailure();
@@ -2352,8 +2353,8 @@ test "the record-store OOM path also frees an aligned block" {
 test "verify compares a tree-path record raw and a bucket-path record clamped" {
     var o: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&o, &failed);
+    errdefer failed = true;
 
     // Tree path via a large alignment records the RAW size, even below the minimum:
     // clamping the caller's size there would falsely report a mismatch.
@@ -2414,8 +2415,8 @@ test "counters and sources follow every realloc path" {
     // path: the per-source totals and the recorded size/source change with each step.
     var o: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&o, &failed);
+    errdefer failed = true;
 
     // bucket -> bucket
     var p = o.alloc(24) orelse return error.TestUnexpectedResult;
@@ -2469,8 +2470,8 @@ test "every realloc path recaptures the record's callstack" {
     // record's callstack.
     var o: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&o, &failed);
+    errdefer failed = true;
     const sentinel_cs = [_]usize{ 1, 2, 3, 4, 5, 6, 7, 8 };
     const Step = struct { aligned: bool, from: usize, to: usize, alignment: usize };
     const steps = [_]Step{
@@ -2644,8 +2645,8 @@ fn flipGuardByte(ptr: [*]u8, size: usize) void {
 test "check passes on a healthy heap of every kind" {
     var o: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&o, &failed);
+    errdefer failed = true;
     try o.check(null); // an empty heap is healthy
     const blocks = [_][*]u8{
         o.alloc(24) orelse return error.TestUnexpectedResult,
@@ -2666,8 +2667,8 @@ test "check reports a guard overrun as a value, and changes nothing" {
     for ([_]usize{ 24, 3000 }) |size| {
         var o: Orisnitsa(debug_config) = .init();
         var failed = false;
-        errdefer failed = true;
         defer finishDebug(&o, &failed);
+        errdefer failed = true;
         const healthy = o.alloc(64) orelse return error.TestUnexpectedResult;
         const victim = o.alloc(size) orelse return error.TestUnexpectedResult;
         flipGuardByte(victim, size);
@@ -2692,8 +2693,8 @@ test "check reports a guard overrun as a value, and changes nothing" {
 test "check reports a record larger than its block" {
     var o: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&o, &failed);
+    errdefer failed = true;
     const p = o.alloc(24) orelse return error.TestUnexpectedResult;
     const record = o.records.find(p) orelse return error.TestUnexpectedResult;
     record.size = 10_000; // forged: the point of the test
@@ -2714,8 +2715,8 @@ fn ptrLess(_: void, a: [*]u8, b: [*]u8) bool {
 test "check stops at the first problem in address order" {
     var o: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&o, &failed);
+    errdefer failed = true;
     var blocks = [_][*]u8{
         o.alloc(24) orelse return error.TestUnexpectedResult,
         o.alloc(24) orelse return error.TestUnexpectedResult,
@@ -2738,8 +2739,8 @@ test "check stops at the first problem in address order" {
 test "report lists the totals and every live block in address order" {
     var o: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&o, &failed);
+    errdefer failed = true;
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     var blocks = [_][*]u8{
@@ -2775,8 +2776,8 @@ test "report shows where a block was allocated (raw return addresses)" {
     if (!std.options.allow_stack_tracing) return error.SkipZigTest;
     var o: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&o, &failed);
+    errdefer failed = true;
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     const p = o.alloc(24) orelse return error.TestUnexpectedResult;
@@ -2867,8 +2868,8 @@ test "check clears a reused Diagnostic on success" {
     // Kills: dropping `d.len = 0` at the top of `check` (a stale message would survive).
     var o: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&o, &failed);
+    errdefer failed = true;
     const p = o.alloc(24) orelse return error.TestUnexpectedResult;
     flipGuardByte(p, 24);
     var diagnostic: spomen_failure.Diagnostic = .{};
@@ -2886,8 +2887,8 @@ test "a clean heap's teardown prints nothing and reports zero leaks" {
     // debug deinit would print a report).
     var o: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&o, &failed);
+    errdefer failed = true;
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     try testing.expectEqual(@as(usize, 0), try teardownText(&o, &aw)); // never used
@@ -2903,8 +2904,8 @@ test "the teardown output for one leak: summary, head, one entry, foot" {
     // for a healthy leak.
     var o: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&o, &failed);
+    errdefer failed = true;
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     const p = o.alloc(24) orelse return error.TestUnexpectedResult;
@@ -2924,8 +2925,8 @@ test "the teardown prints the first problem before the report head" {
     // Kills: dropping the problem line, or printing it after the head.
     var o: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&o, &failed);
+    errdefer failed = true;
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     const p = o.alloc(24) orelse return error.TestUnexpectedResult;
@@ -2944,8 +2945,8 @@ test "the teardown lists two leaks in storage order" {
     // Kills: listing (or auditing) in address order instead of storage order.
     var o: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&o, &failed);
+    errdefer failed = true;
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     const first = o.alloc(24) orelse return error.TestUnexpectedResult;
@@ -2967,8 +2968,8 @@ test "address order and storage order differ, and each consumer uses its own" {
     // that sits last in the book, and swap-remove moves the last record into the hole.
     var o: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&o, &failed);
+    errdefer failed = true;
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     const a = o.alloc(24) orelse return error.TestUnexpectedResult;
@@ -3025,8 +3026,8 @@ test "report golden output" {
     // frame indent, whether zero frames print, the newline after each entry and the foot.
     var o: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&o, &failed);
+    errdefer failed = true;
     var blocks = [_][*]u8{
         o.alloc(24) orelse return error.TestUnexpectedResult,
         o.alloc(100) orelse return error.TestUnexpectedResult,
@@ -3061,8 +3062,8 @@ test "reportToStderr runs" {
     // run `reportToStderr`, which no other test does.
     var o: Orisnitsa(debug_config) = .init();
     var failed = false;
-    errdefer failed = true;
     defer finishDebug(&o, &failed);
+    errdefer failed = true;
     const p = o.alloc(24) orelse return error.TestUnexpectedResult;
     o.reportToStderr();
     o.free(p);

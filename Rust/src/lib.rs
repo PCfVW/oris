@@ -71,6 +71,7 @@ mod global_alloc;
 // without `debug-allocator`), unlike `spomen` below, which this feature excludes from
 // the build entirely. See `Rust/CONVENTIONS.md`'s `debug_assert!` Invariants section.
 mod guard;
+mod home;
 mod list;
 mod orisnik;
 mod os;

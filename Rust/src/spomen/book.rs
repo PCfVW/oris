@@ -29,6 +29,7 @@
 //! `ptr::write`/`ptr::read` and drops each exactly once: [`RecordBook::pop_back`] hands
 //! ownership of the popped record to its caller, and `Drop` drains whatever is left.
 
+use crate::home::Home;
 use crate::list::{IntrusiveList, ListLink, ListNode, unlink_node};
 use crate::os;
 use crate::spomen::record::Record;
@@ -72,6 +73,9 @@ pub(crate) struct RecordBook {
     next: Cell<usize>,
     /// Live records in the whole book.
     len: Cell<usize>,
+    /// Where this book stood when it first mapped a page; `Drop` leaks instead of walking a
+    /// page chain whose sentinel a later move left stale (see [`Home`]).
+    home: Home,
 }
 
 /// The base of the mapping `page`'s tail slot lives in.
@@ -112,6 +116,7 @@ impl RecordBook {
             cur: Cell::new(core::ptr::null_mut()),
             next: Cell::new(0),
             len: Cell::new(0),
+            home: Home::new(),
         }
     }
 
@@ -144,6 +149,26 @@ impl RecordBook {
         next.cast::<BookPage>()
     }
 
+    /// The base address of every mapped page, in chain order — lets a test that deliberately
+    /// makes `Drop` leak (a moved book) return the mappings itself.
+    #[cfg(test)]
+    pub(crate) fn page_bases(&self) -> Vec<NonNull<u8>> {
+        let mut bases = Vec::new();
+        let mut page = self
+            .pages
+            .front()
+            .map_or(core::ptr::null_mut(), NonNull::as_ptr);
+        // EXPLICIT: chain walk; the current page pointer is the state.
+        while !page.is_null() {
+            // SAFETY: `page` is a live page of this book (test-only walk, nothing unmapped).
+            let base = unsafe { base_of(page) };
+            bases.push(NonNull::new(base).expect("a mapping base is non-null"));
+            // SAFETY: `page` is a live page of this book.
+            page = unsafe { self.next_page(page) };
+        }
+        bases
+    }
+
     /// The page before `page` in the chain, or null if `page` is the first.
     ///
     /// # Safety
@@ -164,6 +189,7 @@ impl RecordBook {
     /// Maps and links one fresh page at the end of the chain.
     fn grow(&self) -> Option<*mut BookPage> {
         let mem = os::map(os::PAGE_SIZE)?;
+        self.home.latch(self);
         // SAFETY: `mem` is a live `PAGE_SIZE` mapping (just returned by `os::map`), so
         // the tail offset is inside it.
         let tail = unsafe { mem.as_ptr().byte_add(os::PAGE_SIZE - TAIL) };
@@ -370,6 +396,12 @@ impl Drop for RecordBook {
     /// book, so unlinking would be wasted work anyway; reads through the old pointers are
     /// permitted.
     fn drop(&mut self) {
+        // A book that mapped pages and was then moved has a stale sentinel: walking it would
+        // unmap garbage (and, during the unwind of `Orisnik`'s own move tripwire, turn one
+        // panic into an abort). Leak instead, as before `Drop` existed.
+        if !self.home.holds(self) {
+            return;
+        }
         while let Some(record) = self.pop_back() {
             drop(record);
         }

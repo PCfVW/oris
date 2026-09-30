@@ -355,10 +355,10 @@ impl Orisnik {
     /// error instead: the heap is, by definition, no longer trustworthy.
     ///
     /// # Errors
-    /// Returns [`OrisError::Corruption`] describing the first record found overrun or
-    /// inconsistent (block address, sizes, and — for an owned instance — where it was
-    /// allocated), or, after an earlier detected corruption, saying the records can no longer
-    /// be audited.
+    /// Returns [`OrisError::Corruption`] if a live record is found overrun or inconsistent
+    /// with its block (the message gives the block address, the sizes and — for an owned
+    /// instance — where it was allocated), or if a corruption was detected earlier and the
+    /// records can no longer be audited.
     pub fn check(&self) -> Result<(), OrisError> {
         if self.disabled.get() {
             return Err(OrisError::Corruption(
@@ -366,6 +366,8 @@ impl Orisnik {
             ));
         }
         let mut cursor = self.records.first();
+        // EXPLICIT: walks the store by successor pointer, latched before the body runs; the
+        // cursor is the state, not expressible as an iterator over the record tree.
         while let Some(record) = cursor {
             // Latched first: nothing below changes the store, but this keeps the walk
             // robust should a future caller interleave allocations.
@@ -456,6 +458,7 @@ impl Orisnik {
     ) -> core::fmt::Result {
         self.write_report_head(out)?;
         let mut cursor = self.records.first();
+        // EXPLICIT: same successor-pointer walk as `check`; the cursor is the state.
         while let Some(record) = cursor {
             cursor = self.records.next(record);
             Self::write_record_line(record, out)?;
@@ -1743,5 +1746,164 @@ mod tests {
         free(&orisnik, first);
         free(&orisnik, second);
         assert!(panic_message(move || drop(orisnik)).is_none());
+    }
+
+    // ---- pins found by mutation review: order, suspension, sinks, golden text ------------
+
+    fn record_ptr(record: NonNull<Record>) -> NonNull<u8> {
+        // SAFETY: `record` is live (handed out by the store).
+        unsafe { (*record.as_ptr()).ptr }
+    }
+
+    /// The drop-time audit and listing walk the record book in *storage* order, the public
+    /// `report()` in address order; a freed slot that is reused sorts first by address but
+    /// last in storage, which is what tells the two apart.
+    #[test]
+    fn the_leak_audit_and_listing_follow_storage_order_not_address_order() {
+        let orisnik = Box::new(Orisnik::new());
+        let first = alloc(&orisnik, 24);
+        let others = [
+            alloc(&orisnik, 24),
+            alloc(&orisnik, 24),
+            alloc(&orisnik, 24),
+        ];
+        free(&orisnik, first);
+        // Reuses `first`'s slot: lowest address, stored last.
+        let reused = alloc(&orisnik, 24);
+        let mut storage = Vec::new();
+        orisnik
+            .records
+            .for_each_live(|record| storage.push(record_ptr(record)));
+        let mut by_address = Vec::new();
+        let mut cursor = orisnik.records.first();
+        while let Some(record) = cursor {
+            by_address.push(record_ptr(record));
+            cursor = orisnik.records.next(record);
+        }
+        let storage_first = *storage.first().expect("four live records");
+        let address_first = *by_address.first().expect("four live records");
+        assert_ne!(
+            storage_first, address_first,
+            "precondition: the two orders differ"
+        );
+        overrun(storage_first, 24);
+        overrun(address_first, 24);
+        let mut text = String::new();
+        assert_eq!(orisnik.debug_teardown_to(&mut text), 4);
+        let audit = text.lines().nth(1).expect("the audit line");
+        assert!(
+            audit.contains(&format!("{:#x}", storage_first.addr().get())),
+            "the audit names the storage-first block: {text}"
+        );
+        let mut at = text
+            .find("Currently allocated blocks:")
+            .expect("the listing");
+        for block in &storage {
+            let line = format!("ptr={:#x},", block.addr().get());
+            let found = text
+                .get(at..)
+                .and_then(|rest| rest.find(&line))
+                .unwrap_or_else(|| panic!("{line} out of storage order in {text}"));
+            at += found + line.len();
+        }
+        // Undo: repair both blocks, lift the suspension, and drop cleanly.
+        overrun(storage_first, 24);
+        overrun(address_first, 24);
+        orisnik.busy.set(false);
+        for block in others.into_iter().chain([reused]) {
+            free(&orisnik, block);
+        }
+        assert!(panic_message(move || drop(orisnik)).is_none());
+    }
+
+    /// The teardown formats its report while the instance is suspended (`busy`), so a sink
+    /// that allocates from the instance adds no records of its own.
+    #[test]
+    fn the_teardown_suspends_the_hooks_for_a_sink_that_allocates() {
+        let orisnik = Box::new(Orisnik::new());
+        let ptr = alloc(&orisnik, 24);
+        let mut sink = AllocatingSink {
+            orisnik: &orisnik,
+            blocks: Vec::new(),
+        };
+        assert_eq!(orisnik.debug_teardown_to(&mut sink), 1);
+        assert!(!sink.blocks.is_empty());
+        assert_eq!(
+            orisnik.records.len(),
+            1,
+            "the sink's blocks must be unrecorded"
+        );
+        for block in sink.blocks {
+            free(&orisnik, block);
+        }
+        orisnik.busy.set(false);
+        free(&orisnik, ptr);
+        assert!(panic_message(move || drop(orisnik)).is_none());
+    }
+
+    #[test]
+    fn write_report_accepts_an_unsized_sink() {
+        let orisnik = Orisnik::new();
+        let ptr = alloc(&orisnik, 24);
+        let mut text = String::new();
+        let sink: &mut dyn core::fmt::Write = &mut text;
+        orisnik.write_report(sink).expect("a String sink");
+        assert!(text.contains("ptr="), "{text}");
+        free(&orisnik, ptr);
+        orisnik.purge();
+    }
+
+    /// The exact report text (a global-latched instance records no callstack, so it is fully
+    /// deterministic); Zig has the same golden test.
+    #[test]
+    fn report_golden_output() {
+        let orisnik = Orisnik::new();
+        orisnik.mark_used_as_global();
+        let first = alloc(&orisnik, 24);
+        let second = alloc(&orisnik, 100);
+        let mut blocks = [(first, 24), (second, 100)];
+        blocks.sort_by_key(|(ptr, _)| ptr.addr());
+        let expected = format!(
+            concat!(
+                "REPORT =================================================\n",
+                "Total requested size={} bytes\n",
+                "Total allocated size={} bytes\n",
+                "Currently allocated blocks:\n",
+                "ptr={:#x}, size={}\n",
+                "ptr={:#x}, size={}\n",
+                "===========================================================\n",
+            ),
+            orisnik.requested(),
+            orisnik.allocated(),
+            blocks[0].0.addr().get(),
+            blocks[0].1,
+            blocks[1].0.addr().get(),
+            blocks[1].1,
+        );
+        assert_eq!(report_text(&orisnik), expected);
+        free(&orisnik, first);
+        free(&orisnik, second);
+        orisnik.purge();
+    }
+
+    /// A record only one byte larger than its block: the guard check fails too, so only the
+    /// message tells the size check from it.
+    #[test]
+    fn check_flags_a_record_one_byte_larger_than_its_block() {
+        let orisnik = Orisnik::new();
+        let ptr = alloc(&orisnik, 24);
+        let usable = usable_size(&orisnik, ptr);
+        let record = orisnik.records.find(ptr).expect("recorded");
+        // SAFETY: `record` is a live record; forging its size is the point of the test.
+        unsafe { (*record.as_ptr()).size = usable + 1 };
+        let Err(OrisError::Corruption(message)) = orisnik.check() else {
+            panic!("the oversized record must be reported");
+        };
+        assert!(message.contains("recorded size exceeds"), "{message}");
+        // SAFETY: as above; restoring the true size.
+        unsafe { (*record.as_ptr()).size = 24 };
+        assert!(orisnik.check().is_ok());
+        free(&orisnik, ptr);
+        orisnik.purge();
     }
 }

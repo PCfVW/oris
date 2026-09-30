@@ -22,6 +22,7 @@
 use crate::align::round_up;
 use crate::block::{self, BlockHeader, FreeNode, SmallFreeNode};
 use crate::bucket::MAX_SMALL_ALLOCATION;
+use crate::home::Home;
 use crate::list::{self, IntrusiveList};
 use crate::os;
 use crate::rbtree::{self, IntrusiveMultiRbTree};
@@ -184,6 +185,9 @@ pub(crate) struct Tree {
     /// Total bytes currently mapped for the tree path (whole `PAGE_SIZE`-multiple
     /// arenas, fences included).
     allocated_bytes: Cell<usize>,
+    /// Where this value stood when it first mapped an arena; lets `Drop` refuse to walk
+    /// sentinels that a later move left pointing at the old address (see [`Home`]).
+    home: Home,
 }
 
 impl Tree {
@@ -194,7 +198,15 @@ impl Tree {
             free_tree: IntrusiveMultiRbTree::new(),
             small_free_list: IntrusiveList::new(),
             allocated_bytes: Cell::new(0),
+            home: Home::new(),
         }
+    }
+
+    /// `false` iff this value mapped an arena and has been moved since, so that its
+    /// sentinels are stale and must not be walked (see [`Home`]).
+    #[must_use]
+    pub(crate) fn is_at_home(&self) -> bool {
+        self.home.holds(self)
     }
 
     /// Total bytes currently claimed from the OS by the tree path. Ports the tree
@@ -248,6 +260,7 @@ impl Tree {
     fn system_alloc(&self, size: usize) -> Option<NonNull<u8>> {
         debug_assert_eq!(size % os::PAGE_SIZE, 0);
         let ptr = os::map(size)?;
+        self.home.latch(self);
         self.allocated_bytes.set(self.allocated_bytes.get() + size);
         Some(ptr)
     }
@@ -1143,6 +1156,8 @@ impl Tree {
             // still has to read.
             pending = unsafe { Self::thread_if_purgeable(block, pending) };
         });
+        // EXPLICIT: chases the chain threaded through the blocks' own payloads, unmapping as it
+        // goes; `pending` is the state, and each successor is read before its block goes.
         while !pending.is_null() {
             let block = pending;
             // SAFETY: `block` was threaded by `thread_if_purgeable`, so it is live and unused

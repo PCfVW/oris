@@ -171,6 +171,13 @@ pub fn failOnLeak(leaked: usize) noreturn {
     fail(leakMessage(&buf, leaked));
 }
 
+/// Whether a teardown that found `leaked` live allocations must end in `failOnLeak`: only
+/// with the debug allocator on, and only if something leaked. A pure gate, so the decision
+/// is testable even though the panic it triggers is not.
+pub fn leakIsFatal(comptime debug: bool, leaked: usize) bool {
+    return debug and leaked > 0;
+}
+
 /// Bytes `leakMessage` needs for any `usize` count.
 pub const LEAK_MESSAGE_CAPACITY: usize = 160;
 
@@ -244,6 +251,25 @@ test "a Diagnostic keeps the description it was given" {
     try testing.expectEqual(@as(usize, 0), diagnostic.message().len);
     diagnostic.set(.unknown_pointer, ptrAt(0x1230), null);
     try testing.expect(std.mem.indexOf(u8, diagnostic.message(), "0x1230") != null);
+}
+
+test "a Diagnostic holds the description byte for byte" {
+    // Compared against `describe` itself, so a message that lost its last byte (or kept a
+    // stray one) cannot pass.
+    var expected_buf: [MESSAGE_CAPACITY]u8 = undefined;
+    const expected = describe(&expected_buf, .unknown_pointer, ptrAt(0x1230), null);
+    var diagnostic: Diagnostic = .{};
+    diagnostic.set(.unknown_pointer, ptrAt(0x1230), null);
+    try testing.expectEqualStrings(expected, diagnostic.message());
+    try testing.expectEqual(expected.len, diagnostic.len);
+}
+
+test "only a leak under the debug allocator is fatal" {
+    try testing.expect(leakIsFatal(true, 1));
+    try testing.expect(leakIsFatal(true, 2));
+    try testing.expect(!leakIsFatal(true, 0));
+    try testing.expect(!leakIsFatal(false, 0));
+    try testing.expect(!leakIsFatal(false, 5));
 }
 
 test "an oversized record's whole message, exactly" {

@@ -69,6 +69,13 @@ impl RecordStore {
         self.book.len()
     }
 
+    /// Base address of every page the record book has mapped; see
+    /// [`RecordBook::page_bases`].
+    #[cfg(test)]
+    pub(crate) fn page_bases(&self) -> Vec<NonNull<u8>> {
+        self.book.page_bases()
+    }
+
     /// The record for the allocation at `ptr`, if one is live. Ports the map's
     /// `find`.
     #[must_use]

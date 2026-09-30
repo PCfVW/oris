@@ -284,6 +284,20 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Fixed
 
+- **Dropping a used-then-moved `Orisnik` hung release builds (Rust, v0.2.0 Phase 5; found
+  by the Phase 5 consistency review).** The teardown walks structures whose sentinels bind
+  to the instance's address; a value that had served requests and was then moved (returned
+  from a builder, say) held sentinels naming its old address, and the walk never reached its
+  own — an infinite loop where the `debug_assert!` tripwire is compiled out, and, with
+  `debug-allocator`, a double panic (the record book unmapping garbage while the tripwire
+  unwound) that aborted the process. `Buckets`, `Tree` and the record book now latch their
+  address when they first map memory (a cold path; the hot paths gain nothing) and `Drop`
+  leaks instead of walking when it has changed — what such a value did before `Drop`
+  existed. The Zig port has no such hazard (`deinit` is an explicit call on a stable
+  address). Also: the Zig test helper `finishDebug` never saw its `failed` flag (its
+  `errdefer` was declared before the `defer`, so ran after it), so a test that failed *and*
+  leaked crashed the runner instead of reporting the real failure.
+
 - **Bucket→tree `realloc` clobbered the new block's guard ramp (v0.2.0 Phase 2, both
   ports; found by the Phase 2 consistency review, not by a test).** When a
   guard-enabled `realloc`/`realloc_aligned` promotes a bucket allocation onto the tree
