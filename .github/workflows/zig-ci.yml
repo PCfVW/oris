@@ -37,8 +37,10 @@ jobs:
         run: zig fmt --check build.zig build.zig.zon src examples
       - name: Build & test (includes the leak probe and the example)
         run: zig build test -Doptimize=${{ matrix.optimize }}
+      # Independent of the optimize mode and the OS: once is enough.
       - name: API docs build
-        run: zig build docs -Doptimize=${{ matrix.optimize }}
+        if: matrix.optimize == 'Debug' && matrix.os == 'ubuntu-latest'
+        run: zig build docs
 
   # Aggregator gate: a single stable check to require in branch protection,
   # so the ruleset never needs editing when the matrix above changes.

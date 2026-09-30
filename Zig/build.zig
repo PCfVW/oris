@@ -87,11 +87,19 @@ pub fn build(b: *std.Build) void {
             .imports = &.{.{ .name = "orisnitsa", .module = mod }},
         }),
     });
+    // `zig build example`: the plain run, its output visible (a Run step with checks captures
+    // stderr and shows it only on failure).
     const run_example = b.addRunArtifact(example);
-    run_example.expectStdErrMatch("check() found Corruption: guard bytes overwritten");
-    run_example.expectStdErrMatch("check() after repair: true");
     b.step("example", "Run the debug-allocator example").dependOn(&run_example.step);
-    test_step.dependOn(&run_example.step);
+    // `zig build test`: the same program, checked — exit code 0 (a leak or any panic fails it) and
+    // the lines the guide quotes.
+    const check_example = b.addRunArtifact(example);
+    check_example.expectExitCode(0);
+    check_example.expectStdErrMatch("check() found Corruption: guard bytes overwritten");
+    check_example.expectStdErrMatch("check() after repair: true");
+    check_example.expectStdErrMatch("Total requested size=40 bytes");
+    check_example.expectStdErrMatch("size=24");
+    test_step.dependOn(&check_example.step);
 
     // Static and shared C-linkable libraries, built from a *separate* module
     // rooted directly at `capi.zig`, not `mod` (rooted at `root.zig`). Zig only

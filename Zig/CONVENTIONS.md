@@ -498,10 +498,9 @@ shims. Contracts to keep:
   capture allocates. Zig's capture is a lock-free, non-allocating frame walk into a fixed
   `[MAX_CALLSTACK_DEPTH]usize`, and the store maps pages through `os.map`, never an allocator, so a
   hook can never re-enter the allocator and there is no `busy`/`disabled` state. That is a statement
-  about re-entrancy only, not about where a debug instance can be installed: `allocator.zig` and
-  `capi.zig` are fixed to `Orisnitsa(.{})`, so in this repo a `config.debug` instance cannot back a
-  `std.mem.Allocator` through the vtable or the C API — it is reachable only through the type's own
-  methods.
+  about re-entrancy only, not about where a debug instance can be installed: `capi.zig` is fixed to
+  `Orisnitsa(.{})`, so a `config.debug` instance is never behind the C API, while `allocator.zig` is
+  generic and a debug instance can back a `std.mem.Allocator` (`root.zig`'s `OrisnitsaWith`).
 - **`requested()`.** Debug only; HPHA's `mTotalRequestedSize*`, each block counted as
   `size + memoryGuardSize`.
 - **`deinit()` — every build releases memory; debug also fails on leaks.** `deinit()` returns every

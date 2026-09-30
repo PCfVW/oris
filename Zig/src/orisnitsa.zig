@@ -455,10 +455,9 @@ pub fn Orisnitsa(comptime config: Config) type {
         // `[MAX_CALLSTACK_DEPTH]usize` buffer that allocates nothing, and the record
         // store maps its pages through `os.map`, never through an allocator. So there
         // is no `busy`/`disabled` state and no re-entrancy rule to follow. (This is
-        // not a claim that a debug instance can be installed anywhere: `allocator.zig`
-        // and `capi.zig` are fixed to `Orisnitsa(.{})`, so in this repo a debug
-        // instance is reachable only through the type's own methods, never through the
-        // `std.mem.Allocator` vtable or the C API.)
+        // not a claim that a debug instance can be installed anywhere: `capi.zig` is
+        // fixed to `Orisnitsa(.{})`, so the C API never sees one; `allocator.zig` is
+        // generic, so a debug instance can back a `std.mem.Allocator`.)
         //
         // # Failure
         // Detected corruption ends in `spomen_failure.fail` (`std.debug.panic`).

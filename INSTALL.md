@@ -71,7 +71,7 @@ orisnik = "0.1"
 cd Zig
 zig build test                          # Debug — runtime safety checks ON
 zig build test -Doptimize=ReleaseSafe   # optimized, safety checks ON
-zig fmt --check build.zig build.zig.zon src
+zig fmt --check build.zig build.zig.zon src examples
 ```
 
 Once released, fetch the tagged GitHub Release asset (the URL and hash are printed in

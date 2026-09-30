@@ -12,7 +12,8 @@ readme = "README.md"
 keywords = ["allocator", "heap", "memory", "global-allocator", "hpha"]
 categories = ["memory-management"]
 # Keeps the published package to source + license + README + the shared C header (and the
-# `debug_global_allocator` integration test, which `required-features` keeps out of default runs).
+# `debug_global_allocator` integration test and the `catch_an_overrun` example, which
+# `required-features` keeps out of default runs).
 # CLAUDE.md/CONVENTIONS.md (AI-assistant wiring, coding conventions) and clippy.toml
 # (this crate's own lint-floor config, not meaningful to a downstream consumer's
 # build) stay GitHub-only — crates.io is the lean tier, the repo is the full tier.
@@ -58,14 +59,16 @@ debug-allocator = []
 # functions and three constants, declared directly in src/os.rs.
 libc = "0.2"
 
-# Global-allocator integration test (see the file's own doc). No libtest harness: a global
-# allocator is process-wide and `Orisnik` is single-threaded by contract, so `main` must be
-# the only thread.
+# The debug allocator catching an overrun and a leak on purpose (see the file's own doc and
+# `docs/debug-allocator.md`).
 [[example]]
 name = "catch_an_overrun"
 path = "examples/catch_an_overrun.rs"
 required-features = ["debug-allocator"]
 
+# Global-allocator integration test (see the file's own doc). No libtest harness: a global
+# allocator is process-wide and `Orisnik` is single-threaded by contract, so `main` must be
+# the only thread.
 [[test]]
 name = "debug_global_allocator"
 path = "tests/debug_global_allocator.rs"

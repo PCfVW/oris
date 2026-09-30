@@ -56,6 +56,9 @@ jobs:
         run: cargo clippy --all-targets --features debug-allocator -- -D warnings
       - name: Tests (debug-allocator)
         run: cargo test --features debug-allocator
+      # The user guide's example: must build *and* exit 0 (it catches its own leak panic).
+      - name: Example (debug-allocator)
+        run: cargo run --example catch_an_overrun --features debug-allocator
 
   miri:
     # The allocator's soundness gate: Miri models provenance and aliasing, the

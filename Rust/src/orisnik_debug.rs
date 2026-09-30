@@ -1944,4 +1944,96 @@ mod tests {
         free(&orisnik, ptr);
         orisnik.purge();
     }
+
+    // ---- pins for what `docs/debug-allocator.md` promises -----------------------------------
+
+    /// "`requested` is the bytes you asked for (at least 8) plus 16 guard bytes per block", on
+    /// both paths.
+    #[test]
+    fn requested_is_the_size_plus_the_guard_with_an_eight_byte_floor() {
+        let orisnik = Orisnik::new();
+        for (asked, counted) in [(1, 8), (8, 8), (24, 24), (100, 100), (1000, 1000)] {
+            let before = orisnik.requested();
+            let ptr = alloc(&orisnik, asked);
+            assert_eq!(
+                orisnik.requested() - before,
+                counted + MEMORY_GUARD_SIZE,
+                "a request of {asked} bytes"
+            );
+            free(&orisnik, ptr);
+        }
+        orisnik.purge();
+    }
+
+    /// The guide's advice on sized frees: after a `realloc` only the *new* size is accepted.
+    #[test]
+    fn a_sized_free_after_a_realloc_accepts_only_the_new_size() {
+        let orisnik = Box::new(Orisnik::new());
+        let first = alloc(&orisnik, 24);
+        // SAFETY: `first` is a live allocation of `orisnik`.
+        let grown = unsafe { orisnik.realloc(Some(first), 64) }.expect("OS map failed");
+        let message = panic_message(|| {
+            // SAFETY: `grown` is live; the wrong size is the point of the test.
+            unsafe { orisnik.free_with_size(Some(grown), 24) };
+        })
+        .expect("the old size must be refused");
+        assert!(
+            message.contains("allocated as 64 bytes, freed as 24"),
+            "{message}"
+        );
+        // Detection latched the hooks off; the allocator is now abandoned, as after any
+        // detected corruption, so only the page is returned.
+        assert!(panic_message(move || drop(orisnik)).is_none());
+        release_leaked_bucket_page(grown);
+    }
+
+    /// "Fresh blocks are filled with `FF C0 C0 FF`…" — on the bucket and the tree path, and
+    /// not for `calloc`.
+    #[test]
+    fn fresh_blocks_are_filled_with_the_poison_pattern_but_calloc_blocks_are_zero() {
+        let orisnik = Orisnik::new();
+        for size in [24, 1000] {
+            let ptr = alloc(&orisnik, size);
+            // SAFETY: `ptr` is a live block of `size` bytes.
+            let bytes = unsafe { core::slice::from_raw_parts(ptr.as_ptr(), size) };
+            let pattern = [0xFF_u8, 0xC0, 0xC0, 0xFF];
+            for (index, byte) in bytes.iter().enumerate() {
+                let want = pattern.get(index % 4).copied();
+                assert_eq!(Some(*byte), want, "size {size}, byte {index}");
+            }
+            free(&orisnik, ptr);
+        }
+        let zeroed = orisnik.calloc(1, 24).expect("OS map failed");
+        // SAFETY: `zeroed` is a live block of 24 bytes.
+        let bytes = unsafe { core::slice::from_raw_parts(zeroed.as_ptr(), 24) };
+        assert!(bytes.iter().all(|byte| *byte == 0));
+        free(&orisnik, zeroed);
+        orisnik.purge();
+    }
+
+    /// "An overrun of 1 to 16 bytes lands in the guard and is caught", on both paths.
+    #[test]
+    fn every_overrun_within_the_guard_is_caught_on_both_paths() {
+        for size in [24, 1000] {
+            for extra in 1..=MEMORY_GUARD_SIZE {
+                let orisnik = Orisnik::new();
+                let ptr = alloc(&orisnik, size);
+                // SAFETY: bytes `size..size + 16` are the block's own guard ramp.
+                let target = unsafe { ptr.as_ptr().add(size + extra - 1) };
+                // SAFETY: as above; one byte inside the guard.
+                let original = unsafe { target.read() };
+                // SAFETY: as above.
+                unsafe { target.write(original ^ 0xFF) };
+                assert!(
+                    matches!(orisnik.check(), Err(OrisError::Corruption(_))),
+                    "size {size}, overrun of {extra}"
+                );
+                // SAFETY: as above, restoring the byte.
+                unsafe { target.write(original) };
+                assert!(orisnik.check().is_ok());
+                free(&orisnik, ptr);
+                orisnik.purge();
+            }
+        }
+    }
 }

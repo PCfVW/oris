@@ -6,7 +6,9 @@
 //! cargo run --example catch_an_overrun --features debug-allocator
 //! ```
 //!
-//! Walkthrough: `docs/debug-allocator.md`. The instance is boxed because an `Orisnik` must
+//! Walkthrough: `docs/debug-allocator.md` in the repository root (not in the crates.io
+//! package). Build it with the default `panic = "unwind"`: it catches the leak's panic, which
+//! `panic = "abort"` would turn into an abort. The instance is boxed because an `Orisnik` must
 //! not move after first use (its intrusive lists are bound to its address); a `Box` moves
 //! freely because the `Orisnik` inside stays put.
 

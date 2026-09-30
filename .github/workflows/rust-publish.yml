@@ -73,6 +73,8 @@ jobs:
         run: cargo +stable clippy --all-targets --features debug-allocator -- -D warnings
       - name: Tests (debug-allocator)
         run: cargo +stable test --features debug-allocator
+      - name: Example (debug-allocator)
+        run: cargo +stable run --example catch_an_overrun --features debug-allocator
       - name: Doc (deny warnings, debug-allocator, private items)
         run: cargo +stable doc --no-deps --features debug-allocator --document-private-items
         env:
