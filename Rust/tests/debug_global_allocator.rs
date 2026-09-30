@@ -41,13 +41,8 @@ mod scenario {
     /// A workload that exercises every allocator entry point through std: plain and aligned
     /// allocation, growth by realloc (bucket path, bucket-to-tree crossover, tree path),
     /// shrinking, zeroed allocation, and freeing.
-    fn mark(label: &str) {
-        eprintln!("DIAG {label}: requested={}", ALLOCATOR.requested());
-    }
-
     fn workload() -> usize {
         let mut checksum = 0_usize;
-        mark("workload start");
 
         // `Vec` growth is a chain of reallocs from tiny (bucket path) to large (tree path).
         let mut growing: Vec<u64> = Vec::new();
@@ -58,14 +53,12 @@ mod scenario {
         growing.truncate(10);
         growing.shrink_to_fit();
         checksum += growing.len();
-        mark("after growing");
 
         // Many small, differently-sized allocations alive at once.
         let strings: Vec<String> = (0..2_000)
             .map(|i| format!("item-{i:04}-{}", "x".repeat(i % 40)))
             .collect();
         checksum += strings.iter().map(String::len).sum::<usize>();
-        mark("after strings");
 
         // A hash map allocates and rehashes.
         let mut map: HashMap<usize, Vec<u8>> = HashMap::new();
@@ -73,14 +66,12 @@ mod scenario {
             map.insert(i, vec![0_u8; 1 + i % 300]);
         }
         checksum += map.values().map(Vec::len).sum::<usize>();
-        mark("after map");
 
         // Zeroed and over-aligned allocations.
         let zeroed = vec![0_u32; 10_000];
         checksum += zeroed.len();
         let aligned: Box<[u8; 4096]> = Box::new([7; 4096]);
         checksum += aligned.iter().map(|byte| usize::from(*byte)).sum::<usize>();
-        mark("after zeroed/aligned");
 
         // Application code capturing a backtrace: std holds its (non-reentrant) backtrace lock
         // while it allocates, and that allocation lands in *this* allocator. Before the
@@ -89,16 +80,18 @@ mod scenario {
         // regression this test pins. A panic hook with `RUST_BACKTRACE=1` is the same pattern.
         let trace = std::backtrace::Backtrace::force_capture();
         checksum += usize::from(trace.status() == std::backtrace::BacktraceStatus::Captured);
-        mark("after backtrace");
 
-        mark("before drops");
         checksum
     }
 
     pub fn run() {
-        // Warm up anything the runtime allocates lazily on first use (stdout's buffer), so
-        // the measurements below see only the workload.
+        // Warm up anything the runtime allocates lazily on first use, so the measurements
+        // below see only the workload: stdout's buffer, and — found by macOS CI, which left 160
+        // bytes behind after a first pass — whatever the platform's backtrace and hashing
+        // machinery keeps once it has been used. A whole unmeasured pass covers all of it (and
+        // still exercises the backtrace deadlock this test pins: it would hang here).
         println!("debug_global_allocator: start");
+        let warm = workload();
 
         let before = ALLOCATOR.requested();
         // While allocations are live the total must actually move: without this, a hook that
@@ -111,8 +104,8 @@ mod scenario {
         drop(live);
         assert_eq!(ALLOCATOR.requested(), before, "and un-counting them");
         let first = workload();
+        assert_eq!(first, warm, "the workload is deterministic");
         let after = ALLOCATOR.requested();
-        mark("after workload returned");
         assert_eq!(
             before, after,
             "every byte the workload asked for must have been returned and un-counted"
