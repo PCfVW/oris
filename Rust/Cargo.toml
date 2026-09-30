@@ -61,6 +61,11 @@ libc = "0.2"
 # Global-allocator integration test (see the file's own doc). No libtest harness: a global
 # allocator is process-wide and `Orisnik` is single-threaded by contract, so `main` must be
 # the only thread.
+[[example]]
+name = "catch_an_overrun"
+path = "examples/catch_an_overrun.rs"
+required-features = ["debug-allocator"]
+
 [[test]]
 name = "debug_global_allocator"
 path = "tests/debug_global_allocator.rs"

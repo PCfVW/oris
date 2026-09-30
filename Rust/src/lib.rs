@@ -15,7 +15,9 @@
 //! `debug-allocator` Cargo feature (unreleased; see `CHANGELOG.md`): trailing guard bytes,
 //! payload poisoning, an allocation-record book with callstack capture, the `check()` and
 //! `report()` methods on [`Orisnik`], the `OrisError` they return, and leak detection when
-//! an instance is dropped. With the feature off it is compiled out entirely.
+//! an instance is dropped. With the feature off it is compiled out entirely. The
+//! [user guide](https://github.com/PCfVW/oris/blob/main/docs/debug-allocator.md) explains what it catches and how to read its messages; run the example
+//! with `cargo run --example catch_an_overrun --features debug-allocator`.
 //!
 //! ```no_run
 //! use orisnik::Orisnik;

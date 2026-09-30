@@ -64,7 +64,7 @@ place, empty, for the next cycle.
   and `cargo +1.85 test` — the MSRV
 - The C smoke test, `tests/c-abi/smoke.c`, against **both** ports' built libraries (see
   `.github/workflows/c-abi-ci.yml` for the exact commands)
-- `zig fmt --check build.zig build.zig.zon src`
+- `zig fmt --check build.zig build.zig.zon src examples`
 - `zig build test` and `zig build test -Doptimize=ReleaseSafe`, then
   `zig build -Doptimize=ReleaseFast`
 - Confirm the last push of this commit to `main` shows green on **Rust CI**,

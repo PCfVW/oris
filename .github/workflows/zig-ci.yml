@@ -34,9 +34,11 @@ jobs:
         with:
           version: "0.16.0"
       - name: Formatting
-        run: zig fmt --check build.zig build.zig.zon src
-      - name: Build & test
+        run: zig fmt --check build.zig build.zig.zon src examples
+      - name: Build & test (includes the leak probe and the example)
         run: zig build test -Doptimize=${{ matrix.optimize }}
+      - name: API docs build
+        run: zig build docs -Doptimize=${{ matrix.optimize }}
 
   # Aggregator gate: a single stable check to require in branch protection,
   # so the ruleset never needs editing when the matrix above changes.

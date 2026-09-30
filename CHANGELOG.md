@@ -12,6 +12,13 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Added
 
+- **User documentation for the debug allocator (v0.2.0).**
+  [`docs/debug-allocator.md`](docs/debug-allocator.md) — what it catches and what it cannot,
+  every diagnostic with its cause and fix, how to read a leak report, `check()` / `report()`,
+  the `#[global_allocator]` recipe, costs and limits — and two runnable examples that make an
+  overrun on purpose: `cargo run --example catch_an_overrun --features debug-allocator` and
+  `zig build example`. CI builds and runs both. `zig build docs` now generates the Zig API
+  reference into `zig-out/docs/`.
 - **Leak detection, `check()`, `report()` and `OrisError` (v0.2.0, Phase 5 — completes the
   debug allocator).** With `debug-allocator` / `OrisnitsaWith(.{ .debug = true })`:
   `check()` audits every live allocation — its recorded size must fit the block and its

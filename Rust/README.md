@@ -24,7 +24,7 @@ A Rust port of [Oris](https://github.com/PCfVW/oris) — a Rust and Zig port of 
   skipped are `os.rs`'s own real-syscall tests, which Miri cannot interpret, plus the
   manual C++ oracle tool.
 - **64-bit platforms only** — enforced at compile time (see `src/block.rs`'s module doc).
-- **Debug allocator (unreleased, on `main` for v0.2.0):** the opt-in `debug-allocator` Cargo feature ports HPHA's `DEBUG_ALLOCATOR` — trailing guard bytes, payload poisoning, an allocation-record book with callstack capture, `check()` / `report()` / `OrisError`, and leak detection when the allocator is dropped. Detected corruption (a guard overrun, a double free, a foreign pointer, a wrong sized free) and leaks panic; installed as a `#[global_allocator]`, build with `panic = "abort"`. Off by default and entirely compiled out; see [`INSTALL.md`](https://github.com/PCfVW/oris/blob/main/INSTALL.md).
+- **Debug allocator (unreleased, on `main` for v0.2.0):** the opt-in `debug-allocator` Cargo feature ports HPHA's `DEBUG_ALLOCATOR` — trailing guard bytes, payload poisoning, an allocation-record book with callstack capture, `check()` / `report()` / `OrisError`, and leak detection when the allocator is dropped. Detected corruption (a guard overrun, a double free, a foreign pointer, a wrong sized free) and leaks panic; installed as a `#[global_allocator]`, build with `panic = "abort"`. Off by default and entirely compiled out. **[User guide](https://github.com/PCfVW/oris/blob/main/docs/debug-allocator.md)** — what it catches, how to read its messages, the `#[global_allocator]` recipe — and a runnable example: `cargo run --example catch_an_overrun --features debug-allocator`; build details in [`INSTALL.md`](https://github.com/PCfVW/oris/blob/main/INSTALL.md).
 
 ## Quick start
 

@@ -64,6 +64,35 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&run_probe.step);
     }
 
+    // `zig build docs` emits the API documentation of the `orisnitsa` module (from its `///`
+    // and `//!` comments) to `zig-out/docs/`; open `zig-out/docs/index.html` through a local
+    // web server (the generated page loads a `.wasm`, which browsers refuse from `file://`).
+    const docs_lib = b.addLibrary(.{ .name = "orisnitsa", .root_module = mod });
+    const install_docs = b.addInstallDirectory(.{
+        .source_dir = docs_lib.getEmittedDocs(),
+        .install_dir = .prefix,
+        .install_subdir = "docs",
+    });
+    b.step("docs", "Generate the API documentation into zig-out/docs").dependOn(&install_docs.step);
+
+    // `zig build example` runs `examples/catch_an_overrun.zig` (the debug allocator catching an
+    // overrun on purpose). It is also part of `test`, so it is compiled and run in CI and
+    // cannot rot; unlike the leak probe it is fine in every optimize mode.
+    const example = b.addExecutable(.{
+        .name = "catch_an_overrun",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/catch_an_overrun.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "orisnitsa", .module = mod }},
+        }),
+    });
+    const run_example = b.addRunArtifact(example);
+    run_example.expectStdErrMatch("check() found Corruption: guard bytes overwritten");
+    run_example.expectStdErrMatch("check() after repair: true");
+    b.step("example", "Run the debug-allocator example").dependOn(&run_example.step);
+    test_step.dependOn(&run_example.step);
+
     // Static and shared C-linkable libraries, built from a *separate* module
     // rooted directly at `capi.zig`, not `mod` (rooted at `root.zig`). Zig only
     // auto-exports `export fn`s that live in a module's own root file — an

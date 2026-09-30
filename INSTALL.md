@@ -28,7 +28,8 @@ Oris is a two-port monorepo; each port builds independently with its own toolcha
   with
   `cargo test --features debug-allocator` (Miri:
   `MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows" cargo +nightly miri test
-  --features debug-allocator`).
+  --features debug-allocator`). See the [user guide](docs/debug-allocator.md), and try
+  `cargo run --example catch_an_overrun --features debug-allocator`.
 
 ```sh
 cd Rust
@@ -62,7 +63,9 @@ orisnik = "0.1"
   leak detection are all implemented (detected corruption and leaks panic). Every
   `Orisnitsa` **must** be `deinit()`ed: that returns its idle memory to the OS, and a debug
   instance also frees its record pages and fails on leaked blocks. Exercise
-  it with `zig build test` (the debug instantiation is covered by the test suite).
+  it with `zig build test` (the debug instantiation is covered by the test suite). See the
+  [user guide](docs/debug-allocator.md), try `zig build example`, and generate the API
+  reference with `zig build docs` (into `zig-out/docs/`).
 
 ```sh
 cd Zig

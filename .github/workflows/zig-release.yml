@@ -65,7 +65,7 @@ jobs:
       # build zig-ci.yml's matrix already requires.
       - name: Formatting
         working-directory: Zig
-        run: zig fmt --check build.zig build.zig.zon src
+        run: zig fmt --check build.zig build.zig.zon src examples
       - name: Build & test (Debug + ReleaseSafe + ReleaseFast)
         working-directory: Zig
         run: |

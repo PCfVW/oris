@@ -26,6 +26,10 @@ The two foundational documents:
 - **[BRIEF.md](BRIEF.md)** — design rationale, etymological grounding, target workloads, prior-art positioning
 - **[ROADMAP.md](ROADMAP.md)** — milestones, versioning policy, the cross-language invariant
 
+And, for using the allocator rather than understanding it:
+
+- **[docs/debug-allocator.md](docs/debug-allocator.md)** — the debug allocator's user guide: what it catches, how to read its messages, the `#[global_allocator]` recipe. Runnable examples: `cargo run --example catch_an_overrun --features debug-allocator` (from `Rust/`), `zig build example` (from `Zig/`).
+
 ## Structure
 
 - **[Cpp/](Cpp/)** — the canonical HPHA reference source from 2007, included for diff and reference purposes. See [Cpp/NOTICE.md](Cpp/NOTICE.md) for the license trail.

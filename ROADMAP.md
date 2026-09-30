@@ -56,7 +56,7 @@ This invariant is the property that justifies maintaining two ports rather than 
 
 **Theme:** Observability and safety.
 
-**Progress (unreleased):** every v0.2.0 bullet below is implemented in both ports — guard bytes with overflow detection, allocation-record tracking, callstack capture, leak detection on drop / deinit, `report()` and `check()`, the build toggle, and fail-fast detection of overruns, double frees, foreign pointers and wrong sized frees. What remains before release: the CI lanes for the debug subsystem (added to `rust-ci.yml` and `rust-publish.yml`, but proven so far only by local runs on Windows and WSL Linux — macOS and the hosted runners are untested until the first push), and the release itself (version bumps, the changelog cut, the tag, `RELEASING.md`).
+**Progress (unreleased):** every v0.2.0 bullet below is implemented in both ports — guard bytes with overflow detection, allocation-record tracking, callstack capture, leak detection on drop / deinit, `report()` and `check()`, the build toggle, and fail-fast detection of overruns, double frees, foreign pointers and wrong sized frees. Documentation: the debug allocator has a user guide and runnable examples (`docs/debug-allocator.md`). What remains before release: the CI lanes for the debug subsystem (added to `rust-ci.yml` and `rust-publish.yml`, but proven so far only by local runs on Windows and WSL Linux — macOS and the hosted runners are untested until the first push), and the release itself (version bumps, the changelog cut, the tag, `RELEASING.md`).
 
 - Port HPHA's `DEBUG_ALLOCATOR` mode in both languages
 - **Memory guard bytes** with overflow detection
