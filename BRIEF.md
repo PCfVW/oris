@@ -67,7 +67,7 @@ The bucket-plus-RB-tree-best-fit design is not obsolete; it lost the dominant se
 | **Compact and auditable** (~1500 LOC). Easy to read, port, and reason about end-to-end | **Inline metadata is a security exposure.** A buffer overflow can corrupt allocator state — a classic heap-corruption exploit class |
 | **No per-thread state.** No TLS, no thread-local init, no cross-thread free protocol, no thread-exit cleanup | **Worse cache locality.** Tree-best-fit jumps around the address space; size classes return recently-freed blocks of the same size |
 | **Deterministic memory layout.** Useful for save-state replay, memory-mapped files, debugging | **No NUMA awareness, no remote-free machinery, no randomization / hardening** |
-| **Lazy OS-return.** Memory returned only on explicit `purge()` — predictable RSS, no surprise `munmap` storms | **Higher RSS by default** — the flip side of lazy return |
+| **Lazy OS-return.** Memory returned only on explicit `purge()` (or when the allocator itself is dropped) — predictable RSS, no surprise `munmap` storms | **Higher RSS by default** — the flip side of lazy return |
 
 Note: the technique isn't extinct in modern allocators — jemalloc still uses red-black trees to track *extents*. It got pushed up to a coarser granularity, not abandoned.
 

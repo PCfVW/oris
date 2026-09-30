@@ -65,7 +65,7 @@ jobs:
       # build zig-ci.yml's matrix already requires.
       - name: Formatting
         working-directory: Zig
-        run: zig fmt --check build.zig build.zig.zon src
+        run: zig fmt --check build.zig build.zig.zon src examples
       - name: Build & test (Debug + ReleaseSafe + ReleaseFast)
         working-directory: Zig
         run: |
@@ -77,7 +77,8 @@ jobs:
       # holds build.zig.zon, so `zig fetch <url>` finds the manifest. A wrapper
       # directory does NOT work — verified against Zig 0.16.0. (The GitHub
       # auto-tarball is repo-rooted, hence unusable for a subdir package.) Mirrors
-      # build.zig.zon's own .paths list (kept in sync by hand): include/ carries the
+      # build.zig.zon's own .paths list (kept in sync by hand): examples/ is needed because
+      # build.zig's `test` step runs the example; include/ carries the
       # vendored oris.h (Rust/CONVENTIONS.md's G7 fix), README.md so an installed
       # package carries its own docs.
       - name: Package re-rooted tarball
@@ -85,8 +86,8 @@ jobs:
         run: |
           name="orisnitsa-${TAG}"
           mkdir -p "staging/${name}"
-          cp -r Zig/build.zig Zig/build.zig.zon Zig/src Zig/include Zig/LICENSE-MIT Zig/LICENSE-APACHE Zig/README.md "staging/${name}/"
-          tar -czf "${name}.tar.gz" -C "staging/${name}" build.zig build.zig.zon src include LICENSE-MIT LICENSE-APACHE README.md
+          cp -r Zig/build.zig Zig/build.zig.zon Zig/src Zig/examples Zig/include Zig/LICENSE-MIT Zig/LICENSE-APACHE Zig/README.md "staging/${name}/"
+          tar -czf "${name}.tar.gz" -C "staging/${name}" build.zig build.zig.zon src examples include LICENSE-MIT LICENSE-APACHE README.md
           echo "asset=${name}.tar.gz" >> "$GITHUB_OUTPUT"
 
       # Build-test the packaged tarball itself — not just the Zig/ checkout — so a

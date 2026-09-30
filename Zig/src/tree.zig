@@ -27,7 +27,7 @@
 //! Same simplification as `bucket.zig`'s `Buckets`/`Bucket`: `orisnik`'s `Tree`
 //! wraps `mr_free_block`/`allocated_bytes` in `Cell`s purely to satisfy Rust's
 //! `&self`-only aliasing rule at the allocator trait boundary. Every method here
-//! just takes `*Tree` directly, and both fields are plain.
+//! just takes `*Self` directly, and both fields are plain.
 
 const std = @import("std");
 const align_helpers = @import("align.zig");
@@ -36,10 +36,12 @@ const bucket = @import("bucket.zig");
 const list = @import("list.zig");
 const os = @import("os.zig");
 const rbtree = @import("rbtree.zig");
+const spomen = @import("spomen.zig");
 
 const BlockHeader = block.BlockHeader;
 const FreeNode = block.FreeNode;
 const SmallFreeNode = block.SmallFreeNode;
+const Config = spomen.Config;
 
 /// The minimum block size: large enough to hold a `FreeNode` in its payload once
 /// free. Ports the `if (size < sizeof(free_node)) size = sizeof(free_node);` clamp
@@ -101,8 +103,14 @@ fn normalizeSize(size: usize) ?usize {
 /// being a multiple of `@sizeOf(BlockHeader)`).
 fn splitBlock(bl: *BlockHeader, size: usize) void {
     std.debug.assert(size % @sizeOf(BlockHeader) == 0);
+    // SAFETY: `bl` is a live header (function contract), so viewing it as its own
+    // first byte is valid; `split_point` stays inside `bl`'s span because
+    // `size + SPLIT_REMAINDER_MIN <= bl.size()` (function contract), leaving room for a
+    // whole `BlockHeader` there, exclusively owned (single-threaded).
     const bl_bytes: [*]u8 = @ptrCast(bl);
     const split_point = bl_bytes + (size + @sizeOf(BlockHeader));
+    // SAFETY: cast target is inside the span just established; alignment is proven by
+    // the ALIGN note below.
     // ALIGN: `bl` is a live `BlockHeader`, hence 8-aligned; `size` is a multiple of
     // `@sizeOf(BlockHeader)` (16) per this function's contract, and so is
     // `@sizeOf(BlockHeader)` itself, so `split_point` stays 8-aligned.
@@ -124,8 +132,13 @@ fn shiftBlock(bl: *BlockHeader, offs: usize) *BlockHeader {
     std.debug.assert(offs > 0);
     const prv = bl.prev.?;
     bl.unlink();
+    // SAFETY: `bl` is live (function contract); `offs <= bl.size()` (function
+    // contract) keeps `shifted` within `bl`'s own span, which the caller owns exclusively.
     const bl_bytes: [*]u8 = @ptrCast(bl);
     const shifted = bl_bytes + offs;
+    // SAFETY: `shifted` lies in the span above, and `bl` was just unlinked, so its
+    // header bytes are being relocated, not aliased by a live header; alignment per
+    // the ALIGN note below.
     // ALIGN: `bl` is 8-aligned; every alignment-offset call site in this module
     // only ever shifts by a multiple of `@sizeOf(BlockHeader)` (see `splitBlock`'s
     // contract doc for why every block's `mem()` is always `BlockHeader`-aligned,
@@ -157,624 +170,682 @@ fn shiftBlock(bl: *BlockHeader, offs: usize) *BlockHeader {
 /// - `allocated_bytes` is exactly the sum of `size` arguments passed to
 ///   `systemAlloc` minus those passed to `systemFree` — the total bytes this
 ///   `Tree` currently has mapped from the OS.
-pub const Tree = struct {
-    /// The single most recently freed block, checked before searching the
-    /// tree/list at all — HPHA's fast path for "free, then immediately
-    /// reallocate a similar size." Never itself a member of
-    /// `free_tree`/`small_free_list`.
-    mr_free_block: ?*BlockHeader = null,
-    /// Free blocks bigger than `MAX_SMALL_ALLOCATION`, keyed by size.
-    free_tree: rbtree.IntrusiveMultiRbTree(FreeNode) = .init(),
-    /// Free blocks at most `MAX_SMALL_ALLOCATION` — never queried by size, so a
-    /// plain list is cheaper than tree bookkeeping for them.
-    small_free_list: list.IntrusiveList(SmallFreeNode) = .init(),
-    /// Total bytes currently mapped for the tree path (whole `PAGE_SIZE`-multiple
-    /// arenas, fences included).
-    allocated_bytes: usize = 0,
+///
+/// Generic over the `spomen` debug-subsystem `Config` (see `Zig/CONVENTIONS.md`'s
+/// "`comptime` Toggles" section) so a phase that needs debug-only state here can
+/// specialize this type's methods per instantiation with a compiler-enforced
+/// zero-cost-when-disabled guarantee. Nothing in this type reads `config`:
+/// guard bytes, poisoning and the allocation records live entirely at `Orisnitsa`'s dispatch layer
+/// (mirroring HPHA, where `tree_alloc` is guard-oblivious and just serves whatever
+/// already-inflated size it is handed), so `block.zig`'s `BlockHeader`/`FreeNode`/
+/// `SmallFreeNode` need no parameterization of their own unless a later phase
+/// stores debug-only state in them.
+pub fn Tree(comptime config: Config) type {
+    // Not yet read (see the doc above) — kept, rather than dropped, so a later
+    // phase that does store debug-only state here need not re-thread it through
+    // every `Tree(...)` instantiation site.
+    _ = config;
+    return struct {
+        const Self = @This();
 
-    /// Builds an empty tree allocator, with nothing yet mapped from the OS.
-    pub fn init() Tree {
-        return .{};
-    }
+        /// The single most recently freed block, checked before searching the
+        /// tree/list at all — HPHA's fast path for "free, then immediately
+        /// reallocate a similar size." Never itself a member of
+        /// `free_tree`/`small_free_list`.
+        mr_free_block: ?*BlockHeader = null,
+        /// Free blocks bigger than `MAX_SMALL_ALLOCATION`, keyed by size.
+        free_tree: rbtree.IntrusiveMultiRbTree(FreeNode) = .init(),
+        /// Free blocks at most `MAX_SMALL_ALLOCATION` — never queried by size, so a
+        /// plain list is cheaper than tree bookkeeping for them.
+        small_free_list: list.IntrusiveList(SmallFreeNode) = .init(),
+        /// Total bytes currently mapped for the tree path (whole `PAGE_SIZE`-multiple
+        /// arenas, fences included).
+        allocated_bytes: usize = 0,
 
-    /// Total bytes currently claimed from the OS by the tree path. Ports the tree
-    /// half of `allocator::allocated`.
-    pub fn allocated(self: *Tree) usize {
-        return self.allocated_bytes;
-    }
-
-    /// Coalesces `bl` (which must currently be unused) with either physical
-    /// neighbour that is also free, detaching any neighbour absorbed this way
-    /// from whichever index it was in. Returns the (possibly different) block
-    /// header now representing the merged span. Ports `allocator::coalesce_block`.
-    ///
-    /// `bl` must be live, unused, and attached to a live physical chain.
-    fn coalesceBlock(self: *Tree, bl: *BlockHeader) *BlockHeader {
-        std.debug.assert(!bl.used());
-        const nxt = bl.next();
-        if (!nxt.used()) {
-            // `nxt` is live and unused, hence currently indexed (in the tree, the
-            // small list, or the MR cache) — a live free block always is.
-            self.detach(nxt);
-            nxt.unlink();
+        /// Builds an empty tree allocator, with nothing yet mapped from the OS.
+        pub fn init() Self {
+            return .{};
         }
-        const prv = bl.prev.?;
-        // Named `result`, not reusing `bl` (which `orisnik`'s `coalesce_block`
-        // reassigns via `let mut bl = bl;`) — Zig errors on identifier shadowing
-        // between a parameter and a same-named local.
-        var result = bl;
-        if (!prv.used()) {
-            // `prv` is live and unused, hence currently indexed (same reasoning
-            // as `nxt` above).
-            self.detach(prv);
-            result.unlink();
-            result = prv;
+
+        /// Total bytes currently claimed from the OS by the tree path. Ports the tree
+        /// half of `allocator::allocated`.
+        pub fn allocated(self: *Self) usize {
+            return self.allocated_bytes;
         }
-        return result;
-    }
 
-    /// Maps `size` bytes (a multiple of `os.PAGE_SIZE`) for the tree arena. Ports
-    /// `allocator::tree_system_alloc`.
-    fn systemAlloc(self: *Tree, size: usize) ?[*]u8 {
-        std.debug.assert(size % os.PAGE_SIZE == 0);
-        const ptr = os.map(size) orelse return null;
-        self.allocated_bytes += size;
-        return ptr;
-    }
-
-    /// Returns a tree arena mapping to the OS. Ports `allocator::tree_system_free`.
-    ///
-    /// `ptr`/`size` must be a still-live result of `systemAlloc` on `self`.
-    fn systemFree(self: *Tree, ptr: [*]u8, size: usize) void {
-        os.unmap(ptr, size);
-        self.allocated_bytes -= size;
-    }
-
-    /// Lays out a freshly-mapped `size`-byte arena as two fence blocks bracketing
-    /// one large free block, then coalesces (a no-op here, since both neighbours
-    /// are fences and therefore `used`, but kept for fidelity — see the module
-    /// doc). Ports `allocator::tree_add_block`.
-    ///
-    /// `mem` must be live, exclusively owned, for exactly `size` bytes, `size` a
-    /// multiple of `@sizeOf(BlockHeader)` and at least `3 * @sizeOf(BlockHeader)`.
-    fn addBlock(self: *Tree, mem: [*]u8, size: usize) *BlockHeader {
-        std.debug.assert(size % @sizeOf(BlockHeader) == 0);
-        std.debug.assert(size >= 3 * @sizeOf(BlockHeader));
-        // ALIGN: `mem` is `os.map`'s result, PAGE_SIZE-aligned, hence 8-aligned.
-        const fence0: *BlockHeader = @ptrCast(@alignCast(mem));
-        fence0.prev = null;
-        fence0.setSize(0);
-        fence0.setUsed();
-
-        const real_front_bytes = fence0.mem();
-        // ALIGN: `fence0` is 8-aligned; `BlockHeader.mem` adds
-        // `@sizeOf(BlockHeader)` (a multiple of 8), so `real_front_bytes` stays
-        // 8-aligned.
-        const real_front: *BlockHeader = @ptrCast(@alignCast(real_front_bytes));
-        real_front.prev = fence0;
-        real_front.setSize(0);
-        real_front.setUsed();
-
-        const end_fence_bytes = mem + (size - @sizeOf(BlockHeader));
-        // ALIGN: `mem` is 8-aligned; `size` and `@sizeOf(BlockHeader)` are both
-        // multiples of 8, so `end_fence_bytes` stays 8-aligned.
-        const end_fence: *BlockHeader = @ptrCast(@alignCast(end_fence_bytes));
-        end_fence.setSize(0);
-        end_fence.setUsed();
-
-        real_front.setUnused();
-        real_front.setNext(end_fence);
-        end_fence.prev = real_front;
-
-        // `real_front` is live, unused (just set above), and attached to the live
-        // chain just built (fence0 <-> real_front <-> end_fence).
-        return self.coalesceBlock(real_front);
-    }
-
-    /// Maps a fresh arena sized to comfortably fit one `size`-byte block (`size`
-    /// already the exact block payload size being requested, header excluded),
-    /// lays it out via `addBlock`. Ports `allocator::tree_grow`.
-    fn grow(self: *Tree, size: usize) ?*BlockHeader {
-        const with_overhead = size + 3 * @sizeOf(BlockHeader); // two fences plus one fake
-        const rounded = align_helpers.roundUp(with_overhead, os.PAGE_SIZE);
-        const mem = self.systemAlloc(rounded) orelse return null;
-        return self.addBlock(mem, rounded);
-    }
-
-    /// Extracts a free block of at least `size` bytes: the MR-cached block if it
-    /// fits, otherwise the smallest fitting block in the tree (walking one step to
-    /// an equal-key chain neighbour first when possible, since removing a plain
-    /// chain link is cheaper than removing a tree-attached node). Ports
-    /// `allocator::tree_extract`.
-    fn extract(self: *Tree, size: usize) ?*BlockHeader {
-        if (self.mr_free_block) |best| {
-            if (best.size() >= size) {
-                self.detach(best);
-                return best;
+        /// Coalesces `bl` (which must currently be unused) with either physical
+        /// neighbour that is also free, detaching any neighbour absorbed this way
+        /// from whichever index it was in. Returns the (possibly different) block
+        /// header now representing the merged span. Ports `allocator::coalesce_block`.
+        ///
+        /// `bl` must be live, unused, and attached to a live physical chain.
+        fn coalesceBlock(self: *Self, bl: *BlockHeader) *BlockHeader {
+            std.debug.assert(!bl.used());
+            const nxt = bl.next();
+            if (!nxt.used()) {
+                // `nxt` is live and unused, hence currently indexed (in the tree, the
+                // small list, or the MR cache) — a live free block always is.
+                self.detach(nxt);
+                nxt.unlink();
             }
+            const prv = bl.prev.?;
+            // Named `result`, not reusing `bl` (which `orisnik`'s `coalesce_block`
+            // reassigns via `let mut bl = bl;`) — Zig errors on identifier shadowing
+            // between a parameter and a same-named local.
+            var result = bl;
+            if (!prv.used()) {
+                // `prv` is live and unused, hence currently indexed (same reasoning
+                // as `nxt` above).
+                self.detach(prv);
+                result.unlink();
+                result = prv;
+            }
+            return result;
         }
-        const best_node = self.free_tree.lowerBound(size) orelse return null;
-        // Improves removal time: an equal-key chain link is O(1) to remove, while
-        // the tree-attached representative needs a full erase_fixup.
-        const chained = rbtree.next(best_node);
-        const best_block = chained.getBlock();
-        self.detach(best_block);
-        return best_block;
-    }
 
-    /// Extracts a free block of at least `size` bytes whose `mem()` can be aligned
-    /// to `alignment` without more than `size` bytes of slack. Same
-    /// MR-cache-first, chain-neighbour-preferred strategy as `extract`, but must
-    /// additionally walk candidates in `[size, size + alignment)` since a
-    /// merely-big-enough block might not leave room for the alignment padding.
-    /// Ports `allocator::tree_extract_aligned`.
-    fn extractAligned(self: *Tree, size: usize, alignment: usize) ?*BlockHeader {
-        if (self.mr_free_block) |best| {
-            const m = best.mem();
-            // PROVENANCE: both addresses are read only for the byte distance
-            // between them, never reconstructed into a pointer here.
-            const alignment_offs = @intFromPtr(align_helpers.alignUp(m, alignment)) - @intFromPtr(m);
-            if (best.size() >= size + alignment_offs) {
-                self.detach(best);
-                return best;
-            }
+        /// Maps `size` bytes (a multiple of `os.PAGE_SIZE`) for the tree arena. Ports
+        /// `allocator::tree_system_alloc`.
+        fn systemAlloc(self: *Self, size: usize) ?[*]u8 {
+            std.debug.assert(size % os.PAGE_SIZE == 0);
+            const ptr = os.map(size) orelse return null;
+            self.allocated_bytes += size;
+            return ptr;
         }
-        const size_upper = size + alignment;
-        // `cur`/`last_node` are `?*FreeNode` throughout (rather than a single
-        // pointer compared against a real sentinel `end()`, as HPHA's C++ has):
-        // `null` here is exactly that sentinel. Every comparison and advance below
-        // mirrors the C++ `while (bestNode != lastNode)` loop's *shape* precisely,
-        // including which node's fit is (and is not) checked, which is why this
-        // can't be simplified to higher-level constructs.
-        var cur = self.free_tree.lowerBound(size);
-        const last_node = self.free_tree.upperBound(size_upper);
-        // EXPLICIT: walks the `[size, size_upper)` candidate sequence looking for
-        // one with enough room for both the payload and the alignment padding;
-        // `cur` is the state, not expressible as an iterator over a tree-order
-        // walk. A `cur == null` exit (checked by the `while` below) means we
-        // walked past the maximum node without reaching `last_node` — only
-        // happens when `last_node` is itself `null` (nothing in the tree is as
-        // large as `size_upper`), matching HPHA's `bestNode == end()`.
-        while (cur) |node| {
-            if (cur == last_node) {
-                // Reached the upper bound without finding a fit; `last_node`
-                // itself is never fit-checked (mirrors the C++ `while` condition
-                // being checked *before* the loop body).
-                break;
-            }
-            // PROVENANCE: `node`'s address is read only for its bit pattern (fed
-            // into the same rounding arithmetic `align.roundUp` uses elsewhere),
-            // never reconstructed into a pointer — `node` itself is what's used
-            // as a pointer, unaffected by this read.
-            const addr = @intFromPtr(node);
-            const alignment_offs = align_helpers.roundUp(addr, alignment) - addr;
-            const candidate = node.getBlock();
-            if (candidate.size() >= size + alignment_offs) {
-                break;
-            }
-            cur = self.free_tree.succ(node);
-        }
-        const found = cur orelse return null;
-        // Improves removal time, same reasoning as `extract` — but only applies
-        // when we stopped *at* `last_node` (no fit found in range); a genuine fit
-        // found strictly before it is used as-is.
-        const best_node = if (cur == last_node) rbtree.next(found) else found;
-        const best_block = best_node.getBlock();
-        self.detach(best_block);
-        return best_block;
-    }
 
-    /// Indexes `bl` as free: the previous MR-cached block (if any) is pushed into
-    /// the tree or small list first, then `bl` becomes the new MR-cached block.
-    /// Ports `allocator::tree_attach`.
-    ///
-    /// `bl` must be live and unused, or `null` (used by `purge` to flush the MR
-    /// cache without installing a new block).
-    fn attach(self: *Tree, bl: ?*BlockHeader) void {
-        if (self.mr_free_block) |last| {
-            const size = last.size();
-            // `last`'s `mem()` is exactly where it was indexed from on a prior
-            // `attach` (this same invariant, inductively) or is fresh free space
-            // at least `MIN_BLOCK_SIZE` bytes (every block this module creates is
-            // normalized to at least that), so a `FreeNode`/`SmallFreeNode` fits.
-            const mem = last.mem();
+        /// Returns a tree arena mapping to the OS. Ports `allocator::tree_system_free`.
+        ///
+        /// `ptr`/`size` must be a still-live result of `systemAlloc` on `self`.
+        fn systemFree(self: *Self, ptr: [*]u8, size: usize) void {
+            os.unmap(ptr, size);
+            self.allocated_bytes -= size;
+        }
+
+        /// Lays out a freshly-mapped `size`-byte arena as two fence blocks bracketing
+        /// one large free block, then coalesces (a no-op here, since both neighbours
+        /// are fences and therefore `used`, but kept for fidelity — see the module
+        /// doc). Ports `allocator::tree_add_block`.
+        ///
+        /// `mem` must be live, exclusively owned, for exactly `size` bytes, `size` a
+        /// multiple of `@sizeOf(BlockHeader)` and at least `3 * @sizeOf(BlockHeader)`.
+        fn addBlock(self: *Self, mem: [*]u8, size: usize) *BlockHeader {
+            std.debug.assert(size % @sizeOf(BlockHeader) == 0);
+            std.debug.assert(size >= 3 * @sizeOf(BlockHeader));
+            // SAFETY: `mem` is valid, exclusively owned for `size >= 3 * @sizeOf(BlockHeader)`
+            // bytes (function contract, asserted above), so a header fits at offset 0.
+            // ALIGN: `mem` is `os.map`'s result, PAGE_SIZE-aligned, hence 8-aligned.
+            const fence0: *BlockHeader = @ptrCast(@alignCast(mem));
+            fence0.prev = null;
+            fence0.setSize(0);
+            fence0.setUsed();
+
+            const real_front_bytes = fence0.mem();
+            // SAFETY: `real_front_bytes` is at offset 16, and `size >= 48` (asserted above)
+            // leaves room for a second header there, disjoint from `fence0` and the end fence.
+            // ALIGN: `fence0` is 8-aligned; `BlockHeader.mem` adds
+            // `@sizeOf(BlockHeader)` (a multiple of 8), so `real_front_bytes` stays
+            // 8-aligned.
+            const real_front: *BlockHeader = @ptrCast(@alignCast(real_front_bytes));
+            real_front.prev = fence0;
+            real_front.setSize(0);
+            real_front.setUsed();
+
+            const end_fence_bytes = mem + (size - @sizeOf(BlockHeader));
+            // SAFETY: `end_fence_bytes` is the last `@sizeOf(BlockHeader)` bytes of the
+            // `size`-byte arena (function contract), disjoint from the front headers
+            // since `size >= 3 * @sizeOf(BlockHeader)`.
+            // ALIGN: `mem` is 8-aligned; `size` and `@sizeOf(BlockHeader)` are both
+            // multiples of 8, so `end_fence_bytes` stays 8-aligned.
+            const end_fence: *BlockHeader = @ptrCast(@alignCast(end_fence_bytes));
+            end_fence.setSize(0);
+            end_fence.setUsed();
+
+            real_front.setUnused();
+            real_front.setNext(end_fence);
+            end_fence.prev = real_front;
+
+            // `real_front` is live, unused (just set above), and attached to the live
+            // chain just built (fence0 <-> real_front <-> end_fence).
+            return self.coalesceBlock(real_front);
+        }
+
+        /// Maps a fresh arena sized to comfortably fit one `size`-byte block (`size`
+        /// already the exact block payload size being requested, header excluded),
+        /// lays it out via `addBlock`. Ports `allocator::tree_grow`.
+        fn grow(self: *Self, size: usize) ?*BlockHeader {
+            const with_overhead = size + 3 * @sizeOf(BlockHeader); // two fences plus one fake
+            const rounded = align_helpers.roundUp(with_overhead, os.PAGE_SIZE);
+            const mem = self.systemAlloc(rounded) orelse return null;
+            return self.addBlock(mem, rounded);
+        }
+
+        /// Extracts a free block of at least `size` bytes: the MR-cached block if it
+        /// fits, otherwise the smallest fitting block in the tree (walking one step to
+        /// an equal-key chain neighbour first when possible, since removing a plain
+        /// chain link is cheaper than removing a tree-attached node). Ports
+        /// `allocator::tree_extract`.
+        fn extract(self: *Self, size: usize) ?*BlockHeader {
+            if (self.mr_free_block) |best| {
+                if (best.size() >= size) {
+                    self.detach(best);
+                    return best;
+                }
+            }
+            const best_node = self.free_tree.lowerBound(size) orelse return null;
+            // Improves removal time: an equal-key chain link is O(1) to remove, while
+            // the tree-attached representative needs a full erase_fixup.
+            const chained = rbtree.next(best_node);
+            const best_block = chained.getBlock();
+            self.detach(best_block);
+            return best_block;
+        }
+
+        /// Extracts a free block of at least `size` bytes whose `mem()` can be aligned
+        /// to `alignment` without more than `size` bytes of slack. Same
+        /// MR-cache-first, chain-neighbour-preferred strategy as `extract`, but must
+        /// additionally walk candidates in `[size, size + alignment)` since a
+        /// merely-big-enough block might not leave room for the alignment padding.
+        /// Ports `allocator::tree_extract_aligned`.
+        fn extractAligned(self: *Self, size: usize, alignment: usize) ?*BlockHeader {
+            if (self.mr_free_block) |best| {
+                const m = best.mem();
+                // SAFETY: address-arithmetic only; no pointer is formed or dereferenced.
+                // PROVENANCE: both addresses are read only for the byte distance
+                // between them, never reconstructed into a pointer here.
+                const alignment_offs = @intFromPtr(align_helpers.alignUp(m, alignment)) - @intFromPtr(m);
+                if (best.size() >= size + alignment_offs) {
+                    self.detach(best);
+                    return best;
+                }
+            }
+            const size_upper = size + alignment;
+            // `cur`/`last_node` are `?*FreeNode` throughout (rather than a single
+            // pointer compared against a real sentinel `end()`, as HPHA's C++ has):
+            // `null` here is exactly that sentinel. Every comparison and advance below
+            // mirrors the C++ `while (bestNode != lastNode)` loop's *shape* precisely,
+            // including which node's fit is (and is not) checked, which is why this
+            // can't be simplified to higher-level constructs.
+            var cur = self.free_tree.lowerBound(size);
+            const last_node = self.free_tree.upperBound(size_upper);
+            // EXPLICIT: walks the `[size, size_upper)` candidate sequence looking for
+            // one with enough room for both the payload and the alignment padding;
+            // `cur` is the state, not expressible as an iterator over a tree-order
+            // walk. A `cur == null` exit (checked by the `while` below) means we
+            // walked past the maximum node without reaching `last_node` — only
+            // happens when `last_node` is itself `null` (nothing in the tree is as
+            // large as `size_upper`), matching HPHA's `bestNode == end()`.
+            while (cur) |node| {
+                if (cur == last_node) {
+                    // Reached the upper bound without finding a fit; `last_node`
+                    // itself is never fit-checked (mirrors the C++ `while` condition
+                    // being checked *before* the loop body).
+                    break;
+                }
+                // SAFETY: address-arithmetic only; `node` is a live tree node (from
+                // `lowerBound`/`succ`) and is not dereferenced through the integer.
+                // PROVENANCE: `node`'s address is read only for its bit pattern (fed
+                // into the same rounding arithmetic `align.roundUp` uses elsewhere),
+                // never reconstructed into a pointer — `node` itself is what's used
+                // as a pointer, unaffected by this read.
+                const addr = @intFromPtr(node);
+                const alignment_offs = align_helpers.roundUp(addr, alignment) - addr;
+                const candidate = node.getBlock();
+                if (candidate.size() >= size + alignment_offs) {
+                    break;
+                }
+                cur = self.free_tree.succ(node);
+            }
+            const found = cur orelse return null;
+            // Improves removal time, same reasoning as `extract` — but only applies
+            // when we stopped *at* `last_node` (no fit found in range); a genuine fit
+            // found strictly before it is used as-is.
+            const best_node = if (cur == last_node) rbtree.next(found) else found;
+            const best_block = best_node.getBlock();
+            self.detach(best_block);
+            return best_block;
+        }
+
+        /// Indexes `bl` as free: the previous MR-cached block (if any) is pushed into
+        /// the tree or small list first, then `bl` becomes the new MR-cached block.
+        /// Ports `allocator::tree_attach`.
+        ///
+        /// `bl` must be live and unused, or `null` (used by `purge` to flush the MR
+        /// cache without installing a new block).
+        fn attach(self: *Self, bl: ?*BlockHeader) void {
+            if (self.mr_free_block) |last| {
+                const size = last.size();
+                // `last`'s `mem()` is exactly where it was indexed from on a prior
+                // `attach` (this same invariant, inductively) or is fresh free space
+                // at least `MIN_BLOCK_SIZE` bytes (every block this module creates is
+                // normalized to at least that), so a `FreeNode`/`SmallFreeNode` fits.
+                const mem = last.mem();
+                if (size > bucket.MAX_SMALL_ALLOCATION) {
+                    // SAFETY: `mem` is `last`'s free payload, at least `MIN_BLOCK_SIZE`
+                    // (>= `@sizeOf(FreeNode)`) bytes (see above), so a `FreeNode` fits and
+                    // nothing else references it while `last` is free.
+                    // ALIGN: `mem` is `@sizeOf(BlockHeader)`-aligned (every block's
+                    // `mem()` is, per `splitBlock`'s contract doc), hence 8-aligned —
+                    // matches `FreeNode`'s alignment (its only field is `NodeBase`,
+                    // align 8).
+                    const node: *FreeNode = @ptrCast(@alignCast(mem));
+                    self.free_tree.insert(node);
+                } else {
+                    // SAFETY: same payload-size argument as the `FreeNode` cast above
+                    // (`SmallFreeNode` is no larger); `last` is free, so the payload is unused.
+                    // ALIGN: same reasoning as the `FreeNode` cast above;
+                    // `SmallFreeNode` is likewise align-8 (its only field is
+                    // `ListLink`, align 8).
+                    const node: *SmallFreeNode = @ptrCast(@alignCast(mem));
+                    self.small_free_list.pushBack(node);
+                }
+            }
+            self.mr_free_block = bl;
+        }
+
+        /// Removes `bl` from wherever it is currently indexed (the MR cache, the
+        /// tree, or the small list). Ports `allocator::tree_detach`.
+        fn detach(self: *Self, bl: *BlockHeader) void {
+            if (self.mr_free_block == bl) {
+                self.mr_free_block = null;
+                return;
+            }
+            const size = bl.size();
+            const mem = bl.mem();
             if (size > bucket.MAX_SMALL_ALLOCATION) {
-                // ALIGN: `mem` is `@sizeOf(BlockHeader)`-aligned (every block's
-                // `mem()` is, per `splitBlock`'s contract doc), hence 8-aligned —
-                // matches `FreeNode`'s alignment (its only field is `NodeBase`,
-                // align 8).
+                // SAFETY: `bl` is a live free block indexed in the tree (size above
+                // `MAX_SMALL_ALLOCATION`, not the MR block), so its `mem()` holds the
+                // `FreeNode` written by `attach`.
+                // ALIGN: see `attach`'s identical cast for why this is 8-aligned.
                 const node: *FreeNode = @ptrCast(@alignCast(mem));
-                self.free_tree.insert(node);
+                self.free_tree.erase(node);
             } else {
-                // ALIGN: same reasoning as the `FreeNode` cast above;
-                // `SmallFreeNode` is likewise align-8 (its only field is
-                // `ListLink`, align 8).
+                // SAFETY: `bl` is a live free block indexed in the small list (size at most
+                // `MAX_SMALL_ALLOCATION`, not the MR block), so its `mem()` holds the
+                // `SmallFreeNode` written by `attach`.
+                // ALIGN: see `attach`'s identical cast for why this is 8-aligned.
                 const node: *SmallFreeNode = @ptrCast(@alignCast(mem));
-                self.small_free_list.pushBack(node);
+                list.unlinkNode(node);
             }
         }
-        self.mr_free_block = bl;
-    }
 
-    /// Removes `bl` from wherever it is currently indexed (the MR cache, the
-    /// tree, or the small list). Ports `allocator::tree_detach`.
-    fn detach(self: *Tree, bl: *BlockHeader) void {
-        if (self.mr_free_block == bl) {
-            self.mr_free_block = null;
-            return;
+        /// Allocates `size` bytes on the tree path. Ports `allocator::tree_alloc`.
+        pub fn alloc(self: *Self, size: usize) ?[*]u8 {
+            const sz = normalizeSize(size) orelse return null;
+            const new_bl = self.extract(sz) orelse (self.grow(sz) orelse return null);
+            const new_bl_size = new_bl.size();
+            std.debug.assert(new_bl_size >= sz);
+            if (new_bl_size >= sz + SPLIT_REMAINDER_MIN) {
+                splitBlock(new_bl, sz);
+                self.attach(new_bl.next());
+            }
+            new_bl.setUsed();
+            return new_bl.mem();
         }
-        const size = bl.size();
-        const mem = bl.mem();
-        if (size > bucket.MAX_SMALL_ALLOCATION) {
-            // ALIGN: see `attach`'s identical cast for why this is 8-aligned.
-            const node: *FreeNode = @ptrCast(@alignCast(mem));
-            self.free_tree.erase(node);
-        } else {
-            // ALIGN: see `attach`'s identical cast for why this is 8-aligned.
-            const node: *SmallFreeNode = @ptrCast(@alignCast(mem));
-            list.unlinkNode(node);
-        }
-    }
 
-    /// Allocates `size` bytes on the tree path. Ports `allocator::tree_alloc`.
-    pub fn alloc(self: *Tree, size: usize) ?[*]u8 {
-        const sz = normalizeSize(size) orelse return null;
-        const new_bl = self.extract(sz) orelse (self.grow(sz) orelse return null);
-        const new_bl_size = new_bl.size();
-        std.debug.assert(new_bl_size >= sz);
-        if (new_bl_size >= sz + SPLIT_REMAINDER_MIN) {
-            splitBlock(new_bl, sz);
-            self.attach(new_bl.next());
-        }
-        new_bl.setUsed();
-        return new_bl.mem();
-    }
-
-    /// Allocates `size` bytes on the tree path, aligned to `alignment`. Ports
-    /// `allocator::tree_alloc_aligned`.
-    pub fn allocAligned(self: *Tree, size: usize, alignment: usize) ?[*]u8 {
-        const sz = normalizeSize(size) orelse return null;
-        // The aligned path adds `alignment` on top of the normalized size — in
-        // `extractAligned`'s `size + alignment` upper bound and in `grow`'s own
-        // `sz + alignment` below — so it needs that much more headroom than
-        // `normalizeSize` alone guarantees. Checked here rather than at each `+`,
-        // for the same reason and with the same rationale as `MAX_ALLOCATION` itself.
-        if (alignment > MAX_ALLOCATION or sz > MAX_ALLOCATION - alignment) return null;
-        var new_bl = self.extractAligned(sz, alignment) orelse (self.grow(sz + alignment) orelse return null);
-        const new_bl_size = new_bl.size();
-        std.debug.assert(new_bl_size >= sz);
-        const mem = new_bl.mem();
-        // PROVENANCE: both addresses are read only for the byte distance between
-        // them, never reconstructed into a pointer here.
-        const alignment_offs = @intFromPtr(align_helpers.alignUp(mem, alignment)) - @intFromPtr(mem);
-        std.debug.assert(new_bl_size >= sz + alignment_offs);
-        if (alignment_offs >= SPLIT_REMAINDER_MIN) {
-            // `alignment_offs - @sizeOf(BlockHeader)` is the padding block's
-            // payload size, a multiple of `@sizeOf(BlockHeader)` (see
-            // `splitBlock`'s contract doc: every block's `mem()`, hence every
-            // alignment offset between two such positions, is a
-            // `@sizeOf(BlockHeader)` multiple), and this branch's own
-            // `>= SPLIT_REMAINDER_MIN` check is exactly `splitBlock`'s size
-            // precondition applied to that padding block.
-            splitBlock(new_bl, alignment_offs - @sizeOf(BlockHeader));
-            // `new_bl` is live and unused (still its pre-extraction state;
-            // `extractAligned` never marks it used).
-            self.attach(new_bl);
-            new_bl = new_bl.next();
-        } else if (alignment_offs > 0) {
-            // `new_bl` is live and attached to a live physical chain (from
-            // `extractAligned`/`grow`, both return blocks freshly spliced into a
-            // real chain); `alignment_offs` is a `@sizeOf(BlockHeader)` multiple
-            // (same reasoning as above) and within `new_bl`'s own span (the
-            // `>= size + alignment_offs` check above).
-            new_bl = shiftBlock(new_bl, alignment_offs);
-        }
-        if (new_bl.size() >= sz + SPLIT_REMAINDER_MIN) {
-            splitBlock(new_bl, sz);
-            self.attach(new_bl.next());
-        }
-        new_bl.setUsed();
-        const mem_out = new_bl.mem();
-        std.debug.assert(@intFromPtr(mem_out) % alignment == 0);
-        return mem_out;
-    }
-
-    /// Grows or shrinks `ptr` in place when a physical neighbour can absorb the
-    /// difference, otherwise falls back to allocate/copy/free. Ports
-    /// `allocator::tree_realloc`.
-    ///
-    /// `ptr` must be a still-live tree-path allocation this instance produced.
-    pub fn realloc(self: *Tree, ptr: [*]u8, size: usize) ?[*]u8 {
-        const sz = normalizeSize(size) orelse return null;
-        const bl = block.ptrGetBlockHeader(ptr);
-        const bl_size = bl.size();
-        if (bl_size >= sz) {
-            if (bl_size >= sz + SPLIT_REMAINDER_MIN) {
-                splitBlock(bl, sz);
-                const coalesced = self.coalesceBlock(bl.next());
-                self.attach(coalesced);
-            }
-            return ptr;
-        }
-        const next = bl.next();
-        const next_used = next.used();
-        const next_size: usize = if (next_used) 0 else next.size() + @sizeOf(BlockHeader);
-        if (bl_size + next_size >= sz) {
-            std.debug.assert(!next_used);
-            self.detach(next);
-            next.unlink();
-            const bl_size_now = bl.size();
-            std.debug.assert(bl_size_now >= sz);
-            if (bl_size_now >= sz + SPLIT_REMAINDER_MIN) {
-                splitBlock(bl, sz);
-                self.attach(bl.next());
-            }
-            return ptr;
-        }
-        const prev = bl.prev.?;
-        const prev_used = prev.used();
-        const prev_size: usize = if (prev_used) 0 else prev.size() + @sizeOf(BlockHeader);
-        if (bl_size + prev_size + next_size >= sz) {
-            std.debug.assert(!prev_used);
-            self.detach(prev);
-            bl.unlink();
-            if (!next_used) {
-                self.detach(next);
-                next.unlink();
-            }
-            // Named `merged`, not reusing `bl` (which `orisnik`'s `tree_realloc`
-            // reassigns via `let bl = prev;`) — Zig errors on identifier
-            // shadowing between an existing local and a same-named rebinding.
-            const merged = prev;
-            merged.setUsed();
-            const merged_size_now = merged.size();
-            std.debug.assert(merged_size_now >= sz);
-            const new_ptr = merged.mem();
-            // `ptr` is valid for `bl_size` bytes (its own pre-move size); `new_ptr`
-            // is `merged`'s own fresh payload start, with room for at least
-            // `bl_size` bytes (`merged`'s new size is `>= sz > bl_size`); the two
-            // ranges may overlap (this is exactly a block growing backwards over
-            // its own former self), hence `@memmove`'s overlap-safe copy, not
-            // `@memcpy`.
-            @memmove(new_ptr[0..bl_size], ptr[0..bl_size]);
-            if (merged.size() >= sz + SPLIT_REMAINDER_MIN) {
-                splitBlock(merged, sz);
-                self.attach(merged.next());
-            }
-            return new_ptr;
-        }
-        // Fall back: no physical neighbour can absorb the growth; allocate fresh,
-        // copy, free the old block.
-        const new_ptr = self.alloc(sz) orelse return null;
-        // `new_ptr` was just allocated with room for at least `sz > bl_size`
-        // bytes; `ptr` is valid for `bl_size` bytes; the two allocations never
-        // overlap (freshly, independently allocated).
-        @memcpy(new_ptr[0..bl_size], ptr[0..bl_size]);
-        self.free(ptr);
-        return new_ptr;
-    }
-
-    /// Grows or shrinks `ptr` in place, aligned to `alignment`, otherwise falls
-    /// back to allocate/copy/free. Ports `allocator::tree_realloc_aligned`.
-    ///
-    /// `ptr` must be a still-live tree-path allocation this instance produced,
-    /// itself already aligned to `alignment`.
-    pub fn reallocAligned(self: *Tree, ptr: [*]u8, size: usize, alignment: usize) ?[*]u8 {
-        std.debug.assert(@intFromPtr(ptr) % alignment == 0);
-        const sz = normalizeSize(size) orelse return null;
-        // Same headroom requirement as `allocAligned`, which this falls back to.
-        if (alignment > MAX_ALLOCATION or sz > MAX_ALLOCATION - alignment) return null;
-        const bl = block.ptrGetBlockHeader(ptr);
-        const bl_size = bl.size();
-        if (bl_size >= sz) {
-            if (bl_size >= sz + SPLIT_REMAINDER_MIN) {
-                splitBlock(bl, sz);
-                const coalesced = self.coalesceBlock(bl.next());
-                self.attach(coalesced);
-            }
-            return ptr;
-        }
-        const next = bl.next();
-        const next_used = next.used();
-        const next_size: usize = if (next_used) 0 else next.size() + @sizeOf(BlockHeader);
-        if (bl_size + next_size >= sz) {
-            std.debug.assert(!next_used);
-            self.detach(next);
-            next.unlink();
-            const bl_size_now = bl.size();
-            std.debug.assert(bl_size_now >= sz);
-            if (bl_size_now >= sz + SPLIT_REMAINDER_MIN) {
-                splitBlock(bl, sz);
-                self.attach(bl.next());
-            }
-            return ptr;
-        }
-        const prev = bl.prev.?;
-        const prev_used = prev.used();
-        const prev_size: usize = if (prev_used) 0 else prev.size() + @sizeOf(BlockHeader);
-        const alignment_offs: usize = if (prev_used) 0 else blk: {
-            const prev_mem = prev.mem();
-            // PROVENANCE: both addresses are read only for the byte distance
-            // between them, never reconstructed into a pointer here.
-            break :blk @intFromPtr(align_helpers.alignUp(prev_mem, alignment)) - @intFromPtr(prev_mem);
-        };
-        if (bl_size + prev_size + next_size >= sz + alignment_offs) {
-            std.debug.assert(!prev_used);
-            self.detach(prev);
-            bl.unlink();
-            if (!next_used) {
-                self.detach(next);
-                next.unlink();
-            }
-            // Named `shifted_prev`, not reusing `prev` (which `orisnik`'s
-            // `tree_realloc_aligned` reassigns via `let mut prev = prev;`) — Zig
-            // errors on identifier shadowing.
-            var shifted_prev = prev;
+        /// Allocates `size` bytes on the tree path, aligned to `alignment`. Ports
+        /// `allocator::tree_alloc_aligned`.
+        pub fn allocAligned(self: *Self, size: usize, alignment: usize) ?[*]u8 {
+            const sz = normalizeSize(size) orelse return null;
+            // The aligned path adds `alignment` on top of the normalized size — in
+            // `extractAligned`'s `size + alignment` upper bound and in `grow`'s own
+            // `sz + alignment` below — so it needs that much more headroom than
+            // `normalizeSize` alone guarantees. Checked here rather than at each `+`,
+            // for the same reason and with the same rationale as `MAX_ALLOCATION` itself.
+            if (alignment > MAX_ALLOCATION or sz > MAX_ALLOCATION - alignment) return null;
+            var new_bl = self.extractAligned(sz, alignment) orelse (self.grow(sz + alignment) orelse return null);
+            const new_bl_size = new_bl.size();
+            std.debug.assert(new_bl_size >= sz);
+            const mem = new_bl.mem();
+            // SAFETY: address-arithmetic only; no pointer is formed or dereferenced.
+            // PROVENANCE: both addresses are read only for the byte distance between
+            // them, never reconstructed into a pointer here.
+            const alignment_offs = @intFromPtr(align_helpers.alignUp(mem, alignment)) - @intFromPtr(mem);
+            std.debug.assert(new_bl_size >= sz + alignment_offs);
             if (alignment_offs >= SPLIT_REMAINDER_MIN) {
-                // Same reasoning as `allocAligned`'s identical branch.
-                splitBlock(shifted_prev, alignment_offs - @sizeOf(BlockHeader));
-                // `shifted_prev` is live and unused (unlinked from its index
-                // above, not yet re-attached).
-                self.attach(shifted_prev);
-                shifted_prev = shifted_prev.next();
+                // `alignment_offs - @sizeOf(BlockHeader)` is the padding block's
+                // payload size, a multiple of `@sizeOf(BlockHeader)` (see
+                // `splitBlock`'s contract doc: every block's `mem()`, hence every
+                // alignment offset between two such positions, is a
+                // `@sizeOf(BlockHeader)` multiple), and this branch's own
+                // `>= SPLIT_REMAINDER_MIN` check is exactly `splitBlock`'s size
+                // precondition applied to that padding block.
+                splitBlock(new_bl, alignment_offs - @sizeOf(BlockHeader));
+                // `new_bl` is live and unused (still its pre-extraction state;
+                // `extractAligned` never marks it used).
+                self.attach(new_bl);
+                new_bl = new_bl.next();
             } else if (alignment_offs > 0) {
-                // `shifted_prev` is live, attached to a live chain (it was just
-                // unlinked and is about to be relinked by the surrounding logic —
-                // more precisely, at this point it is temporarily detached from
-                // the physical chain along with `bl`/`next`; `shiftBlock` itself
-                // only needs its *own* prev/next fields to still be live, which
-                // they are, since only it itself was unlinked, not its
-                // neighbours).
-                shifted_prev = shiftBlock(shifted_prev, alignment_offs);
+                // `new_bl` is live and attached to a live physical chain (from
+                // `extractAligned`/`grow`, both return blocks freshly spliced into a
+                // real chain); `alignment_offs` is a `@sizeOf(BlockHeader)` multiple
+                // (same reasoning as above) and within `new_bl`'s own span (the
+                // `>= size + alignment_offs` check above).
+                new_bl = shiftBlock(new_bl, alignment_offs);
             }
-            // Named `merged`, not `bl` (which `orisnik`'s counterpart reassigns
-            // via `let bl = prev;`) — same identifier-shadowing reason as
-            // `realloc`.
-            const merged = shifted_prev;
-            merged.setUsed();
-            const merged_size_now = merged.size();
-            std.debug.assert(merged_size_now >= sz);
-            const new_ptr = merged.mem();
-            std.debug.assert(@intFromPtr(new_ptr) % alignment == 0);
-            // `ptr` is valid for `bl_size` bytes; `new_ptr` has room for at least
-            // `bl_size` bytes; the ranges may overlap (growing in place).
-            @memmove(new_ptr[0..bl_size], ptr[0..bl_size]);
-            if (merged_size_now >= sz + SPLIT_REMAINDER_MIN) {
-                splitBlock(merged, sz);
-                self.attach(merged.next());
+            if (new_bl.size() >= sz + SPLIT_REMAINDER_MIN) {
+                splitBlock(new_bl, sz);
+                self.attach(new_bl.next());
             }
+            new_bl.setUsed();
+            const mem_out = new_bl.mem();
+            // SAFETY: address read for the alignment assert only; nothing is dereferenced.
+            std.debug.assert(@intFromPtr(mem_out) % alignment == 0);
+            return mem_out;
+        }
+
+        /// Grows or shrinks `ptr` in place when a physical neighbour can absorb the
+        /// difference, otherwise falls back to allocate/copy/free. Ports
+        /// `allocator::tree_realloc`.
+        ///
+        /// `ptr` must be a still-live tree-path allocation this instance produced.
+        pub fn realloc(self: *Self, ptr: [*]u8, size: usize) ?[*]u8 {
+            const sz = normalizeSize(size) orelse return null;
+            const bl = block.ptrGetBlockHeader(ptr);
+            const bl_size = bl.size();
+            if (bl_size >= sz) {
+                if (bl_size >= sz + SPLIT_REMAINDER_MIN) {
+                    splitBlock(bl, sz);
+                    const coalesced = self.coalesceBlock(bl.next());
+                    self.attach(coalesced);
+                }
+                return ptr;
+            }
+            const next = bl.next();
+            const next_used = next.used();
+            const next_size: usize = if (next_used) 0 else next.size() + @sizeOf(BlockHeader);
+            if (bl_size + next_size >= sz) {
+                std.debug.assert(!next_used);
+                self.detach(next);
+                next.unlink();
+                const bl_size_now = bl.size();
+                std.debug.assert(bl_size_now >= sz);
+                if (bl_size_now >= sz + SPLIT_REMAINDER_MIN) {
+                    splitBlock(bl, sz);
+                    self.attach(bl.next());
+                }
+                return ptr;
+            }
+            const prev = bl.prev.?;
+            const prev_used = prev.used();
+            const prev_size: usize = if (prev_used) 0 else prev.size() + @sizeOf(BlockHeader);
+            if (bl_size + prev_size + next_size >= sz) {
+                std.debug.assert(!prev_used);
+                self.detach(prev);
+                bl.unlink();
+                if (!next_used) {
+                    self.detach(next);
+                    next.unlink();
+                }
+                // Named `merged`, not reusing `bl` (which `orisnik`'s `tree_realloc`
+                // reassigns via `let bl = prev;`) — Zig errors on identifier
+                // shadowing between an existing local and a same-named rebinding.
+                const merged = prev;
+                merged.setUsed();
+                const merged_size_now = merged.size();
+                std.debug.assert(merged_size_now >= sz);
+                const new_ptr = merged.mem();
+                // SAFETY: both slices are within live, exclusively owned payloads: `ptr`
+                // (caller contract of `realloc`) and `new_ptr` (`merged`, size >= sz > bl_size).
+                // `ptr` is valid for `bl_size` bytes (its own pre-move size); `new_ptr`
+                // is `merged`'s own fresh payload start, with room for at least
+                // `bl_size` bytes (`merged`'s new size is `>= sz > bl_size`); the two
+                // ranges may overlap (this is exactly a block growing backwards over
+                // its own former self), hence `@memmove`'s overlap-safe copy, not
+                // `@memcpy`.
+                @memmove(new_ptr[0..bl_size], ptr[0..bl_size]);
+                if (merged.size() >= sz + SPLIT_REMAINDER_MIN) {
+                    splitBlock(merged, sz);
+                    self.attach(merged.next());
+                }
+                return new_ptr;
+            }
+            // Fall back: no physical neighbour can absorb the growth; allocate fresh,
+            // copy, free the old block.
+            const new_ptr = self.alloc(sz) orelse return null;
+            // SAFETY: `new_ptr` is a fresh `alloc(sz)` result (`sz > bl_size`) and `ptr`
+            // is live for `bl_size` bytes (caller contract of `realloc`); disjoint.
+            // `new_ptr` was just allocated with room for at least `sz > bl_size`
+            // bytes; `ptr` is valid for `bl_size` bytes; the two allocations never
+            // overlap (freshly, independently allocated).
+            @memcpy(new_ptr[0..bl_size], ptr[0..bl_size]);
+            self.free(ptr);
             return new_ptr;
         }
-        const new_ptr = self.allocAligned(sz, alignment) orelse return null;
-        // `new_ptr` was just allocated with room for at least `bl_size` bytes;
-        // `ptr` is valid for `bl_size` bytes; freshly, independently allocated,
-        // so never overlapping.
-        @memcpy(new_ptr[0..bl_size], ptr[0..bl_size]);
-        self.free(ptr);
-        return new_ptr;
-    }
 
-    /// Grows `ptr` in place if a following free block can absorb the difference,
-    /// without moving it; returns the resulting size either way (the block's own
-    /// size if it couldn't grow enough). Ports `allocator::tree_resize`.
-    ///
-    /// `ptr` must be a still-live tree-path allocation this instance produced.
-    pub fn resize(self: *Tree, ptr: [*]u8, size: usize) usize {
-        const bl = block.ptrGetBlockHeader(ptr);
-        // Past `MAX_ALLOCATION` (see its doc): no growth is possible, which is
-        // exactly what this function already reports for any request it cannot
-        // satisfy in place — the block keeps its current size, unmoved.
-        const sz = normalizeSize(size) orelse return bl.size();
-        const bl_size = bl.size();
-        if (bl_size >= sz) {
-            if (bl_size >= sz + SPLIT_REMAINDER_MIN) {
-                splitBlock(bl, sz);
-                const coalesced = self.coalesceBlock(bl.next());
-                self.attach(coalesced);
+        /// Grows or shrinks `ptr` in place, aligned to `alignment`, otherwise falls
+        /// back to allocate/copy/free. Ports `allocator::tree_realloc_aligned`.
+        ///
+        /// `ptr` must be a still-live tree-path allocation this instance produced,
+        /// itself already aligned to `alignment`.
+        pub fn reallocAligned(self: *Self, ptr: [*]u8, size: usize, alignment: usize) ?[*]u8 {
+            // SAFETY: address read for the alignment assert only; nothing is dereferenced.
+            std.debug.assert(@intFromPtr(ptr) % alignment == 0);
+            const sz = normalizeSize(size) orelse return null;
+            // Same headroom requirement as `allocAligned`, which this falls back to.
+            if (alignment > MAX_ALLOCATION or sz > MAX_ALLOCATION - alignment) return null;
+            const bl = block.ptrGetBlockHeader(ptr);
+            const bl_size = bl.size();
+            if (bl_size >= sz) {
+                if (bl_size >= sz + SPLIT_REMAINDER_MIN) {
+                    splitBlock(bl, sz);
+                    const coalesced = self.coalesceBlock(bl.next());
+                    self.attach(coalesced);
+                }
+                return ptr;
+            }
+            const next = bl.next();
+            const next_used = next.used();
+            const next_size: usize = if (next_used) 0 else next.size() + @sizeOf(BlockHeader);
+            if (bl_size + next_size >= sz) {
+                std.debug.assert(!next_used);
+                self.detach(next);
+                next.unlink();
+                const bl_size_now = bl.size();
+                std.debug.assert(bl_size_now >= sz);
+                if (bl_size_now >= sz + SPLIT_REMAINDER_MIN) {
+                    splitBlock(bl, sz);
+                    self.attach(bl.next());
+                }
+                return ptr;
+            }
+            const prev = bl.prev.?;
+            const prev_used = prev.used();
+            const prev_size: usize = if (prev_used) 0 else prev.size() + @sizeOf(BlockHeader);
+            const alignment_offs: usize = if (prev_used) 0 else blk: {
+                const prev_mem = prev.mem();
+                // SAFETY: address-arithmetic only; no pointer is formed or dereferenced.
+                // PROVENANCE: both addresses are read only for the byte distance
+                // between them, never reconstructed into a pointer here.
+                break :blk @intFromPtr(align_helpers.alignUp(prev_mem, alignment)) - @intFromPtr(prev_mem);
+            };
+            if (bl_size + prev_size + next_size >= sz + alignment_offs) {
+                std.debug.assert(!prev_used);
+                self.detach(prev);
+                bl.unlink();
+                if (!next_used) {
+                    self.detach(next);
+                    next.unlink();
+                }
+                // Named `shifted_prev`, not reusing `prev` (which `orisnik`'s
+                // `tree_realloc_aligned` reassigns via `let mut prev = prev;`) — Zig
+                // errors on identifier shadowing.
+                var shifted_prev = prev;
+                if (alignment_offs >= SPLIT_REMAINDER_MIN) {
+                    // Same reasoning as `allocAligned`'s identical branch.
+                    splitBlock(shifted_prev, alignment_offs - @sizeOf(BlockHeader));
+                    // `shifted_prev` is live and unused (unlinked from its index
+                    // above, not yet re-attached).
+                    self.attach(shifted_prev);
+                    shifted_prev = shifted_prev.next();
+                } else if (alignment_offs > 0) {
+                    // `shifted_prev` is live, attached to a live chain (it was just
+                    // unlinked and is about to be relinked by the surrounding logic —
+                    // more precisely, at this point it is temporarily detached from
+                    // the physical chain along with `bl`/`next`; `shiftBlock` itself
+                    // only needs its *own* prev/next fields to still be live, which
+                    // they are, since only it itself was unlinked, not its
+                    // neighbours).
+                    shifted_prev = shiftBlock(shifted_prev, alignment_offs);
+                }
+                // Named `merged`, not `bl` (which `orisnik`'s counterpart reassigns
+                // via `let bl = prev;`) — same identifier-shadowing reason as
+                // `realloc`.
+                const merged = shifted_prev;
+                merged.setUsed();
+                const merged_size_now = merged.size();
+                std.debug.assert(merged_size_now >= sz);
+                const new_ptr = merged.mem();
+                // SAFETY: address read for the alignment assert only; nothing is dereferenced.
+                std.debug.assert(@intFromPtr(new_ptr) % alignment == 0);
+                // SAFETY: `ptr` is live for `bl_size` bytes (caller contract of
+                // `reallocAligned`); `new_ptr` is `merged`'s payload, size >= sz > bl_size,
+                // exclusively owned; overlap is handled by `@memmove`.
+                // `ptr` is valid for `bl_size` bytes; `new_ptr` has room for at least
+                // `bl_size` bytes; the ranges may overlap (growing in place).
+                @memmove(new_ptr[0..bl_size], ptr[0..bl_size]);
+                if (merged_size_now >= sz + SPLIT_REMAINDER_MIN) {
+                    splitBlock(merged, sz);
+                    self.attach(merged.next());
+                }
+                return new_ptr;
+            }
+            const new_ptr = self.allocAligned(sz, alignment) orelse return null;
+            // SAFETY: `new_ptr` is a fresh `allocAligned(sz)` result (`sz > bl_size`) and
+            // `ptr` is live for `bl_size` bytes (caller contract); the two are disjoint.
+            // `new_ptr` was just allocated with room for at least `bl_size` bytes;
+            // `ptr` is valid for `bl_size` bytes; freshly, independently allocated,
+            // so never overlapping.
+            @memcpy(new_ptr[0..bl_size], ptr[0..bl_size]);
+            self.free(ptr);
+            return new_ptr;
+        }
+
+        /// Grows `ptr` in place if a following free block can absorb the difference,
+        /// without moving it; returns the resulting size either way (the block's own
+        /// size if it couldn't grow enough). Ports `allocator::tree_resize`.
+        ///
+        /// `ptr` must be a still-live tree-path allocation this instance produced.
+        pub fn resize(self: *Self, ptr: [*]u8, size: usize) usize {
+            const bl = block.ptrGetBlockHeader(ptr);
+            // Past `MAX_ALLOCATION` (see its doc): no growth is possible, which is
+            // exactly what this function already reports for any request it cannot
+            // satisfy in place — the block keeps its current size, unmoved.
+            const sz = normalizeSize(size) orelse return bl.size();
+            const bl_size = bl.size();
+            if (bl_size >= sz) {
+                if (bl_size >= sz + SPLIT_REMAINDER_MIN) {
+                    splitBlock(bl, sz);
+                    const coalesced = self.coalesceBlock(bl.next());
+                    self.attach(coalesced);
+                }
+                return bl.size();
+            }
+            const next = bl.next();
+            const next_used = next.used();
+            const next_size = next.size();
+            if (!next_used and bl_size + next_size + @sizeOf(BlockHeader) >= sz) {
+                self.detach(next);
+                next.unlink();
+                if (bl.size() >= sz + SPLIT_REMAINDER_MIN) {
+                    splitBlock(bl, sz);
+                    self.attach(bl.next());
+                }
+                const bl_size_now = bl.size();
+                std.debug.assert(bl_size_now >= sz);
             }
             return bl.size();
         }
-        const next = bl.next();
-        const next_used = next.used();
-        const next_size = next.size();
-        if (!next_used and bl_size + next_size + @sizeOf(BlockHeader) >= sz) {
-            self.detach(next);
-            next.unlink();
-            if (bl.size() >= sz + SPLIT_REMAINDER_MIN) {
-                splitBlock(bl, sz);
-                self.attach(bl.next());
+
+        /// Frees `ptr`, coalescing with either physical neighbour that is also free.
+        /// Ports `allocator::tree_free`.
+        ///
+        /// `ptr` must be a still-live tree-path allocation this instance produced.
+        pub fn free(self: *Self, ptr: [*]u8) void {
+            const bl = block.ptrGetBlockHeader(ptr);
+            bl.setUnused();
+            // `bl` is live and unused (just set above), attached to a live chain
+            // (this function's contract: `ptr` was a live allocation).
+            const coalesced = self.coalesceBlock(bl);
+            self.attach(coalesced);
+        }
+
+        /// Returns `bl`'s whole arena to the OS if `bl` is the arena's only content
+        /// (its physical predecessor is the arena's opening fence, its successor the
+        /// closing one). Ports `allocator::tree_purge_block`.
+        ///
+        /// `bl` must be live, unused, and attached to a live physical chain.
+        fn purgeBlock(self: *Self, bl: *BlockHeader) void {
+            std.debug.assert(!bl.used());
+            // `bl.prev` is never `null` here: `bl` is a real (non-fence) block, per
+            // this function's own contract, and fences are the only blocks with a
+            // `null` prev. `bl.next()` needs no analogous unwrap — it is computed,
+            // never stored, so its type has no `null` to check in the first place
+            // (unlike `orisnik`'s raw `*mut BlockHeader`, which carries a redundant
+            // `debug_assert!(!next.is_null())` this port has no equivalent state for).
+            const prev = bl.prev.?;
+            std.debug.assert(prev.used());
+            const next = bl.next();
+            std.debug.assert(next.used());
+            const prev_prev = prev.prev;
+            const next_size = next.size();
+            if (prev_prev == null and next_size == 0) {
+                self.detach(bl);
+                // SAFETY: `prev` is the live opening fence, the first bytes of the arena
+                // `addBlock` mapped (`prev_prev == null` above); viewing it as bytes is valid.
+                const mem_start: [*]u8 = @ptrCast(prev);
+                const bl_mem = bl.mem();
+                const bl_size = bl.size();
+                // `bl_mem` is `bl`'s own payload start; `bl_size` bytes past it stays
+                // within `bl`'s own span.
+                const past_payload = bl_mem + bl_size;
+                // `past_payload` is exactly `next` (`bl.mem() + bl.size()` is
+                // `bl.next()` by definition), live (established above);
+                // `@sizeOf(BlockHeader)` bytes past it stays within `next`'s own span.
+                const mem_end = past_payload + @sizeOf(BlockHeader);
+                // SAFETY: address-arithmetic only; `mem_start`/`mem_end` bound one arena
+                // (opening fence to closing fence), and no pointer is formed from the result.
+                // PROVENANCE: both addresses are read only for the byte distance
+                // between them, never reconstructed into a pointer here.
+                const size = @intFromPtr(mem_end) - @intFromPtr(mem_start);
+                // SAFETY: address read for the page-alignment assert only.
+                std.debug.assert(@intFromPtr(mem_start) % os.PAGE_SIZE == 0);
+                std.debug.assert(size % os.PAGE_SIZE == 0);
+                // `mem_start`/`size` describe exactly the arena `addBlock` originally
+                // mapped (the opening fence through the closing one, established by
+                // the `prev_prev`/`next_size` checks above), not referenced again
+                // after this call (everything in it — `bl`, `prev`, `next` — is
+                // either just detached or was never indexed at all, being a fence).
+                self.systemFree(mem_start, size);
             }
-            const bl_size_now = bl.size();
-            std.debug.assert(bl_size_now >= sz);
         }
-        return bl.size();
-    }
 
-    /// Frees `ptr`, coalescing with either physical neighbour that is also free.
-    /// Ports `allocator::tree_free`.
-    ///
-    /// `ptr` must be a still-live tree-path allocation this instance produced.
-    pub fn free(self: *Tree, ptr: [*]u8) void {
-        const bl = block.ptrGetBlockHeader(ptr);
-        bl.setUnused();
-        // `bl` is live and unused (just set above), attached to a live chain
-        // (this function's contract: `ptr` was a live allocation).
-        const coalesced = self.coalesceBlock(bl);
-        self.attach(coalesced);
-    }
-
-    /// Returns `bl`'s whole arena to the OS if `bl` is the arena's only content
-    /// (its physical predecessor is the arena's opening fence, its successor the
-    /// closing one). Ports `allocator::tree_purge_block`.
-    ///
-    /// `bl` must be live, unused, and attached to a live physical chain.
-    fn purgeBlock(self: *Tree, bl: *BlockHeader) void {
-        std.debug.assert(!bl.used());
-        // `bl.prev` is never `null` here: `bl` is a real (non-fence) block, per
-        // this function's own contract, and fences are the only blocks with a
-        // `null` prev. `bl.next()` needs no analogous unwrap — it is computed,
-        // never stored, so its type has no `null` to check in the first place
-        // (unlike `orisnik`'s raw `*mut BlockHeader`, which carries a redundant
-        // `debug_assert!(!next.is_null())` this port has no equivalent state for).
-        const prev = bl.prev.?;
-        std.debug.assert(prev.used());
-        const next = bl.next();
-        std.debug.assert(next.used());
-        const prev_prev = prev.prev;
-        const next_size = next.size();
-        if (prev_prev == null and next_size == 0) {
-            self.detach(bl);
-            const mem_start: [*]u8 = @ptrCast(prev);
-            const bl_mem = bl.mem();
-            const bl_size = bl.size();
-            // `bl_mem` is `bl`'s own payload start; `bl_size` bytes past it stays
-            // within `bl`'s own span.
-            const past_payload = bl_mem + bl_size;
-            // `past_payload` is exactly `next` (`bl.mem() + bl.size()` is
-            // `bl.next()` by definition), live (established above);
-            // `@sizeOf(BlockHeader)` bytes past it stays within `next`'s own span.
-            const mem_end = past_payload + @sizeOf(BlockHeader);
-            // PROVENANCE: both addresses are read only for the byte distance
-            // between them, never reconstructed into a pointer here.
-            const size = @intFromPtr(mem_end) - @intFromPtr(mem_start);
-            std.debug.assert(@intFromPtr(mem_start) % os.PAGE_SIZE == 0);
-            std.debug.assert(size % os.PAGE_SIZE == 0);
-            // `mem_start`/`size` describe exactly the arena `addBlock` originally
-            // mapped (the opening fence through the closing one, established by
-            // the `prev_prev`/`next_size` checks above), not referenced again
-            // after this call (everything in it — `bl`, `prev`, `next` — is
-            // either just detached or was never indexed at all, being a fence).
-            self.systemFree(mem_start, size);
+        /// Returns every fully-unused arena to the OS. Ports `allocator::tree_purge`.
+        pub fn purge(self: *Self) void {
+            // Flush the MR cache so its block is visible to the scan below (a block
+            // only the MR cache references can't be identified as purgeable by
+            // walking the tree alone).
+            self.attach(null);
+            // Only an arena whose sole content is one free block spanning (almost)
+            // the whole thing is purgeable — `addBlock` reserves two fences plus one
+            // fake block of overhead, so the smallest possible whole-arena free block
+            // is PAGE_SIZE minus that overhead.
+            const min_purgeable = os.PAGE_SIZE - 3 * @sizeOf(BlockHeader) - @sizeOf(FreeNode);
+            // EXPLICIT: walks every free-tree node at or above `min_purgeable`,
+            // advancing to each one's successor *before* possibly purging it out from
+            // under the walk (mirrors HPHA's own `node = node->succ()` before
+            // `tree_purge_block`); `node` is the state, not expressible as an
+            // iterator invalidated by removal.
+            var node = self.free_tree.lowerBound(min_purgeable);
+            while (node) |cur| {
+                const blk = cur.getBlock();
+                node = self.free_tree.succ(cur);
+                // `blk` is live, unused (a `FreeNode` only ever sits at a free
+                // block's `mem()`), attached to a live physical chain.
+                self.purgeBlock(blk);
+            }
+            self.attach(null);
         }
-    }
-
-    /// Returns every fully-unused arena to the OS. Ports `allocator::tree_purge`.
-    pub fn purge(self: *Tree) void {
-        // Flush the MR cache so its block is visible to the scan below (a block
-        // only the MR cache references can't be identified as purgeable by
-        // walking the tree alone).
-        self.attach(null);
-        // Only an arena whose sole content is one free block spanning (almost)
-        // the whole thing is purgeable — `addBlock` reserves two fences plus one
-        // fake block of overhead, so the smallest possible whole-arena free block
-        // is PAGE_SIZE minus that overhead.
-        const min_purgeable = os.PAGE_SIZE - 3 * @sizeOf(BlockHeader) - @sizeOf(FreeNode);
-        // EXPLICIT: walks every free-tree node at or above `min_purgeable`,
-        // advancing to each one's successor *before* possibly purging it out from
-        // under the walk (mirrors HPHA's own `node = node->succ()` before
-        // `tree_purge_block`); `node` is the state, not expressible as an
-        // iterator invalidated by removal.
-        var node = self.free_tree.lowerBound(min_purgeable);
-        while (node) |cur| {
-            const blk = cur.getBlock();
-            node = self.free_tree.succ(cur);
-            // `blk` is live, unused (a `FreeNode` only ever sits at a free
-            // block's `mem()`), attached to a live physical chain.
-            self.purgeBlock(blk);
-        }
-        self.attach(null);
-    }
-};
+    };
+}
 
 const testing = std.testing;
 
@@ -800,6 +871,8 @@ const FakeArena = struct {
     }
 
     fn ptr(self: *FakeArena) [*]u8 {
+        // SAFETY: `buf` is a live `[]u64` owned by this arena; reinterpreting its
+        // start as bytes only loosens alignment and stays within `buf`'s allocation.
         return @ptrCast(self.buf.ptr);
     }
 };
@@ -807,14 +880,14 @@ const FakeArena = struct {
 // Lays `size` bytes of `arena` out as one big free block and attaches it, exactly
 // like `Tree.grow` does for real OS memory — but skipping `systemAlloc`, so no real
 // OS call happens (see `FakeArena`'s doc).
-fn seed(tree: *Tree, arena: *FakeArena, size: usize) void {
+fn seed(tree: *Tree(.{}), arena: *FakeArena, size: usize) void {
     const front = tree.addBlock(arena.ptr(), size);
     tree.attach(front);
 }
 
 test "seeded alloc serves without touching the OS" {
     const allocator = testing.allocator;
-    var tree: Tree = .init();
+    var tree: Tree(.{}) = .init();
     var arena = try FakeArena.init(allocator, 4096);
     defer arena.deinit(allocator);
     seed(&tree, &arena, 4096);
@@ -825,7 +898,7 @@ test "seeded alloc serves without touching the OS" {
 
 test "alloc splits a remainder which stays available" {
     const allocator = testing.allocator;
-    var tree: Tree = .init();
+    var tree: Tree(.{}) = .init();
     var arena = try FakeArena.init(allocator, 4096);
     defer arena.deinit(allocator);
     seed(&tree, &arena, 4096);
@@ -840,7 +913,7 @@ test "alloc splits a remainder which stays available" {
 
 test "free then alloc same size reuses the MR-cached block" {
     const allocator = testing.allocator;
-    var tree: Tree = .init();
+    var tree: Tree(.{}) = .init();
     var arena = try FakeArena.init(allocator, 4096);
     defer arena.deinit(allocator);
     seed(&tree, &arena, 4096);
@@ -854,7 +927,7 @@ test "free then alloc same size reuses the MR-cached block" {
 
 test "free coalesces adjacent blocks, enabling a larger alloc" {
     const allocator = testing.allocator;
-    var tree: Tree = .init();
+    var tree: Tree(.{}) = .init();
     var arena = try FakeArena.init(allocator, 4096);
     defer arena.deinit(allocator);
     seed(&tree, &arena, 4096);
@@ -876,7 +949,7 @@ test "free coalesces adjacent blocks, enabling a larger alloc" {
 
 test "small and large free blocks are both retrievable past the MR cache" {
     const allocator = testing.allocator;
-    var tree: Tree = .init();
+    var tree: Tree(.{}) = .init();
     var arena = try FakeArena.init(allocator, 8192);
     defer arena.deinit(allocator);
     seed(&tree, &arena, 8192);
@@ -901,7 +974,7 @@ test "small and large free blocks are both retrievable past the MR cache" {
 
 test "allocAligned respects every requested alignment" {
     const allocator = testing.allocator;
-    var tree: Tree = .init();
+    var tree: Tree(.{}) = .init();
     var arena = try FakeArena.init(allocator, 8192);
     defer arena.deinit(allocator);
     seed(&tree, &arena, 8192);
@@ -915,7 +988,7 @@ test "allocAligned respects every requested alignment" {
 
 test "realloc shrink splits off a reusable remainder" {
     const allocator = testing.allocator;
-    var tree: Tree = .init();
+    var tree: Tree(.{}) = .init();
     var arena = try FakeArena.init(allocator, 4096);
     defer arena.deinit(allocator);
     seed(&tree, &arena, 4096);
@@ -932,7 +1005,7 @@ test "realloc shrink splits off a reusable remainder" {
 
 test "realloc grows in place over a following free block" {
     const allocator = testing.allocator;
-    var tree: Tree = .init();
+    var tree: Tree(.{}) = .init();
     var arena = try FakeArena.init(allocator, 4096);
     defer arena.deinit(allocator);
     seed(&tree, &arena, 4096);
@@ -950,7 +1023,7 @@ test "realloc grows in place over a following free block" {
 
 test "realloc falls back to alloc/copy/free when boxed in" {
     const allocator = testing.allocator;
-    var tree: Tree = .init();
+    var tree: Tree(.{}) = .init();
     var arena = try FakeArena.init(allocator, 4096);
     defer arena.deinit(allocator);
     seed(&tree, &arena, 4096);
@@ -969,7 +1042,7 @@ test "realloc falls back to alloc/copy/free when boxed in" {
 
 test "resize reports the grown size without moving" {
     const allocator = testing.allocator;
-    var tree: Tree = .init();
+    var tree: Tree(.{}) = .init();
     var arena = try FakeArena.init(allocator, 4096);
     defer arena.deinit(allocator);
     seed(&tree, &arena, 4096);
@@ -985,7 +1058,7 @@ test "resize reports the grown size without moving" {
 
 test "resize reports the unchanged size when it cannot grow" {
     const allocator = testing.allocator;
-    var tree: Tree = .init();
+    var tree: Tree(.{}) = .init();
     var arena = try FakeArena.init(allocator, 4096);
     defer arena.deinit(allocator);
     seed(&tree, &arena, 4096);
@@ -1006,7 +1079,7 @@ test "resize reports the unchanged size when it cannot grow" {
 // `FakeArena`'s doc). Exercised by native `zig build test` on all three CI OSes,
 // just like `os.zig`'s own tests.
 test "Tree.alloc/free/purge returns memory to the OS" {
-    var tree: Tree = .init();
+    var tree: Tree(.{}) = .init();
     const a = tree.alloc(64) orelse return error.TestUnexpectedResult; // "OS map failed"
     try testing.expect(tree.allocated() > 0);
     tree.free(a);

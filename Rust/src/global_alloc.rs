@@ -14,6 +14,15 @@
 //! undefined behaviour the moment two threads call into it concurrently — this
 //! crate cannot check that at compile time, so it is a documented embedder
 //! contract, not a compiler-enforced one.
+//!
+//! # With `debug-allocator`
+//! An instance used through this trait records **no allocation callstacks** (std's
+//! backtrace lock is process-wide and non-reentrant, and capturing inside an allocator
+//! deadlocks against application code that is itself capturing one), and detected
+//! corruption panics — so build the program with `panic = "abort"`, since unwinding out of
+//! a global allocator is undefined behaviour. A `static` allocator is never dropped, so
+//! leak detection at `Drop` never runs for it: call `check()`/`report()` yourself. See
+//! `Rust/CONVENTIONS.md`, the `spomen` hooks paragraph.
 
 use crate::block::DEFAULT_ALIGNMENT;
 use crate::orisnik::Orisnik;
@@ -30,6 +39,7 @@ use core::ptr::NonNull;
 // deliberately does not lean on `layout` for dispatch — see its own comment.
 unsafe impl GlobalAlloc for Orisnik {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        self.mark_used_as_global();
         let ptr = if layout.align() <= DEFAULT_ALIGNMENT {
             self.alloc(layout.size())
         } else {
@@ -39,6 +49,7 @@ unsafe impl GlobalAlloc for Orisnik {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
+        self.mark_used_as_global();
         // Deliberately routes through `Orisnik::free` (the page-marker/block-header
         // dispatch), not the `free_with_size*` shortcuts: those require `orig_size`
         // to be the pointer's *original* allocation size, an invariant
@@ -57,6 +68,7 @@ unsafe impl GlobalAlloc for Orisnik {
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        self.mark_used_as_global();
         if new_size == 0 {
             // `GlobalAlloc::realloc`'s contract requires `new_size > 0`, so this is a
             // caller bug — but it is one with a uniquely bad failure mode here, worth
@@ -82,6 +94,7 @@ unsafe impl GlobalAlloc for Orisnik {
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        self.mark_used_as_global();
         let ptr = if layout.align() <= DEFAULT_ALIGNMENT {
             self.calloc(1, layout.size())
         } else {

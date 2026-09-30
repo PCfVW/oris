@@ -26,6 +26,7 @@
 //! const orisnitsa = @import("orisnitsa");
 //!
 //! var backing: orisnitsa.Orisnitsa = .init();
+//! defer backing.deinit(); // must be called: returns the idle OS pages/arenas (every build)
 //! const gpa = orisnitsa.allocator(&backing);
 //!
 //! var list: std.ArrayList(u8) = .empty;
@@ -47,11 +48,26 @@ const orisnitsa_mod = @import("orisnitsa.zig");
 const allocator_mod = @import("allocator.zig");
 
 /// The top-level allocator type — dispatches every request between the bucket
-/// and tree paths. See `orisnitsa.zig`.
-pub const Orisnitsa = orisnitsa_mod.Orisnitsa;
+/// and tree paths. The default, non-debug instantiation of the generic
+/// `orisnitsa_mod.Orisnitsa(comptime config: Config) type` — keeps this public
+/// surface source-compatible with every pre-v0.2.0 consumer. See `orisnitsa.zig`
+/// and `spomen.zig`'s `Config`.
+pub const Orisnitsa = orisnitsa_mod.Orisnitsa(.{});
+/// The generic behind `Orisnitsa`: `OrisnitsaWith(.{ .debug = true })` is the debug allocator
+/// (guard bytes, allocation records, `check()`/`report()`, leak detection in `deinit()`);
+/// `OrisnitsaWith(.{})` is exactly `Orisnitsa`. Every instantiation works with `allocator()`.
+pub const OrisnitsaWith = orisnitsa_mod.Orisnitsa;
+/// The `comptime` configuration `OrisnitsaWith` takes. See `spomen.zig`.
+pub const Config = @import("spomen.zig").Config;
 /// Hands out a `std.mem.Allocator` backed by an `Orisnitsa` instance. See
 /// `allocator.zig`.
 pub const allocator = allocator_mod.allocator;
+/// The error set of the debug subsystem's off-hot-path diagnostics (`Orisnitsa.check`). See
+/// `spomen_failure.zig`.
+pub const OrisError = @import("spomen_failure.zig").OrisError;
+/// The out-parameter `Orisnitsa.check` fills with a human-readable description of the first
+/// problem it finds. See `spomen_failure.zig`.
+pub const Diagnostic = @import("spomen_failure.zig").Diagnostic;
 
 // Imported only so their `test` blocks are reachable from this root module via
 // this file's own `test { refAllDecls(...) }` block below — not re-exported as
@@ -70,7 +86,29 @@ const rbtree = @import("rbtree.zig");
 const block = @import("block.zig");
 const bucket = @import("bucket.zig");
 const tree = @import("tree.zig");
+const spomen = @import("spomen.zig");
+const guard = @import("guard.zig");
+const spomen_guard = @import("spomen_guard.zig");
+const spomen_poison = @import("spomen_poison.zig");
+const spomen_record = @import("spomen_record.zig");
+const spomen_book = @import("spomen_book.zig");
+const spomen_store = @import("spomen_store.zig");
+const spomen_failure = @import("spomen_failure.zig");
+const rand = @import("rand.zig");
 const capi = @import("capi.zig");
+
+test "a consumer can instantiate the debug allocator and hand it out as a std.mem.Allocator" {
+    // Only what this file exports: the way an importing package reaches the debug allocator.
+    const Debug = OrisnitsaWith(.{ .debug = true });
+    var backing: Debug = .init();
+    const gpa = allocator(&backing);
+    const memory = try gpa.alloc(u8, 40);
+    try backing.check(null);
+    gpa.free(memory);
+    backing.deinit();
+    // The default instantiation is the very type `Orisnitsa` names.
+    try std.testing.expect(OrisnitsaWith(.{}) == Orisnitsa);
+}
 
 test {
     // `refAllDecls` must be called with each *imported module* as its own argument,
@@ -89,6 +127,15 @@ test {
     std.testing.refAllDecls(block);
     std.testing.refAllDecls(bucket);
     std.testing.refAllDecls(tree);
+    std.testing.refAllDecls(spomen);
+    std.testing.refAllDecls(guard);
+    std.testing.refAllDecls(spomen_guard);
+    std.testing.refAllDecls(spomen_poison);
+    std.testing.refAllDecls(spomen_record);
+    std.testing.refAllDecls(spomen_book);
+    std.testing.refAllDecls(spomen_store);
+    std.testing.refAllDecls(spomen_failure);
+    std.testing.refAllDecls(rand);
     std.testing.refAllDecls(orisnitsa_mod);
     std.testing.refAllDecls(allocator_mod);
     std.testing.refAllDecls(capi);

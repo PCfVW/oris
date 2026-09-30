@@ -30,15 +30,23 @@ pub(crate) const PAGE_SIZE: usize = 1 << 16; // 64 KiB, matches HPHA's VIRTUAL_P
 pub(crate) fn map(size: usize) -> Option<NonNull<u8>> {
     debug_assert!(size > 0 && size % PAGE_SIZE == 0);
     #[cfg(test)]
-    {
+    let mapped = {
         if test_vm::should_fail() {
             return None;
         }
         if test_vm::ACTIVE {
-            return test_vm::map(size);
+            test_vm::map(size)
+        } else {
+            imp::map(size)
         }
+    };
+    #[cfg(not(test))]
+    let mapped = imp::map(size);
+    #[cfg(test)]
+    if mapped.is_some() {
+        test_vm::note_mapped();
     }
-    imp::map(size)
+    mapped
 }
 
 /// Returns memory previously obtained from [`map`] back to the OS.
@@ -49,6 +57,8 @@ pub(crate) fn map(size: usize) -> Option<NonNull<u8>> {
 /// - `size` must be the exact size passed to that `map` call.
 pub(crate) unsafe fn unmap(ptr: NonNull<u8>, size: usize) {
     debug_assert!(size > 0 && size % PAGE_SIZE == 0);
+    #[cfg(test)]
+    test_vm::note_unmapped();
     #[cfg(test)]
     if test_vm::ACTIVE {
         // SAFETY: forwarded; under `ACTIVE` every live mapping came from
@@ -93,6 +103,29 @@ pub(crate) mod test_vm {
         /// tests in parallel and a process-global counter would let one test's
         /// injection starve another's allocations.
         static FAIL_AFTER: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+
+    thread_local! {
+        /// Mappings this thread currently has open: successful [`super::map`] calls minus
+        /// [`super::unmap`] calls. Thread-local for the same reason as `FAIL_AFTER`. Lets a
+        /// test assert that tearing an allocator down returned everything to the OS
+        /// *natively*, where Miri's leak checker is not available.
+        static LIVE_MAPPINGS: Cell<isize> = const { Cell::new(0) };
+    }
+
+    /// Records a successful mapping (called by [`super::map`]).
+    pub(super) fn note_mapped() {
+        LIVE_MAPPINGS.with(|live| live.set(live.get() + 1));
+    }
+
+    /// Records a release (called by [`super::unmap`]).
+    pub(super) fn note_unmapped() {
+        LIVE_MAPPINGS.with(|live| live.set(live.get() - 1));
+    }
+
+    /// How many mappings this thread currently has open (see `LIVE_MAPPINGS`).
+    pub(crate) fn live_mappings() -> isize {
+        LIVE_MAPPINGS.with(Cell::get)
     }
 
     /// Makes the next `successes` calls to [`super::map`] succeed and every call after

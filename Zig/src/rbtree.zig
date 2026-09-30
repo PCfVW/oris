@@ -100,6 +100,18 @@ pub const NodeBase = extern struct {
     /// or (for the tree's own sentinel) not yet self-linked.
     parent: usize = 0,
 
+    /// A node in the "never linked" state (`parent == 0`, so not attached, and never
+    /// touched by any tree). Allocator-owned nodes overlay raw memory and never need
+    /// this; it exists for nodes built by value and later moved into place
+    /// (`spomen_record.zig`'s allocation records), so the stale links of a moved-from
+    /// node are never mistaken for live ones. Mirrors `orisnik`'s `NodeBase::UNLINKED`.
+    ///
+    /// Not literally all-null, unlike the Rust constant: `children`/`neighbours` are
+    /// non-optional `*NodeBase` here (see the module doc), so they cannot hold null and
+    /// stay `undefined` until `attachTo`/`linkIntoChain`/the sentinel's self-link first
+    /// writes them. No operation reads them before that, exactly as for Rust's nulls.
+    pub const UNLINKED: NodeBase = .{};
+
     // ---- derived accessors ----
 
     /// `this`'s side-`s` tree child (the tree's sentinel, or `this` itself, if nil —
@@ -124,6 +136,9 @@ pub const NodeBase = extern struct {
 
     /// The node's parent, or `null` if it is a chained, non-attached duplicate.
     pub fn parentPtr(this: *NodeBase) ?*NodeBase {
+        // SAFETY: a nonzero `addr` is a live, 8-aligned `*NodeBase` address; this
+        // field is only written via `setParentPtr` (from `@intFromPtr` of a live node)
+        // or the sentinel's self-link, and `untagLink` strips exactly the tag bits.
         // PROVENANCE: `addr` is either `0` (see `isAttached`) or was produced by
         // `@intFromPtr` on a live `*NodeBase` in `setParentPtr` — the only writer of
         // this field — so reconstructing it here is always sound.
@@ -171,6 +186,8 @@ pub const NodeBase = extern struct {
     /// Replaces the parent pointer (possibly `null`), preserving the current
     /// colour/side tag.
     fn setParentPtr(this: *NodeBase, val: ?*NodeBase) void {
+        // SAFETY: pure address read of a typed, live `*NodeBase` (`val`'s contract);
+        // nothing is dereferenced or reconstructed here, and `setLink` preserves the tag bits.
         // PROVENANCE: `v` is a live `*NodeBase` (the new parent, or the tree's own
         // sentinel); its address is read only to store in the tagged `parent` field,
         // reconstructed later via `parentPtr`'s `@ptrFromInt`.
@@ -500,14 +517,14 @@ pub fn IntrusiveMultiRbTree(comptime T: type) type {
         /// The sentinel node. Not part of any node's on-heap payload — this is the
         /// tree container's own state, not frozen ABI — so it needs no `extern`
         /// layout-lock contract, only the lazy self-link the module doc describes.
-        head: NodeBase = .{},
+        head: NodeBase = NodeBase.UNLINKED,
 
         const Self = @This();
 
         /// Builds an empty tree. The sentinel is **not** self-linked yet — see the
         /// module doc.
         pub fn init() Self {
-            return .{};
+            return .{ .head = NodeBase.UNLINKED };
         }
 
         /// Returns a pointer to this tree's own head sentinel, self-linking it (all
@@ -520,6 +537,8 @@ pub fn IntrusiveMultiRbTree(comptime T: type) type {
                 self.head.children[1] = &self.head;
                 self.head.neighbours[0] = &self.head;
                 self.head.neighbours[1] = &self.head;
+                // SAFETY: address read of `self.head`, a field of the live `*Self` the
+                // caller holds; the untagged address is what `parentPtr` later inverts.
                 // PROVENANCE: `&self.head` is the tree's own sentinel field, live for
                 // as long as `self` is; self-referential address, reconstructed via
                 // `parentPtr`'s `@ptrFromInt` like any other node's parent link.
@@ -734,7 +753,7 @@ fn boxed(allocator: std.mem.Allocator, key: i32, id: u32) !*TestNode {
 /// Structural checker: no red-red violations, equal black-height on every root-to-nil
 /// path, BST order property holds. Ports `DEBUG_MULTI_RBTREE`'s
 /// `check()`/`check_height()`, kept always-available under test rather than gated,
-/// per the plan's Phase 3 test strategy.
+/// per the plan's v0.1.0 Phase 3 test strategy.
 fn checkInvariants(tree: *IntrusiveMultiRbTree(TestNode)) void {
     const head = tree.headPtr();
     testing.expect(!head.red()) catch @panic("sentinel must be black");
@@ -765,6 +784,12 @@ fn checkNode(node: *NodeBase, lo: i32, hi: i32) u32 {
     const right_h = checkNode(right, lo, hi);
     if (left_h != right_h) @panic("unequal black-height across children");
     return left_h + @intFromBool(!red);
+}
+
+test "UNLINKED is a detached node" {
+    var n: NodeBase = NodeBase.UNLINKED;
+    try testing.expectEqual(@as(usize, 0), n.parent);
+    try testing.expect(!n.isAttached());
 }
 
 test "a new tree is empty" {
@@ -1004,7 +1029,7 @@ test "next walks the equal-key chain and wraps" {
 // walks in the C++ reference.
 //
 // A manual cross-validation tool, not a correctness assertion: it was run once
-// (during this port's Phase 3 development) and diffed byte-for-byte against a fresh
+// (during this port's v0.1.0 Phase 3 development) and diffed byte-for-byte against a fresh
 // run of `orisnik`'s own already-C++-oracle-validated trace (same PRNG, same
 // decision logic, same print format on both sides) — transitively validating this
 // port against the C++ reference through Rust's own prior validation, without

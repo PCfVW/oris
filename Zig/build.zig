@@ -36,6 +36,74 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_mod_tests.step);
 
+    // The debug allocator's leak panic cannot be caught in-process (Zig panics do not unwind,
+    // and the test runner would die with it), so `src/leak_probe.zig` — a program that leaks
+    // one block and calls `deinit()` — is run here and required to *fail*, reporting the leak.
+    // Skipped in ReleaseSmall, where a panic is a bare trap with no message to check.
+    if (optimize != .ReleaseSmall) {
+        const probe = b.addExecutable(.{
+            .name = "leak_probe",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/leak_probe.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        if (target.result.os.tag != .windows) {
+            probe.root_module.link_libc = true;
+        }
+        const run_probe = b.addRunArtifact(probe);
+        run_probe.expectStdErrMatch("memory leaked: 1 allocation(s) still live");
+        run_probe.expectStdErrMatch("REPORT =====");
+        // How a panic ends the process is the OS's: an exit status on Windows, SIGABRT elsewhere.
+        // Verified on Windows (exit 3), Linux (SIGABRT) and macOS (SIGABRT, hosted runner in CI):
+        // `std.process.abort` calls libc `abort()` where libc is linked. See RELEASING.md's
+        // "Verification status".
+        if (target.result.os.tag == .windows) {
+            run_probe.expectExitCode(3);
+        } else {
+            run_probe.addCheck(.{ .expect_term = .{ .signal = std.posix.SIG.ABRT } });
+        }
+        test_step.dependOn(&run_probe.step);
+    }
+
+    // `zig build docs` emits the API documentation of the `orisnitsa` module (from its `///`
+    // and `//!` comments) to `zig-out/docs/`; open `zig-out/docs/index.html` through a local
+    // web server (the generated page loads a `.wasm`, which browsers refuse from `file://`).
+    const docs_lib = b.addLibrary(.{ .name = "orisnitsa", .root_module = mod });
+    const install_docs = b.addInstallDirectory(.{
+        .source_dir = docs_lib.getEmittedDocs(),
+        .install_dir = .prefix,
+        .install_subdir = "docs",
+    });
+    b.step("docs", "Generate the API documentation into zig-out/docs").dependOn(&install_docs.step);
+
+    // `zig build example` runs `examples/catch_an_overrun.zig` (the debug allocator catching an
+    // overrun on purpose). It is also part of `test`, so it is compiled and run in CI and
+    // cannot rot; unlike the leak probe it is fine in every optimize mode.
+    const example = b.addExecutable(.{
+        .name = "catch_an_overrun",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/catch_an_overrun.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "orisnitsa", .module = mod }},
+        }),
+    });
+    // `zig build example`: the plain run, its output visible (a Run step with checks captures
+    // stderr and shows it only on failure).
+    const run_example = b.addRunArtifact(example);
+    b.step("example", "Run the debug-allocator example").dependOn(&run_example.step);
+    // `zig build test`: the same program, checked — exit code 0 (a leak or any panic fails it) and
+    // the lines the guide quotes.
+    const check_example = b.addRunArtifact(example);
+    check_example.expectExitCode(0);
+    check_example.expectStdErrMatch("check() found Corruption: guard bytes overwritten");
+    check_example.expectStdErrMatch("check() after repair: true");
+    check_example.expectStdErrMatch("Total requested size=40 bytes");
+    check_example.expectStdErrMatch("size=24");
+    test_step.dependOn(&check_example.step);
+
     // Static and shared C-linkable libraries, built from a *separate* module
     // rooted directly at `capi.zig`, not `mod` (rooted at `root.zig`). Zig only
     // auto-exports `export fn`s that live in a module's own root file — an

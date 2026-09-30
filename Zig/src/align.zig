@@ -28,6 +28,11 @@ pub fn roundUp(value: usize, alignment: usize) usize {
 
 /// Rounds a pointer's address down to the nearest multiple of `alignment`.
 pub fn alignDown(ptr: [*]u8, alignment: usize) [*]u8 {
+    // SAFETY: `ptr` is a valid `[*]u8` (caller contract), so `@intFromPtr` is total; the
+    // rebuilt pointer is a pure address computation that is only as valid as the
+    // caller's own knowledge of the allocation containing the rounded address —
+    // this function never dereferences it, and `alignment` is a power of two
+    // (module contract, validated by the public API).
     // PROVENANCE: `addr` is read only for its bit pattern; the result is rebuilt at
     // the rounded address, so it derives from the same allocation `ptr` already
     // pointed into — only the address changes.
@@ -38,6 +43,9 @@ pub fn alignDown(ptr: [*]u8, alignment: usize) [*]u8 {
 
 /// Rounds a pointer's address up to the nearest multiple of `alignment`.
 pub fn alignUp(ptr: [*]u8, alignment: usize) [*]u8 {
+    // SAFETY: see `alignDown` — total `@intFromPtr`, never dereferenced here, power-of-two
+    // `alignment` by module contract; the caller must keep the rounded-up address
+    // within the allocation before using it.
     // PROVENANCE: see `alignDown` — same reasoning, rounding the other direction.
     // ALIGN: round the address up to `alignment`, matching HPHA's `align_up`.
     const addr = @intFromPtr(ptr);

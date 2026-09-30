@@ -1,6 +1,6 @@
 [package]
 name = "orisnik"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Eric Jacopin"]
@@ -11,7 +11,9 @@ homepage = "https://github.com/PCfVW/oris"
 readme = "README.md"
 keywords = ["allocator", "heap", "memory", "global-allocator", "hpha"]
 categories = ["memory-management"]
-# Keeps the published package to source + license + README + the shared C header.
+# Keeps the published package to source + license + README + the shared C header (and the
+# `debug_global_allocator` integration test and the `catch_an_overrun` example, which
+# `required-features` keeps out of default runs).
 # CLAUDE.md/CONVENTIONS.md (AI-assistant wiring, coding conventions) and clippy.toml
 # (this crate's own lint-floor config, not meaningful to a downstream consumer's
 # build) stay GitHub-only — crates.io is the lean tier, the repo is the full tier.
@@ -38,6 +40,17 @@ crate-type = ["lib", "cdylib", "staticlib"]
 # section. The default build (`oris_*` + `GlobalAlloc`) needs none of this.
 nightly = []
 
+# Enables `spomen` (src/spomen/), the port of HPHA's `DEBUG_ALLOCATOR` mode: memory
+# guard bytes, allocation-record tracking, callstack capture, leak detection on drop,
+# and the `check()`/`report()` diagnostics. Zero-cost when disabled — `spomen` itself
+# does not exist in a build without this feature, and `src/guard.rs`'s
+# `MEMORY_GUARD_SIZE` constant folds to 0, so every `inflate`/`deflate` call site in
+# `orisnik.rs` (and `bucket::is_small_allocation`'s threshold) is an identity the
+# compiler removes. See
+# INSTALL.md, ROADMAP.md's v0.2.0 milestone, and Rust/CONVENTIONS.md's
+# `debug_assert!` Invariants section.
+debug-allocator = []
+
 [target.'cfg(unix)'.dependencies]
 # mmap/munmap and their flag constants (MAP_ANON differs numerically between Linux
 # and macOS/BSD) — hand-rolling these is a well-known source of silent platform bugs,
@@ -45,6 +58,22 @@ nightly = []
 # redeclaring them. Windows needs no such crate: VirtualAlloc/VirtualFree are two
 # functions and three constants, declared directly in src/os.rs.
 libc = "0.2"
+
+# The debug allocator catching an overrun and a leak on purpose (see the file's own doc and
+# `docs/debug-allocator.md`).
+[[example]]
+name = "catch_an_overrun"
+path = "examples/catch_an_overrun.rs"
+required-features = ["debug-allocator"]
+
+# Global-allocator integration test (see the file's own doc). No libtest harness: a global
+# allocator is process-wide and `Orisnik` is single-threaded by contract, so `main` must be
+# the only thread.
+[[test]]
+name = "debug_global_allocator"
+path = "tests/debug_global_allocator.rs"
+harness = false
+required-features = ["debug-allocator"]
 
 # The Grit-ORIS lint floor (see Rust/CONVENTIONS.md). CI runs
 # `cargo clippy --all-targets -- -D warnings`, so every `warn` below is a hard

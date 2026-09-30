@@ -17,7 +17,7 @@
 //! list *distinct* from `list.rs`'s `IntrusiveList` (no separate sentinel: any member
 //! can be a valid entry point, and the attached member is simply the one whose
 //! `parent` is non-null). This is why [`NodeBase::parent`] is nullable — see
-//! `tag.rs`'s `TaggedPtr` doc for why that required revisiting the Phase 1 design.
+//! `tag.rs`'s `TaggedPtr` doc for why that required revisiting the v0.1.0 Phase 1 design.
 //!
 //! # Sentinel design
 //! Same lazy-self-init pattern as `list.rs`'s `IntrusiveList`, for the same Tree
@@ -96,6 +96,16 @@ pub(crate) struct NodeBase {
 const _: () = assert!(size_of::<NodeBase>() == 5 * size_of::<usize>());
 
 impl NodeBase {
+    /// A node in the "never linked" state (every link null). Allocator-owned nodes
+    /// overlay raw memory and never need this; it exists for nodes that are built by
+    /// value and later moved into place (`spomen`'s allocation records), so the stale
+    /// links of a moved-from node are never mistaken for live ones.
+    pub(crate) const UNLINKED: Self = Self {
+        children: [core::ptr::null_mut(); 2],
+        neighbours: [core::ptr::null_mut(); 2],
+        parent: TaggedPtr::null(),
+    };
+
     // ---- primitive field accessors (one raw dereference each) ----
 
     /// # Safety
@@ -527,7 +537,7 @@ impl NodeBase {
 
     /// Removes `this` from its equal-key group's chain. Ports `node_base::unlink`
     /// (the chain-unlink overload — distinct from the tree-structural removal in
-    /// [`erase`]).
+    /// [`IntrusiveMultiRbTree::erase`]).
     ///
     /// # Safety
     /// `this` must be live and currently chained ([`NodeBase::chained`]) or
@@ -772,11 +782,7 @@ impl<T: RbNode> IntrusiveMultiRbTree<T> {
     /// doc.
     pub(crate) const fn new() -> Self {
         Self {
-            head: UnsafeCell::new(NodeBase {
-                children: [core::ptr::null_mut(); 2],
-                neighbours: [core::ptr::null_mut(); 2],
-                parent: TaggedPtr::null(),
-            }),
+            head: UnsafeCell::new(NodeBase::UNLINKED),
             _marker: PhantomData,
         }
     }
@@ -1022,6 +1028,93 @@ impl<T: RbNode> IntrusiveMultiRbTree<T> {
         }
     }
 
+    /// Calls `visit` once for every element of the tree — each tree position **and** every
+    /// equal-key duplicate chained onto it — in no particular order, changing nothing and
+    /// **never dereferencing the sentinel**.
+    ///
+    /// That last property is the reason this exists. The tree's leaves (and the root's
+    /// parent) point at the sentinel, and the ordinary navigation ([`succ`], `lower_bound`'s
+    /// `is_nil` tests) *reads* it through those stored pointers. That is fine everywhere but
+    /// inside `Drop`: `Drop::drop` receives a protected `&mut self`, and — worse — an
+    /// `Orisnik` that was moved into a `Box` (as `oris_destroy` does) has been *retagged*, so
+    /// every pointer stored in the tree before the move is foreign to it. Under Tree Borrows
+    /// one foreign read of the sentinel makes the later deallocation of that `Box`
+    /// undefined behaviour (found by Miri). Here the sentinel is recognised by *address*
+    /// only, and the walk touches nothing but real nodes, which live outside `self`.
+    ///
+    /// The walk is iterative and needs no stack: it descends by child pointers and climbs by
+    /// parent pointers (each node records which side of its parent it hangs on).
+    ///
+    /// [`succ`]: IntrusiveMultiRbTree::succ
+    pub(crate) fn visit_all_readonly(&self, mut visit: impl FnMut(NonNull<T>)) {
+        let head = self.head_ptr();
+        // SAFETY: `head` is live and linked (`head_ptr`'s guarantee).
+        let root = unsafe { NodeBase::child(head, Side::Left) };
+        if root == head {
+            return;
+        }
+        let mut cur = root;
+        let mut descending = true;
+        // EXPLICIT: an in-order walk by child and parent pointers; `cur`/`descending` are
+        // the state, not expressible as an iterator over a structure that must not be
+        // navigated through its sentinel.
+        loop {
+            if descending {
+                // SAFETY: `cur` is a live, real node (never the sentinel: every assignment
+                // below is guarded by a `!= head` test).
+                let left = unsafe { NodeBase::child(cur, Side::Left) };
+                if left != head {
+                    cur = left;
+                    continue;
+                }
+                Self::visit_group(cur, &mut visit);
+                // SAFETY: `cur` is live and real.
+                let right = unsafe { NodeBase::child(cur, Side::Right) };
+                if right != head {
+                    cur = right;
+                    continue;
+                }
+                descending = false;
+            } else {
+                // SAFETY: `cur` is live and real.
+                let parent = unsafe { NodeBase::parent(cur) };
+                if parent == head {
+                    return;
+                }
+                // SAFETY: `cur` is live and attached (it was reached through child
+                // pointers, so it is a tree position, not a chained duplicate).
+                let came_from = unsafe { NodeBase::parent_side(cur) };
+                cur = parent;
+                if came_from == Side::Left {
+                    Self::visit_group(cur, &mut visit);
+                    // SAFETY: `cur` is live and real (`parent != head`, checked above).
+                    let right = unsafe { NodeBase::child(cur, Side::Right) };
+                    if right != head {
+                        cur = right;
+                        descending = true;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Visits `rep` and every duplicate chained onto it (the chain is a circular list
+    /// through the group's own nodes and never includes the sentinel).
+    fn visit_group(rep: *mut NodeBase, visit: &mut impl FnMut(NonNull<T>)) {
+        let mut member = rep;
+        // EXPLICIT: walks a circular chain back to its start; `member` is the state.
+        loop {
+            // SAFETY: `member` is a live node of the tree, hence non-null.
+            let node = unsafe { NonNull::new_unchecked(member) };
+            visit(T::from_node(node));
+            // SAFETY: `member` is live.
+            member = unsafe { NodeBase::neighbour(member, Side::Right) };
+            if member == rep {
+                return;
+            }
+        }
+    }
+
     /// The tree-order successor of `node`, or `None` if `node` is the maximum.
     #[must_use]
     pub(crate) fn succ(&self, node: NonNull<T>) -> Option<NonNull<T>> {
@@ -1116,7 +1209,7 @@ mod tests {
     /// Structural checker: no red-red violations, equal black-height on every root-to-
     /// nil path, BST order property holds, chain membership matches key equality.
     /// Ports `DEBUG_MULTI_RBTREE`'s `check()`/`check_height()`, kept always-available
-    /// under test rather than gated, per the plan's Phase 3 test strategy.
+    /// under test rather than gated, per the plan's v0.1.0 Phase 3 test strategy.
     fn check_invariants<T: RbNode<Key = i32>>(tree: &IntrusiveMultiRbTree<T>) {
         let head = tree.head_ptr();
         // SAFETY: `head` is live and linked.
@@ -1300,7 +1393,7 @@ mod tests {
     ///
     /// This is a manual cross-validation tool, not an automated test — three ways:
     ///
-    /// 1. **Against C++.** Run once (during this port's Phase 3 development) against
+    /// 1. **Against C++.** Run once (during this port's v0.1.0 Phase 3 development) against
     ///    a companion C++ harness that links the real, unmodified `Cpp/hpha.cpp` and
     ///    runs the identical PRNG-driven sequence through the actual
     ///    `intrusive_multi_rbtree`, printing the same format. All 3000 steps matched
@@ -1309,7 +1402,7 @@ mod tests {
     ///    `"oracle cross-validation trace (manual tool, not an assertion)"` test
     ///    emits this exact same format (same PRNG, same decision logic, same print
     ///    shape) and was diffed byte-for-byte against a fresh run of this test during
-    ///    `orisnitsa`'s own Phase 3 — transitively validating the Zig port against
+    ///    `orisnitsa`'s own v0.1.0 Phase 3 — transitively validating the Zig port against
     ///    the C++ reference through this test's own prior validation, without
     ///    rebuilding the C++ harness. This is the live, ongoing use of this trace
     ///    format; re-run it on either side of a tree-shape change to either port.
@@ -1480,5 +1573,65 @@ mod tests {
         unsafe { drop_boxed(ten_b) };
         // SAFETY: `ten_c` was erased from `tree` above and is not referenced again.
         unsafe { drop_boxed(ten_c) };
+    }
+
+    /// `visit_all_readonly` reaches every element — every tree position and every chained
+    /// equal-key duplicate — exactly once, on empty, single-node, all-equal and heavily
+    /// duplicated trees, and again after removals reshape them.
+    #[test]
+    fn visit_all_readonly_reaches_every_element_exactly_once() {
+        use std::collections::BTreeSet;
+
+        fn visited_ids(tree: &IntrusiveMultiRbTree<TestNode>) -> Vec<u32> {
+            let mut ids = Vec::new();
+            tree.visit_all_readonly(|node| {
+                // SAFETY: `node` is live (handed out by the tree).
+                ids.push(unsafe { node.as_ref().id });
+            });
+            ids.sort_unstable();
+            ids
+        }
+
+        let tree: IntrusiveMultiRbTree<TestNode> = IntrusiveMultiRbTree::new();
+        assert!(
+            visited_ids(&tree).is_empty(),
+            "an empty tree visits nothing"
+        );
+
+        // Key spaces from "everything equal" through "mostly distinct".
+        for key_space in [1_u32, 3, 40, 100_000] {
+            let tree: IntrusiveMultiRbTree<TestNode> = IntrusiveMultiRbTree::new();
+            let mut rng = crate::rand::VintageRand::new(7 + key_space);
+            let mut nodes = Vec::new();
+            for id in 0..300_u32 {
+                let key = i32::try_from(rng.next() % key_space).expect("fits");
+                let node = boxed(key, id);
+                tree.insert(node);
+                nodes.push(node);
+            }
+            let expected: Vec<u32> = (0..300).collect();
+            assert_eq!(visited_ids(&tree), expected, "key space {key_space}");
+
+            // Remove every third node (mixing chained and tree-position removals) and
+            // check again: the walk must follow the reshaped tree, not a stale one.
+            let mut remaining: BTreeSet<u32> = (0..300).collect();
+            for (index, node) in nodes.iter().enumerate() {
+                if index % 3 == 0 {
+                    tree.erase(*node);
+                    remaining.remove(&u32::try_from(index).expect("fits"));
+                }
+            }
+            let expected: Vec<u32> = remaining.iter().copied().collect();
+            assert_eq!(
+                visited_ids(&tree),
+                expected,
+                "key space {key_space}, after removals"
+            );
+            for node in nodes {
+                // SAFETY: each node was leaked by `boxed` and is not used again; the tree
+                // is dropped without further use.
+                unsafe { drop_boxed(node) };
+            }
+        }
     }
 }

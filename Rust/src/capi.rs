@@ -7,6 +7,14 @@
 //! `allocator`'s own public methods one-to-one, `*mut u8`/null in place of
 //! `Option<NonNull<u8>>`.
 //!
+//! With the `debug-allocator` feature these entry points run the debug hooks, so a detected
+//! corruption (guard overrun, double free, foreign pointer, or an `oris_free_with_size*`
+//! size that disagrees with the allocation) panics — which aborts at the `extern "C"`
+//! boundary — and the handle, being an owned instance, records callstacks. So does
+//! `oris_destroy` if allocations are still live at that point (a leak): they are reported
+//! to stderr and the process aborts. `orisnitsa`'s C-ABI is fixed to the non-debug
+//! configuration and has no debug surface.
+//!
 //! `#[unsafe(no_mangle)]` (edition 2024's unsafe-attribute syntax, `Rust/CONVENTIONS.md`'s
 //! MSRV lint guard note) keeps every symbol name stable for C linkage.
 
@@ -27,14 +35,17 @@ pub extern "C" fn oris_new() -> *mut Orisnik {
 
 /// Destroys an allocator instance created by [`oris_new`].
 ///
+/// Destroying the instance returns every fully-idle OS page and arena to the OS — HPHA's
+/// destructor begins with `purge()` in every build, and so does this, so no [`oris_purge`]
+/// is needed first. A page that still holds a live allocation is left mapped (the
+/// allocation was leaked; its memory is not reclaimed behind the caller's back). With the
+/// `debug-allocator` feature, live allocations at this point are reported to stderr and then
+/// **abort** (the panic cannot cross the `extern "C"` boundary), HPHA's destructor assert.
+///
 /// # Safety
 /// `handle` must be a still-live result of [`oris_new`] (or null, in which case this
 /// is a no-op), not yet destroyed, and not used again after this call — by this
-/// function or any other `oris_*` call. Every allocation made through `handle`
-/// should already be freed or intentionally leaked first: destroying the instance
-/// does not return its outstanding OS pages/arenas (matching HPHA, which never
-/// returns memory to the OS except via an explicit `purge()`) — call
-/// [`oris_purge`] beforehand if reclaiming that memory matters.
+/// function or any other `oris_*` call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oris_destroy(handle: *mut Orisnik) {
     let Some(handle) = NonNull::new(handle) else {
@@ -258,8 +269,8 @@ mod tests {
     // `cargo test` still reaches the real `VirtualAlloc`/`mmap`. That is what lets
     // these tests run under the soundness gate at all — before v0.1.1 they were all
     // `#[cfg_attr(miri, ignore)]`. Each therefore ends by returning its pages with
-    // `purge()`: the allocator holds them until asked (matching HPHA), which the
-    // stand-in correctly reports to Miri as still-live memory.
+    // `purge()`, which asserts `allocated() == 0` explicitly. (`Drop` also releases idle
+    // pages now, so Miri's leak check no longer *depends* on it, but the assertion does.)
 
     #[test]
     fn c_abi_round_trip_alloc_realloc_free_purge() {
@@ -320,9 +331,9 @@ mod tests {
         // produced with 64 bytes at the default alignment.
         unsafe { oris_free_with_size(handle, calloc_ptr, 64) };
 
-        // `oris_destroy` does not return outstanding pages to the OS (its own doc
-        // says so); a C caller that wants them back calls `oris_purge` first. Doing
-        // that here both matches the documented pattern and asserts it works.
+        // `oris_destroy` returns idle pages itself now, so a C caller no longer needs
+        // `oris_purge` first; purging here anyway lets the test assert that everything
+        // was reclaimable (`oris_allocated` reaches 0) before the handle goes away.
         // SAFETY: `handle` is live.
         unsafe { oris_purge(handle) };
         // SAFETY: `handle` is live.
@@ -336,5 +347,26 @@ mod tests {
     fn oris_destroy_on_null_handle_is_a_no_op() {
         // SAFETY: null trivially satisfies `oris_destroy`'s "or null" contract.
         unsafe { oris_destroy(core::ptr::null_mut()) };
+    }
+
+    /// `oris_destroy` must actually release the instance (running `Drop`), returning idle
+    /// memory with no prior `oris_purge()`. The C smoke test cannot see this: it only detects
+    /// crashes. (Zig's counterpart is `capi.test.oris_destroy returns idle memory...`.)
+    #[test]
+    fn oris_destroy_returns_idle_memory_without_a_prior_purge() {
+        let before = crate::os::test_vm::live_mappings();
+        let handle = oris_new();
+        // SAFETY: `handle` is live.
+        let big = unsafe { oris_alloc(handle, 5000) };
+        // SAFETY: `handle` is live.
+        let small = unsafe { oris_alloc(handle, 100) };
+        assert!(crate::os::test_vm::live_mappings() > before);
+        // SAFETY: `big` is a live allocation of the live `handle`, freed once.
+        unsafe { oris_free(handle, big) };
+        // SAFETY: `small` is a live allocation of the live `handle`, freed once.
+        unsafe { oris_free(handle, small) };
+        // SAFETY: `handle` is live and is not used after this call.
+        unsafe { oris_destroy(handle) };
+        assert_eq!(crate::os::test_vm::live_mappings(), before);
     }
 }

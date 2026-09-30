@@ -31,6 +31,8 @@ From v0.1.0 onward, both Oris ports satisfy the following property:
 
 This is a stricter property than "the API behaves the same"; it is "the algorithm executes the same." Verified in CI from v0.3.0 onward against a corpus of reproducible traces.
 
+**Scope.** The invariant covers the allocator's own state — in the default build, and in the debug configuration for everything the guard reservation changes (size classes, block sizes, bucket/tree routing), which is identical in both ports. Debug-only *diagnostic storage* is outside it: the allocation-record book's pages differ in size between the ports (`orisnitsa` inlines an 8-frame callstack in each record; `orisnik` holds an owning `Backtrace`), so record-page capacity — and with it debug-mode RSS — differs, and a Rust instance used as a `#[global_allocator]` records no callstack at all. The v0.3.0 trace gate therefore runs the non-debug build, or excludes record pages. It also compares allocator state *before* teardown: `Drop`/`deinit` returns idle memory by different means in the two ports (`orisnik` reads its structures and unmaps; `orisnitsa` calls `purge`, which erases and rotates tree nodes), so rotation counts across teardown are not comparable, though the final result — every idle page released — is.
+
 This invariant is the property that justifies maintaining two ports rather than one. Without it, the ports are merely two implementations; with it, they are two views of the same machine.
 
 ---
@@ -50,9 +52,11 @@ This invariant is the property that justifies maintaining two ports rather than 
 - **Documentation:** top-level README, per-language READMEs, lineage attribution to Lazarov / Luxoflux, `LICENSE` (dual MIT OR Apache-2.0, via `LICENSE-MIT`/`LICENSE-APACHE`), `CHANGELOG.md`, `INSTALL.md`
 - **Out of scope for v0.1.0:** debug instrumentation, multithreaded mode, benchmarks, examples beyond the test suite
 
-### v0.2.0 — Debug allocator
+### v0.2.0 — Debug allocator ✅ *Released 2026-09-30*
 
 **Theme:** Observability and safety.
+
+**Shipped:** every bullet below is implemented in both ports — guard bytes with overflow detection, allocation-record tracking, callstack capture, leak detection on drop / deinit, `report()` and `check()`, the build toggle, and fail-fast detection of overruns, double frees, foreign pointers and wrong sized frees — with a user guide and runnable examples (`docs/debug-allocator.md`). CI ran green on the hosted runners, all three OSes (see `RELEASING.md` § 0).
 
 - Port HPHA's `DEBUG_ALLOCATOR` mode in both languages
 - **Memory guard bytes** with overflow detection
@@ -61,7 +65,9 @@ This invariant is the property that justifies maintaining two ports rather than 
 - **Leak detection** on allocator drop / deinit
 - **`report()` and `check()` diagnostic methods**
 - **Build-time toggleable:** Rust feature flag; Zig `comptime` bool — both with zero-cost-when-disabled guarantees
-- Cross-port parity: same allocation sequence produces same debug-record contents (modulo platform-specific callstack symbols)
+- **Known divergence:** a Rust callstack begins with the capture call and the allocator's own frames (`std::backtrace::Backtrace` cannot skip frames), a Zig one is trimmed to the caller.
+- **Known gap, deferred:** the Zig port prints callstacks as raw return addresses (`symbols not resolved`); the Rust port resolves them through `std::backtrace`. Symbol resolution for Zig (via `std.debug`) is not part of v0.2.0.
+- Cross-port parity: same allocation sequence produces same debug-record contents (address, requested size, source, guard seed), modulo callstack contents (platform-specific symbols; no callstack for a Rust instance used as a `#[global_allocator]`) and record-page capacity — see the invariant's scope note above
 
 ### v0.3.0 — Invariant verification and benchmarks
 

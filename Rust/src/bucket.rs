@@ -25,6 +25,7 @@
 //! `os::map` first); tests call it directly against a heap-backed buffer, giving full
 //! Miri coverage of the part that actually varies by allocation pattern.
 
+use crate::home::Home;
 use crate::list::{IntrusiveList, ListLink, ListNode};
 use crate::os;
 use core::cell::Cell;
@@ -44,11 +45,18 @@ pub(crate) const MAX_SMALL_ALLOCATION: usize = 1 << MAX_SMALL_ALLOCATION_LOG2; /
 pub(crate) const NUM_BUCKETS: usize = MAX_SMALL_ALLOCATION / MIN_ALLOCATION; // 32
 
 /// Whether `size` belongs on the bucket path (`false` routes to the tree allocator).
-/// Ports `allocator::is_small_allocation` (with `MEMORY_GUARD_SIZE` — always 0 until
-/// the v0.2.0 debug allocator — elided).
+/// Ports `allocator::is_small_allocation` exactly, including its `size +
+/// MEMORY_GUARD_SIZE <= MAX_SMALL_ALLOCATION` shape (`Cpp/hpha.h`'s own
+/// `is_small_allocation`) — with the feature off, `MEMORY_GUARD_SIZE` is 0 and this
+/// is exactly the v0.1.x threshold. `saturating_add` rather than a bare `+`: `size`
+/// is caller-controlled and this threshold (256) is tiny next to `usize::MAX`, so a
+/// wrap here would falsely report a pathologically huge request as "small" — the
+/// same "no request that was ever satisfiable changes behaviour" reasoning
+/// `tree::MAX_ALLOCATION`'s own doc gives, applied to the opposite direction (a
+/// wrap making something falsely fit, not falsely overflow).
 #[must_use]
 pub(crate) const fn is_small_allocation(size: usize) -> bool {
-    size <= MAX_SMALL_ALLOCATION
+    size.saturating_add(crate::guard::MEMORY_GUARD_SIZE) <= MAX_SMALL_ALLOCATION
 }
 
 /// Raises `size` up to the smallest bucket size class if it's below it. Ports
@@ -488,6 +496,9 @@ impl Bucket {
 /// All 32 bucket size classes, plus the bucket path's running allocated-byte total.
 /// Ports the bucket-related slice of `allocator` (`mBuckets`,
 /// `mTotalAllocatedSizeBuckets`, and the free `bucket_*` methods).
+// `buckets` starting with the struct's own name is the clearest name for "the array of
+// buckets"; the lint only fires now that a third field (`home`) exists.
+#[allow(clippy::struct_field_names)]
 pub(crate) struct Buckets {
     /// One [`Bucket`] per size class, indexed by [`bucket_spacing_function`] and its
     /// variants.
@@ -499,6 +510,9 @@ pub(crate) struct Buckets {
     /// suffices here — unlike the list/tree sentinels, this field never stores a
     /// pointer, so it has none of their Tree-Borrows persistence hazard.
     allocated_bytes: Cell<usize>,
+    /// Where this value stood when it first mapped a page; lets `Drop` refuse to walk
+    /// sentinels that a later move left pointing at the old address (see [`Home`]).
+    home: Home,
 }
 
 impl Buckets {
@@ -513,6 +527,7 @@ impl Buckets {
         Self {
             buckets: [const { Bucket::new() }; NUM_BUCKETS],
             allocated_bytes: Cell::new(0),
+            home: Home::new(),
         }
     }
 
@@ -523,10 +538,18 @@ impl Buckets {
         self.allocated_bytes.get()
     }
 
+    /// `false` iff this value mapped a page and has been moved since, so that its page
+    /// lists' sentinels are stale and must not be walked (see [`Home`]).
+    #[must_use]
+    pub(crate) fn is_at_home(&self) -> bool {
+        self.home.holds(self)
+    }
+
     /// Maps one fresh `PAGE_SIZE` OS page. Ports `allocator::bucket_system_alloc`.
     #[must_use]
     fn system_alloc(&self) -> Option<NonNull<u8>> {
         let ptr = os::map(os::PAGE_SIZE)?;
+        self.home.latch(self);
         self.allocated_bytes
             .set(self.allocated_bytes.get() + os::PAGE_SIZE);
         Some(ptr)
@@ -783,6 +806,45 @@ impl Buckets {
             }
         }
     }
+
+    /// Drop-time counterpart of [`Buckets::purge`]: returns every page with zero live
+    /// allocations to the OS **without unlinking anything or updating any counter** — the
+    /// same reasoning as [`crate::tree::Tree::release_idle_on_drop`] (`Drop::drop`'s
+    /// `&mut self` is protected, so nothing inside `self` may be written through a pointer
+    /// derived earlier). Pages still holding a live block are left mapped. Unlike `purge`
+    /// it visits every page rather than stopping at the first full one: with no unlinking
+    /// there is no ordering assumption worth relying on.
+    pub(crate) fn release_idle_on_drop(&self) {
+        for bucket in &self.buckets {
+            let sentinel = bucket.pages.sentinel();
+            // EXPLICIT: raw link-chase; the successor is latched before the current page
+            // is unmapped, and `cur` is the state.
+            // SAFETY: `sentinel` is live and self-linked (`IntrusiveList::sentinel`'s own
+            // guarantee); its `next` is therefore live.
+            let mut cur = unsafe { crate::list::ListLink::next(sentinel) };
+            while cur != sentinel {
+                // SAFETY: `cur != sentinel`, so it is a real node's link, and every node
+                // in this list is a `Page` whose `link` sits at offset 0.
+                let page = unsafe { NonNull::new_unchecked(cur.cast::<Page>()) };
+                // SAFETY: `cur` is live and linked (established above).
+                let next = unsafe { crate::list::ListLink::next(cur) };
+                // SAFETY: `page` is live (a linked member of this bucket's list).
+                if unsafe { Page::is_empty(page.as_ptr()) } {
+                    // ALIGN: `page` is always `PAGE_SIZE - size_of::<Page>()` bytes into its
+                    // owning PAGE_SIZE-aligned mapping (the type's own invariant); rounding
+                    // down recovers that mapping's base.
+                    let mem = crate::align::align_down(page.as_ptr().cast::<u8>(), os::PAGE_SIZE);
+                    // SAFETY: `mem` is the live mapping `page` belongs to, non-null.
+                    let mem = unsafe { NonNull::new_unchecked(mem) };
+                    // SAFETY: `mem` is exactly the `PAGE_SIZE` mapping `system_alloc`
+                    // obtained; nothing references it afterwards (`next` was latched above
+                    // and this whole structure is being dropped).
+                    unsafe { os::unmap(mem, os::PAGE_SIZE) };
+                }
+                cur = next;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -853,8 +915,12 @@ mod tests {
             clamp_small_allocation(MIN_ALLOCATION + 1),
             MIN_ALLOCATION + 1
         );
-        assert!(is_small_allocation(MAX_SMALL_ALLOCATION));
-        assert!(!is_small_allocation(MAX_SMALL_ALLOCATION + 1));
+        // The threshold itself shifts down by `MEMORY_GUARD_SIZE` under the
+        // `debug-allocator` feature (0 otherwise, restoring the v0.1.x boundary
+        // exactly) — see `is_small_allocation`'s own doc.
+        let boundary = MAX_SMALL_ALLOCATION - crate::guard::MEMORY_GUARD_SIZE;
+        assert!(is_small_allocation(boundary));
+        assert!(!is_small_allocation(boundary + 1));
     }
 
     #[test]

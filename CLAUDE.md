@@ -23,6 +23,12 @@ Any change to size-class math, tree rotation, coalescing order, or on-heap metad
 one port must be mirrored in the other. From v0.3.0 a CI trace-corpus parity check enforces
 this. Treat such changes as touching that gate.
 
+The invariant covers the allocator's own state. Debug-only diagnostic storage (the record-book
+pages, callstack contents) is outside it: record size and page capacity differ between the
+ports, and a Rust instance used through `GlobalAlloc` records no callstack. Rotation counts across
+`Drop`/`deinit` are not comparable either (`orisnik` releases memory by read-only walks, `orisnitsa`
+calls `purge`): compare state before teardown. See `ROADMAP.md`'s scope note.
+
 ## License header
 
 Every source file begins with `// SPDX-License-Identifier: MIT OR Apache-2.0` (both `.rs` and

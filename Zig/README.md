@@ -8,7 +8,7 @@ The Zig port of [Oris](https://github.com/PCfVW/oris) — a Rust and Zig port of
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](https://github.com/PCfVW/oris/blob/main/LICENSE-MIT)
 [![Rust sibling: orisnik](https://img.shields.io/crates/v/orisnik?logo=rust&label=rust%20sibling)](https://crates.io/crates/orisnik)
 
-**v0.1.1 is released** as a [GitHub Release](https://github.com/PCfVW/oris/releases) asset. See the [project repo](https://github.com/PCfVW/oris) for the Rust sibling and full history.
+**v0.2.0 is released** as a [GitHub Release](https://github.com/PCfVW/oris/releases) asset. See the [project repo](https://github.com/PCfVW/oris) for the Rust sibling and full history.
 
 ## What's here
 
@@ -18,8 +18,9 @@ The Zig port of [Oris](https://github.com/PCfVW/oris) — a Rust and Zig port of
   - **`Orisnitsa`**'s own methods (`alloc`, `free`, `realloc`, `resize`, `purge`, ...) — the idiomatic Zig entry point.
   - **`allocator()`** — hands out a `std.mem.Allocator` backed by an instance, for `std.ArrayList`/`std.HashMap`/etc.
   - **`oris_*`** — a C-shaped API (`oris_new`, `oris_alloc`, `oris_free`, `oris_realloc`, ...), instance-scoped via an explicit handle — never a hidden global. `zig build` also emits real linkable `liborisnitsa.so`/`.dylib`/`.a` (or `orisnitsa.dll`/`.lib` on Windows) artifacts; pair with [`include/oris.h`](include/oris.h) (vendored here — byte-identical to [the canonical copy](https://github.com/PCfVW/oris/blob/main/include/oris.h), so this package is self-contained) to link from C/C++.
-- 96 tests, verified in Debug and ReleaseSafe (runtime safety checks on) and ReleaseFast (hot path with checks off), on Windows, Linux, and macOS in CI.
+- 195+ tests, verified in Debug and ReleaseSafe (runtime safety checks on) and ReleaseFast (hot path with checks off), on Windows, Linux, and macOS in CI.
 - **64-bit platforms only** — enforced at compile time (see `src/block.zig`'s module doc).
+- **Debug allocator (v0.2.0):** instantiate `OrisnitsaWith(.{ .debug = true })` for HPHA's `DEBUG_ALLOCATOR` — trailing guard bytes, payload poisoning, an allocation-record book with callstack capture, `check()` / `report()`, and leak detection in `deinit()`. Detected corruption and leaks panic. The default `Orisnitsa` is unchanged and pays nothing. **[User guide](https://github.com/PCfVW/oris/blob/main/docs/debug-allocator.md)** — what it catches, how to read its messages — and a runnable example: `zig build example`; `zig build docs` generates the API reference into `zig-out/docs/`. Build details in [`INSTALL.md`](https://github.com/PCfVW/oris/blob/main/INSTALL.md).
 
 ## Quick start
 
@@ -28,6 +29,7 @@ const std = @import("std");
 const orisnitsa = @import("orisnitsa");
 
 var backing: orisnitsa.Orisnitsa = .init();
+defer backing.deinit(); // must be called: returns the idle OS pages/arenas (every build)
 const gpa = orisnitsa.allocator(&backing);
 
 var list: std.ArrayList(u8) = .empty;

@@ -67,6 +67,19 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
 
+      # The opt-in `debug-allocator` feature (`spomen`) is cfg-gated out of every step
+      # above; mirror rust-ci.yml's debug-allocator lanes so a tag clears the same bar.
+      - name: Clippy (debug-allocator)
+        run: cargo +stable clippy --all-targets --features debug-allocator -- -D warnings
+      - name: Tests (debug-allocator)
+        run: cargo +stable test --features debug-allocator
+      - name: Example (debug-allocator)
+        run: cargo +stable run --example catch_an_overrun --features debug-allocator
+      - name: Doc (deny warnings, debug-allocator, private items)
+        run: cargo +stable doc --no-deps --features debug-allocator --document-private-items
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
       # The nightly `Allocator`-trait surface (allocator_trait.rs) is invisible to
       # every step above: --all-targets alone never compiles it (cfg-gated on the
       # `nightly` feature), so a tag must re-run rust-ci.yml's nightly-feature job's
@@ -90,6 +103,11 @@ jobs:
       # on main is not equivalent, since a tag can point anywhere.
       - name: Miri (strict provenance + tree borrows, default + nightly features)
         run: cargo +nightly miri test --features nightly
+        env:
+          MIRIFLAGS: "-Zmiri-strict-provenance -Zmiri-tree-borrows"
+      # Slow (~20 min) but it is the soundness gate for the debug allocator's teardown.
+      - name: Miri (strict provenance + tree borrows, debug-allocator)
+        run: cargo +nightly miri test --features debug-allocator
         env:
           MIRIFLAGS: "-Zmiri-strict-provenance -Zmiri-tree-borrows"
 

@@ -13,7 +13,7 @@ conflate and shouldn't be:
 | **[A. Fixed](#a-defects-the-ports-fix)** | HPHA is wrong; the ports deliberately differ |
 | **[B. Preserved](#b-defects-the-ports-preserve)** | HPHA is wrong; the ports reproduce it on purpose |
 | **[C. Unreachable](#c-defects-unreachable-through-the-ports-surface)** | HPHA is wrong; no Oris configuration can reach it |
-| **[D. Upstream's own](#d-upstreams-own-later-revisions)** | Lazarov fixed it himself, after the source in this directory |
+| **[D. Upstream's own](#d-upstreams-own-later-revisions)** | a later refactor by the author, after the source in this directory (see E9's correction) |
 
 Provenance and licensing live in [`NOTICE.md`](NOTICE.md); this file is only about
 behaviour.
@@ -41,8 +41,8 @@ conditions is recorded, so a later reader can check the reasoning rather than tr
 revision by the author exists, dated 2012-04-21, and it is **not** what this directory
 carries. Diffed in full, the two revisions differ in exactly two places: the
 `MULTITHREADED` build toggle (a configuration choice, recorded in `NOTICE.md`) and the
-`debug_replace` change recorded as **E9** below — which is the only *behavioural*
-difference between them. Anything ported from that
+`debug_replace` change recorded as **E9** below — the only *code* difference besides the
+threading toggle (and, per E9's own correction, not an observable behavioural one). Anything ported from that
 later revision must say so explicitly, entry by entry; the default reference is the
 source in this directory.
 
@@ -168,6 +168,38 @@ transitions) would see it.
 
 ---
 
+### E10 — under `DEBUG_ALLOCATOR`, a sized `free` of a sub-minimum allocation asserts
+
+**HPHA:** `allocator::alloc(size_t size)` (`hpha.h`) clamps a small request up to
+`MIN_ALLOCATION` (`size = clamp_small_allocation(size)`) *before* `debug_add(ptr, size,
+…)`, so the debug record for `alloc(5)` holds size **8**. `free(void* ptr, size_t
+origSize)` passes the caller's `origSize` — 5 — unclamped to `debug_remove(ptr, origSize)`,
+whose `debug_record_map::remove(void* ptr, size_t size)` does `assert(size ==
+record->size())`.
+
+**Why it is wrong:** the call is exactly what the sized-free contract asks for (the size
+the allocation was made with), yet the debug build's assertion fires: 5 ≠ 8. Any request
+below `MIN_ALLOCATION` (1–7 bytes) followed by a sized free trips it. Release builds have
+no such assert, so the same program runs cleanly there.
+
+**Ports:** compare the caller's size the way the record holds it.
+
+- A **bucket-path** record holds the *clamped* size, so the caller's size is clamped before
+  the comparison: `free(p, 5)` of an `alloc(5)` passes.
+- A **tree-path** record holds the *raw* size, because the tree path never clamps — an
+  `alloc_aligned(5, 4096)` (sub-minimum size, alignment past `MAX_SMALL_ALLOCATION`) and a
+  tree-path `realloc(p, 5)` both record 5. HPHA's raw compare is correct there; an
+  unconditional clamp would *introduce* a false report, which is exactly what the ports'
+  first version of this fix did until review caught it.
+- A genuinely wrong size (`free(p, 64)` of an `alloc(100)`) is still detected on both. See `Orisnik::verify` / `Orisnitsa.verify` (the hooks'
+detection step).
+
+**Trace-visible:** **No.** The assertion sits on a debug-only path and changes no
+allocator state; where HPHA's assert would have aborted, the ports continue.
+
+**Fixed in:** v0.2.0.
+
+
 ## B. Defects the ports preserve
 
 ### E6 — `ptr_in_bucket` can report a false positive
@@ -229,7 +261,7 @@ mis-aligning.
 
 ### E9 — `debug_replace` loses a live allocation's record when a realloc fails
 
-**Status: not yet addressed. In scope for v0.2.0.**
+**Status: resolved in v0.2.0 (Phase 4) — see the correction note below: the defect this entry describes does not exist, and the ports carry HPHA's own `if (!newPtr) return;` guard in `debug_replace`.**
 
 This is the one entry where the source in this directory is *behind* the author's own
 later work, and it lands directly in the v0.2.0 debug-allocator milestone.
@@ -252,7 +284,7 @@ if (ptr)                                        // <-- only if the alloc succeed
 this->insert(dr);
 ```
 
-**Why the 2007 form is wrong:** two of `realloc`'s three debug call sites pass `newPtr`
+**Superseded — see the correction below. Why the 2007 form was *thought* wrong:** two of `realloc`'s three debug call sites pass `newPtr`
 straight into `debug_replace` with **no null check** —
 
 ```cpp
@@ -272,12 +304,44 @@ lose that block. (The third call site, the bucket→tree path, has its own
 The 2012 split also erases the record *before* the new allocation runs rather than after,
 which is the structural reason the guard is expressible at all.
 
-**Recommendation for v0.2.0:** port the **2012 `replace_begin`/`replace_end` form**, and
+**Superseded — see the correction below. Recommendation originally made for v0.2.0:** port the **2012 `replace_begin`/`replace_end` form**, and
 record that choice here and in `NOTICE.md`. Adopting the 2007 form would mean knowingly
 porting a defect the author had already fixed — and the failure mode (a lost record for a
 live block) is precisely the thing v0.2.0's leak detection exists to catch.
 
-**Trace-visible:** N/A for v0.1.x — nothing in the debug subsystem is ported yet.
+**Trace-visible:** N/A — the debug subsystem changes no allocator state, and a failed realloc leaves the original block and its record untouched in both ports (`Orisnik::debug_replace`/`Orisnitsa.debugReplace`).
+
+> **Correction (added while planning v0.2.0, 2026-09-28).** The analysis above is
+> **wrong** — the described defect does not occur, because the "no null check" claim at
+> the two quoted call sites doesn't hold up against the actual call chain. Re-read
+> directly: `allocator::debug_replace` (`hpha.cpp:908-910`) is
+>
+> ```cpp
+> void allocator::debug_replace(void* ptr, void* newPtr, size_t size, debug_source source) {
+>     if (!newPtr)
+>         return;
+>     ...
+> ```
+>
+> — one call frame **above** `debug_record_map::replace`, the function this entry's code
+> excerpt quotes. `debug_record_map::replace`'s unconditional overwrite is therefore
+> never reached with a NULL `newPtr` from either of the two "plain" `realloc` call
+> sites: `debug_replace` itself no-ops first. And `bucket_realloc` (`hpha.cpp:256-267`)
+> and `tree_realloc` (`hpha.cpp:522-587`, every branch, including the alloc-copy-free
+> fallback at `:579-587`) never free or move the original block before their own new
+> allocation has already succeeded — on failure both return `NULL` with `ptr` fully
+> untouched. So on a failed realloc: `debug_replace` no-ops, and the **original**
+> record — still keyed under the original, still-fully-live `ptr` — is left completely
+> alone. That is correct behaviour, not a lost record.
+>
+> The 2012 `replace_begin`/`replace_end` split is still a perfectly reasonable shape
+> (erase-before-realloc is arguably cleaner than erase-after), but it is not fixing a
+> reachable defect in this source, and porting it is not required for v0.2.0's
+> correctness. What **is** required, and what falls out of ordinary idiomatic Rust/Zig
+> anyway (`Option<NonNull<u8>>`/`?[*]u8` matched before any record mutation): only
+> retarget an allocation record when the new allocation actually succeeded. No
+> `debug_replace`-shaped guard needs inventing — the type system already forces the
+> check at the one call site that matters.
 
 ---
 

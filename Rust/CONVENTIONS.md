@@ -48,6 +48,7 @@ two ports worthwhile (see [`ROADMAP.md`](../ROADMAP.md)).
 | Write a `match` or `if let` | [`if let` vs `match`](#if-let-vs-match), [`// EXPLICIT:`](#explicit-annotation) if no-op arm |
 | Touch size-class math, tree rotation, or coalescing | [The Cross-Port Invariant](#the-cross-port-invariant) |
 | Assert an internal allocator invariant | [`debug_assert!` invariants](#debug_assert-invariants) |
+| Add a debug / instrumentation path | [`debug_assert!` invariants](#debug_assert-invariants) |
 | Implement `GlobalAlloc` or `Allocator` | [Idiomatic surfaces](#idiomatic-surfaces) |
 | Add `#[allow(clippy::...)]` for a newer lint | [MSRV lint guard](#msrv-lint-guard) |
 
@@ -165,7 +166,7 @@ comment at a call site is the *discharge* of that contract.
 ### `# Errors` Doc Section
 
 Public fallible methods that genuinely return `Result<T>` (configuration, the debug
-`check()`/`report()` paths) include an `# Errors` section. Each bullet: `Returns`
+`check()`/`write_report` paths) include an `# Errors` section. Each bullet: `Returns`
 + `` [`OrisError::Variant`] `` + `if`/`on`/`when`. The hot allocation path does **not** use
 `Result` — see [Allocation outcomes, not `Result`](#allocation-outcomes-not-result).
 
@@ -424,9 +425,11 @@ Two consequences for new tests:
   prohibitive, and then scale the workload instead where you can (see
   `randomized_alloc_free_stress_matches_the_hpha_benchmark_shape`, which runs a reduced `N`
   under Miri rather than skipping).
-- **End an allocating test with `purge()`.** The allocator holds pages until asked, matching
-  HPHA — which the stand-in correctly reports to Miri as still-live memory, i.e. a leak. Calling
-  `purge()` is both what a well-behaved embedder does and a stronger assertion than omitting it.
+- **End an allocating test with `purge()` where the point is to prove reclamation.** Dropping the
+  allocator returns idle pages too (v0.2.0), so Miri's leak check no longer *depends* on `purge()`;
+  but `purge()` followed by `assert_eq!(allocated(), 0)` remains the stronger assertion, and it is
+  what a well-behaved embedder does. A test that deliberately leaves a block live must release that
+  page by hand (see `release_leaked_bucket_page`).
 
 `os::test_vm` also carries the out-of-memory injector (`fail_map_after`) that covers every
 `None` return on the `system_alloc` path; those tests are Miri-covered too, since a refused map
@@ -492,7 +495,7 @@ Out-of-memory is a **value**, not an exception:
   `core::alloc::Allocator::allocate`'s `Result<_, AllocError>` shape (where `AllocError` is a
   zero-data marker).
 - `OrisError` and `# Errors` apply **only** to the off-hot-path surfaces: configuration, and
-  the `debug-allocator` feature's `check()` / `report()` diagnostics. Those follow the
+  the `debug-allocator` feature's `check()` / `write_report` diagnostics. Those follow the
   house error-wording rules below.
 
 ### Error Message Wording (diagnostic paths only)
@@ -513,6 +516,11 @@ Lowercase, no trailing period, include the offending value, wrap externals with 
 > Given an identical allocation/deallocation sequence at the public API level, `orisnik` and
 > `orisnitsa` produce **identical internal state transitions** — same bucket-page spawns, same
 > tree-rotation count, same coalescing operations, same final RSS.
+
+(Scope: the allocator's own state, compared *before* teardown. Debug-only diagnostic storage —
+record-book pages, callstack contents — is outside it, and so are rotation counts across `Drop` /
+`deinit`: `orisnik` releases memory by read-only walks, `orisnitsa` calls `purge`; only the final result,
+every idle page released, is common. See the roadmap's scope note.)
 
 This constrains how Rust code is written, not just what it computes:
 
@@ -547,9 +555,70 @@ HPHA's `DEBUG_ALLOCATOR` mode becomes, in Rust, a layered scheme:
   machinery — guard bytes, allocation-record tracking, callstack capture, leak detection on
   drop, `check()`/`report()`. `spomen` (*спомен*, "remembrance") is the named twin of the Zig
   port's subsystem, keeping the two debug surfaces parity-comparable. Gated so a release build
-  links none of it (zero-cost-when-disabled, matching the Zig port's
-  `comptime` bool). This is the Rust analog of `hypomnesis`'s feature-gated backends, applied to
-  observability rather than FFI.
+  links none of it (zero-cost-when-disabled, matching the Zig port's `comptime`-known
+  `config.debug` — a generic type-constructor parameter over there, not a runtime field; see
+  `Zig/CONVENTIONS.md`'s `comptime` Toggles section). This is the Rust analog of
+  `hypomnesis`'s feature-gated backends, applied to observability rather than FFI.
+
+`MEMORY_GUARD_SIZE` itself lives in the always-compiled `guard` module, not `spomen`:
+`bucket.rs` (`is_small_allocation`) and `orisnik.rs` (via `guard::inflate`/`deflate`)
+must reference it unconditionally for their size arithmetic to type-check in every
+configuration, whereas `spomen` is meant to not exist at all in a build without the
+feature. It folds to 0 without `debug-allocator`, so every `inflate`/`deflate` call site
+is an identity the compiler removes. Do not "clean this up" into `spomen` — that would
+make the constant unreachable from the always-compiled code that needs it. The guard
+*bytes* (`spomen::guard`) and payload poisoning (`spomen::poison`) are the opposite case:
+inert without the feature, so they live inside `spomen`. `tree.rs` deliberately never
+mentions any of this — like HPHA's own `tree_alloc`, it serves whatever already-inflated
+size `orisnik.rs` hands it. `rand.rs` (the CRT `rand()` port that seeds the guard ramp)
+is compiled for `any(test, feature = "debug-allocator")`.
+
+The `spomen` hooks (`debug_add`/`debug_remove`/`debug_replace`/`debug_update`/`debug_check`/
+`debug_purge`, `Rust/src/orisnik_debug.rs`) mirror HPHA's own and are called by `Orisnik`'s
+*public* methods at the points HPHA calls them (plus one deliberate extra `debug_check`, in
+`realloc_aligned`'s misaligned-move branch, so a foreign pointer is caught before its page marker
+or block header is read; it changes no state); without the feature `orisnik.rs`
+supplies `#[inline]` no-op stand-ins, so no call site carries a `cfg`. Three rules follow
+from how they behave:
+
+- **Detected corruption panics** (guard overrun, freeing an unrecorded pointer, a sized free
+  whose size disagrees with the record). Detection is a plain value (`Orisnik::verify`,
+  directly testable); the reaction is the single `spomen::failure::fail`. This is `spomen`'s
+  one reviewed exception to "the hot path never panics" — fail-fast is the point of a debug
+  allocator, and it exists only under the feature. After a detection the hooks switch
+  themselves off for good (the panic message and payload are allocated unrecorded).
+- **Re-entrancy.** While a hook runs, `busy` makes nested `alloc`/`free`/`realloc` calls skip
+  every hook; everything a hook allocates must also be freed inside a hook, so an unrecorded
+  block is never freed by a non-busy call. No hook allocates from its own instance (see the
+  next rule), so for the hooks proper this is an enforced invariant rather than a live hazard;
+  `report()`/`write_report` are where it earns its keep — their formatting can allocate while
+  the record tree is walked — and hold the flag. Anything new that allocates while iterating
+  the store must do the same.
+- **`#[global_allocator]`.** std's backtrace lock is process-wide and non-reentrant, and std
+  allocates while holding it, so an allocator that captures a backtrace inside `alloc`
+  deadlocks against application code that is itself capturing one (a panic hook with
+  `RUST_BACKTRACE=1`). An instance used through the `GlobalAlloc` interface therefore records
+  **no callstack** (`Record::callstack` is `None`); everything else about the record — and so
+  every detection above — still works. Such an instance must also be built with
+  `panic = "abort"` (unwinding out of a global allocator is undefined behaviour).
+  `tests/debug_global_allocator.rs` pins the deadlock (it hangs without the rule); the
+  `panic = "abort"` requirement cannot be tested in-process and is documentation only.
+
+**Teardown (`Drop for Orisnik`).** Dropping releases every fully-idle bucket page and tree
+arena in *every* build (HPHA's destructor begins with `purge()`); with `debug-allocator` it
+first audits and reports any still-live allocation (a leak), releases the idle memory, and then
+panics (skipped while the thread is already unwinding, where a second panic would abort). It
+must **not** call `purge()`: `drop` receives a protected `&mut self`, and purging rewrites the
+free tree and page lists through pointers derived earlier. Beyond that, Miri established three
+rules that apply to *any* teardown of an intrusive structure (see `list.rs`'s "`Drop` and
+`&mut self`" section): write into `self` (flags, counters) **first, or not at all** — a write
+after a foreign read is undefined; **never dereference a sentinel through a pointer stored in a
+node** (the red-black tree's `succ`/`is_nil` do; teardown uses `visit_all_readonly`, which
+compares against the sentinel by address); and remember that **a `Box` retags** — for an
+allocator moved into a `Box` (`oris_destroy`) every pointer stored before the move is foreign,
+so one foreign read makes the box's deallocation undefined. Consequently the debug leak audit
+walks the record *book* (storage order), while the public `report()` walks the record tree
+(address order). `orisnitsa` has no aliasing model, so its `deinit` just calls `purge`.
 
 Never use `assert!` (always-on) on the hot path for an invariant that `debug_assert!` can carry
 — it would tax every release-build allocation.

@@ -14,6 +14,22 @@ Oris is a two-port monorepo; each port builds independently with its own toolcha
   soundness gate) and the unstable `allocator_api` `Allocator` trait surface. The
   default build, the C-shaped `oris_*` API, and the `#[global_allocator]` surface
   are all stable.
+- **`--features debug-allocator`** enables `spomen`, the port of HPHA's
+  `DEBUG_ALLOCATOR` mode (guard bytes, allocation-record tracking, leak detection,
+  `check()`/`report()`), new in v0.2.0 (`ROADMAP.md`; not in
+  0.1.x) — stable, no nightly needed. Guard bytes, payload poisoning, allocation records (with callstack capture) and
+  the hooks that use them are implemented: a guard overrun, a double free, a foreign
+  pointer or a wrong sized-free size now **panics** with a diagnostic naming the block and
+  where it was allocated. `Orisnik::check()` audits every live block on request
+  (`Result<(), OrisError>`), `report()` prints the live blocks to stderr, and dropping an
+  instance that still has live allocations is a **leak**: it is reported, the idle memory is
+  released, and it panics. Installed as a `#[global_allocator]`, build with
+  `panic = "abort"`, and note that such an instance records no callstacks (see `Rust/CONVENTIONS.md`). Build and test it
+  with
+  `cargo test --features debug-allocator` (Miri:
+  `MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows" cargo +nightly miri test
+  --features debug-allocator`). See the [user guide](docs/debug-allocator.md), and try
+  `cargo run --example catch_an_overrun --features debug-allocator`.
 
 ```sh
 cd Rust
@@ -30,7 +46,7 @@ Once published, depend on it from crates.io:
 
 ```toml
 [dependencies]
-orisnik = "0.1"
+orisnik = "0.2"
 ```
 
 ## Zig — `orisnitsa`
@@ -38,12 +54,24 @@ orisnik = "0.1"
 - **Toolchain:** Zig **0.16.0**, pinned in `Zig/build.zig.zon`. The
   `std.mem.Allocator` vtable shape is version-sensitive while Zig is pre-1.0, so the
   pin is load-bearing.
+- **`OrisnitsaWith(.{ .debug = true })`** is the Zig analog of `orisnik`'s
+  `debug-allocator` feature — `spomen`, new in v0.2.0
+  (`ROADMAP.md`). No
+  `zig build` flag needed; the default `orisnitsa.Orisnitsa` export stays the
+  non-debug `Orisnitsa(.{})`. Same status as the Rust side above: guard bytes and
+  payload poisoning, allocation records, the hooks that use them, `check()`/`report()` and
+  leak detection are all implemented (detected corruption and leaks panic). Every
+  `Orisnitsa` **must** be `deinit()`ed: that returns its idle memory to the OS, and a debug
+  instance also frees its record pages and fails on leaked blocks. Exercise
+  it with `zig build test` (the debug instantiation is covered by the test suite). See the
+  [user guide](docs/debug-allocator.md), try `zig build example`, and generate the API
+  reference with `zig build docs` (into `zig-out/docs/`).
 
 ```sh
 cd Zig
 zig build test                          # Debug — runtime safety checks ON
 zig build test -Doptimize=ReleaseSafe   # optimized, safety checks ON
-zig fmt --check build.zig build.zig.zon src
+zig fmt --check build.zig build.zig.zon src examples
 ```
 
 Once released, fetch the tagged GitHub Release asset (the URL and hash are printed in
