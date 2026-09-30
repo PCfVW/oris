@@ -12,26 +12,38 @@ doing step 1 correctly.
 
 ## 0. Verification status — read before trusting a green tick
 
-What each platform has actually been shown to do. Update this section when a gap closes.
+What each platform has actually been shown to do. Update this section when something changes.
 
-| Surface | Windows | Linux | macOS (incl. Apple silicon) |
+State as of PR #4 (the v0.2.0 branch), CI run on the hosted runners — all 25 checks green:
+
+| Surface | Windows | Linux | macOS (Apple silicon runner) |
 |---|---|---|---|
-| v0.1.x core, both ports | CI | CI | CI |
-| v0.2.0 debug allocator, Rust: unit tests, clippy, rustdoc, MSRV 1.85 | local + CI | local (WSL Ubuntu) + CI | **CI only, first push** |
-| `tests/debug_global_allocator.rs` (`harness = false`, real `#[global_allocator]`) | local | local (WSL) | **never run** |
-| Miri, `--features debug-allocator` | — | local (WSL), ~20 min | — (host-agnostic) |
-| Zig `zig build test`, all four optimize modes, incl. the leak probe and the example | local | local (WSL) | **never run** |
-| Leak probe's termination check (`build.zig`) | exit code 3, verified | SIGABRT, verified | **assumed** SIGABRT, from reading the Zig std source |
-| C smoke test, both ports | CI | local (WSL) + CI | CI |
-| `zig build docs`, Rust example | local | local (WSL) | **never run** |
+| Rust, default + `debug-allocator`: clippy, tests, MSRV 1.85 and stable | CI | CI | CI |
+| `tests/debug_global_allocator.rs` (`harness = false`, real `#[global_allocator]`) | CI | CI | CI — after a fix, see below |
+| Miri, default + `nightly` and `debug-allocator` (separate job, ~20 min) | — | CI | — (host-agnostic) |
+| Zig `zig build test` (Debug / ReleaseSafe / ReleaseFast), incl. the leak probe and the example | CI | CI | CI |
+| Leak probe's termination check (`build.zig`) | exit code 3 | SIGABRT | SIGABRT — the assumption held |
+| C smoke test, both ports | CI | CI | CI |
+| `zig build docs` (one cell) | — | CI | — |
+| Rust example (`catch_an_overrun`) | CI | CI | CI |
+| ReleaseSmall (Zig), local WSL/Windows only — not in the CI matrix | local | local | never run |
+| `zig-release.yml` / `rust-publish.yml` themselves | never run: a `workflow_dispatch` of `zig-release.yml` would *create a real GitHub Release* for the tag typed, and `rust-publish.yml` publishes — so their steps are reproduced by hand (below) instead |
 
-Also never run anywhere: the *hosted-runner* versions of every new lane (`miri-debug`,
-the debug-allocator steps in `rust-ci.yml`, the example and docs steps in `zig-ci.yml`, the
-new steps in the two publish workflows) until the first push — they were written and checked
-as text plus local equivalents. The first CI run on a PR is therefore the real test, and on
-macOS the suspects, in order, are the leak probe's SIGABRT check, the `harness = false`
-global-allocator test, and the 64 KiB-page assumption on Apple silicon (the v0.1.x core has
-run there, the debug subsystem has not).
+What the first CI run found, so it is not forgotten:
+
+- **`debug_global_allocator` failed on macOS only**: the first measured pass left 160 bytes
+  behind — lazily-initialized platform state (backtrace / hashing), not a leak. Fixed by a whole
+  unmeasured warm-up pass. Lesson: a `requested()` balance test must warm up *everything* first.
+- **`zig-release.yml` would have failed at its own tarball build-test**: its hard-coded package
+  list omitted `examples/`, which `build.zig`'s `test` step runs. Found by reading the workflow
+  while planning a dry run; fixed. **The tarball file list in `zig-release.yml`, `build.zig.zon`'s
+  `.paths` and the `tar` line must be kept in sync by hand** — when `build.zig` starts referencing
+  a new path, check all three.
+
+Reproducing the release workflows without publishing: run their steps in a scratch directory —
+for Zig, copy the files the workflow copies, `tar` them, extract, and `zig build test` /
+`-Doptimize=ReleaseSafe` there; for Rust, `cargo publish --dry-run --allow-dirty` plus the
+gauntlet in step 5 below.
 
 ## 1. Bump versions
 

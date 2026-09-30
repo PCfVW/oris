@@ -56,10 +56,8 @@ pub fn build(b: *std.Build) void {
         run_probe.expectStdErrMatch("memory leaked: 1 allocation(s) still live");
         run_probe.expectStdErrMatch("REPORT =====");
         // How a panic ends the process is the OS's: an exit status on Windows, SIGABRT elsewhere.
-        // Verified on Windows (exit 3) and Linux (SIGABRT, WSL). macOS is an ASSUMPTION, resting
-        // on the Zig std source alone (`std.process.abort` calls libc `abort()` when libc is
-        // linked, as it is on every non-Windows target here): if the first macOS CI run fails
-        // at this step, this check is the suspect, not the allocator — see RELEASING.md's
+        // Verified on Windows (exit 3), Linux (SIGABRT) and macOS (SIGABRT, hosted runner in CI):
+        // `std.process.abort` calls libc `abort()` where libc is linked. See RELEASING.md's
         // "Verification status".
         if (target.result.os.tag == .windows) {
             run_probe.expectExitCode(3);
