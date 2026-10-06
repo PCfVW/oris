@@ -1704,7 +1704,7 @@ mod tests {
             blocks: Vec::new(),
         };
         orisnik.write_report(&mut sink).expect("sink never fails");
-        assert!(!sink.blocks.is_empty());
+        assert_ne!(sink.blocks.len(), 0);
         assert_eq!(
             orisnik.records.len(),
             1,
@@ -1865,7 +1865,7 @@ mod tests {
             blocks: Vec::new(),
         };
         assert_eq!(orisnik.debug_teardown_to(&mut sink), 1);
-        assert!(!sink.blocks.is_empty());
+        assert_ne!(sink.blocks.len(), 0);
         assert_eq!(
             orisnik.records.len(),
             1,
