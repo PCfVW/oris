@@ -7,7 +7,7 @@ the numbers are in [`results/`](results/).
 | | |
 |---|---|
 | [`methodology.md`](methodology.md) | what is measured, how, and how to read it |
-| [`results/v0.3.0/SUMMARY.md`](results/v0.3.0/SUMMARY.md) | the v0.3.0 results: trace replay on Windows and Linux, and mimalloc-bench on Linux |
+| [`results/v0.3.0/`](results/v0.3.0/README.md) | the v0.3.0 results — [what they say](results/v0.3.0/README.md), and [the tables](results/v0.3.0/SUMMARY.md): trace replay on Windows and Linux (WSL2), mimalloc-bench on Linux |
 | [`traces.toml`](traces.toml), [`trace-checksums.txt`](trace-checksums.txt) | the trace corpus: every trace's generator and seed, and the bench traces' SHA-256s |
 | [`scripts/tracegen/`](scripts/tracegen/) | generates and verifies the traces |
 | [`scripts/bench-rust/`](scripts/bench-rust/), [`scripts/bench-zig/`](scripts/bench-zig/) | replay a trace through one allocator, one measurement pass per process |

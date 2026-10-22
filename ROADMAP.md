@@ -73,7 +73,7 @@ This invariant is the property that justifies maintaining two ports rather than 
 
 **Theme:** Reproducibility and credibility.
 
-**Progress (unreleased):** every bullet below is implemented, in both ports where it applies. The trace gate holds against the 2007 reference itself: the 19 traces of the corpus replay byte-identically on HPHA, `orisnik` and `orisnitsa` locally (Windows; `orisnik` also on Linux), and `trace-ci.yml` enforces it on all three OSes once pushed. See [`docs/traces.md`](docs/traces.md) and [`benchmarks/`](benchmarks/README.md).
+**Progress (unreleased):** every bullet below is implemented, in both ports where it applies. The trace gate holds against the 2007 reference itself: the 19 traces of the corpus replay byte-identically on HPHA, `orisnik` and `orisnitsa` locally (Windows; `orisnik` also on Linux), and `trace-ci.yml` enforces it on all three OSes once pushed. First results measured 2026-10-22 on Windows and Linux (WSL2), mimalloc-bench included — [what they say](benchmarks/results/v0.3.0/README.md). See [`docs/traces.md`](docs/traces.md) and [`benchmarks/`](benchmarks/README.md).
 
 - **Trace format:** a small, language-agnostic allocation-sequence format, and the *transition record* every replayer writes. ISO/IEC 14977 EBNF grammars in `examples/traces/GRAMMAR.md` — mirroring the priority queue project's grammar discipline — with the semantic constraints that keep a replay clear of undefined behaviour and of the inputs `Cpp/ERRATA.md` records as broken upstream.
 - **Trace recorder and replayer** in both ports: `letopis`, behind the `trace` Cargo feature / `Config.trace`, with every state transition emitted by compiled-out-when-off hooks (`examples/traces/EVENTS.md`)
