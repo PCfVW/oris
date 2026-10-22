@@ -29,6 +29,17 @@ State as of PR #4 (the v0.2.0 branch), CI run on the hosted runners — all 25 c
 | ReleaseSmall (Zig), local WSL/Windows only — not in the CI matrix | local | local | never run |
 | `zig-release.yml` / `rust-publish.yml` themselves | never run: a `workflow_dispatch` of `zig-release.yml` would *create a real GitHub Release* for the tag typed, and `rust-publish.yml` publishes — so their steps are reproduced by hand (below) instead |
 
+v0.3.0 additions, verified locally only so far (the v0.3.0 branch has not been pushed):
+
+| Surface | Windows | Linux | macOS |
+|---|---|---|---|
+| Rust `--features trace`: clippy, tests (MSRV 1.85 and stable); Miri on the `letopis` tests | local | — | — |
+| Zig `zig build test` incl. the `.trace = true` instantiation (Debug / ReleaseSafe / ReleaseFast) | local | — | — |
+| Trace corpus (19 traces): `orisnik` and `orisnitsa` reproduce every record | local | `orisnik` local (WSL2) | — |
+| Trace corpus: HPHA oracle (patched scratch copy, MSVC) writes every record | local | n/a (Win32-only) | n/a |
+| `tracegen verify` (corpus + bench checksums) | local | local (WSL2) | — |
+| `trace-ci.yml` itself | never run on hosted runners — its first run is the v0.3.0 PR's | | |
+
 What the first CI run found, so it is not forgotten:
 
 - **`debug_global_allocator` failed on macOS only**: the first measured pass left 160 bytes
@@ -97,16 +108,24 @@ place, empty, for the next cycle.
   compiles out the address-stability tripwire, so it exercises different code)
 - `cargo +1.85 clippy --all-targets -- -D warnings` (and with `--features debug-allocator`)
   and `cargo +1.85 test` — the MSRV
+- The trace subsystem: `cargo clippy --all-targets --features trace -- -D warnings`,
+  `cargo test --features trace` (also `--release`, and on 1.85), and
+  `cargo +nightly miri test --features nightly,trace` (same `MIRIFLAGS`)
+- The trace gate by hand: every `examples/traces/*/*.trace` through
+  `cargo run --example replay --features trace`, `zig build replay` and, on Windows, the HPHA
+  oracle (`Cpp/oracle/build_trace_oracle.ps1`) must equal its `.record`; and
+  `cargo run --release -- verify` in `benchmarks/scripts/tracegen`
 - The C smoke test, `tests/c-abi/smoke.c`, against **both** ports' built libraries (see
   `.github/workflows/c-abi-ci.yml` for the exact commands)
 - `zig fmt --check build.zig build.zig.zon src examples`
 - `zig build test` and `zig build test -Doptimize=ReleaseSafe`, then
   `zig build -Doptimize=ReleaseFast`
 - Confirm the last push of this commit to `main` shows green on **Rust CI**,
-  **Zig CI**, and **C-ABI CI** (all three are required checks; the publish/release
-  workflows themselves independently re-run the Rust gauntlet and the Zig
-  Debug/ReleaseSafe/ReleaseFast + packaged-tarball build-test, but not the C-ABI
-  smoke test, so check that one manually here).
+  **Zig CI**, **C-ABI CI** and **Trace CI** (the first three are required checks; make
+  Trace CI's aggregator, *Trace CI success*, one too once it has run green. The
+  publish/release workflows themselves independently re-run the Rust gauntlet and the Zig
+  Debug/ReleaseSafe/ReleaseFast + packaged-tarball build-test, but neither the C-ABI
+  smoke test nor the trace gate, so check those here).
 
 ## 6. Tag and push
 

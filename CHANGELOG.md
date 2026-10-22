@@ -10,6 +10,52 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **The cross-port invariant is now checked, not argued (v0.3.0).** An identical allocation
+  sequence must drive both ports through identical internal state transitions; v0.3.0 makes
+  that a CI gate, against the 2007 HPHA reference itself.
+  - **`letopis`** (*летопис*, "chronicle") — behind the new `trace` Cargo feature
+    (`orisnik::letopis`) and `Config.trace` (`orisnitsa.letopis`). Every state transition
+    HPHA performs emits an event at the same point in both ports: OS maps and unmaps,
+    bucket-page spawns, releases and list moves, splits, shifts, every block merge,
+    red-black tree inserts and erases (with which branch ran and how many rotations it cost),
+    small-free-list pushes and erases, and the most-recently-freed cache.
+    [`examples/traces/EVENTS.md`](examples/traces/EVENTS.md) lists each site in HPHA, Rust
+    and Zig. With the feature or flag off the hooks do not exist in the compiled code.
+  - **`replay`** runs a trace on a fresh instance and writes its **transition record**, every
+    address normalized to (mapping id, offset), so records compare byte for byte across
+    ports and OSes. A trace is checked in full first: malformed lines and calls with no
+    defined result (constraints C1–C8) are refused with their line, nothing executed.
+    `cargo run --example replay --features trace -- <file>`, `zig build replay -- <file>`.
+  - **`Recorder`** wraps an instance — in Zig also as a `std.mem.Allocator` — and writes the
+    calls made through it as a trace.
+  - **The trace and record formats**, ISO/IEC 14977 EBNF, with the semantic constraints that
+    keep every replay clear of undefined behaviour and of the inputs `Cpp/ERRATA.md` records
+    as broken upstream: [`examples/traces/GRAMMAR.md`](examples/traces/GRAMMAR.md). User
+    guide: [`docs/traces.md`](docs/traces.md).
+  - **The HPHA oracle**: [`Cpp/oracle/trace_replay.cpp`](Cpp/oracle/trace_replay.cpp) replays
+    a trace on the 2007 allocator, its hooks added by `letopis.patch` to a scratch copy (40
+    added lines; `Cpp/hpha.*` untouched).
+  - **The corpus**: twelve hand-written traces, one per allocator path, and seven generated
+    ones (`examples/traces/`), each with the record HPHA writes; both ports reproduce all
+    nineteen byte for byte. **`tracegen`** (`benchmarks/scripts/tracegen`) generates traces
+    from seeded planner, parser and synthetic workloads, identically on every OS.
+  - **Trace CI** (`.github/workflows/trace-ci.yml`): `tracegen verify`, and both ports
+    replaying the corpus on Linux, Windows and macOS, and HPHA on Windows, every record
+    compared with the committed one.
+- **Benchmarks (v0.3.0).** [`benchmarks/`](benchmarks/README.md): a trace-replay harness per
+  port (Rust: `orisnik` against the system allocator, mimalloc, jemalloc and snmalloc;
+  Zig: `orisnitsa` against `smp_allocator` and `c_allocator`) measuring wall time,
+  per-operation latency and memory on million-operation traces; mimalloc-bench with Oris
+  added as two `LD_PRELOAD` shims; the protocol in
+  [`benchmarks/methodology.md`](benchmarks/methodology.md); the first results in
+  [`benchmarks/results/v0.3.0/`](benchmarks/results/v0.3.0/SUMMARY.md).
+- `rbtree`: `insert_counted`/`erase_counted` (Zig `insertCounted`/`eraseCounted`) report
+  which branch of HPHA's `do_insert`/`do_erase` ran and how many rotations rebalancing cost.
+  Internal; the algorithm is unchanged, and the counts are checked in tests against a
+  counter inside `rotate` itself.
+
 ## [0.2.0] - 2026-09-30
 
 ### Added

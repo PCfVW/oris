@@ -30,6 +30,12 @@ Oris is a two-port monorepo; each port builds independently with its own toolcha
   `MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows" cargo +nightly miri test
   --features debug-allocator`). See the [user guide](docs/debug-allocator.md), and try
   `cargo run --example catch_an_overrun --features debug-allocator`.
+- **`--features trace`** enables `letopis` (*летопис*, "chronicle"), new in v0.3.0: the
+  transition hooks, the trace replayer and the recorder that check the cross-port invariant
+  (the public `orisnik::letopis` module). Stable, no nightly needed; off by default and
+  compiled out entirely. `cargo test --features trace`, and
+  `cargo run --example replay --features trace -- <trace-file>` to print a trace's
+  transition record. See [`docs/traces.md`](docs/traces.md).
 
 ```sh
 cd Rust
@@ -66,6 +72,11 @@ orisnik = "0.2"
   it with `zig build test` (the debug instantiation is covered by the test suite). See the
   [user guide](docs/debug-allocator.md), try `zig build example`, and generate the API
   reference with `zig build docs` (into `zig-out/docs/`).
+- **`Config.trace`** (`OrisnitsaWith(.{ .trace = true })`) is the Zig analog of `orisnik`'s
+  `trace` feature, new in v0.3.0: the `letopis` transition hooks, compiled out of every other
+  instantiation. `orisnitsa.letopis.replay` creates its own traced instance;
+  `zig build replay -- <trace-file>` prints a trace's transition record. See
+  [`docs/traces.md`](docs/traces.md).
 
 ```sh
 cd Zig

@@ -23,6 +23,11 @@ Every `.rs` file begins with `// SPDX-License-Identifier: MIT OR Apache-2.0` as 
    anything under `spomen/` changes: `cargo clippy --all-targets --features debug-allocator --
    -D warnings` and `cargo test --features debug-allocator` (the latter also runs
    `tests/debug_global_allocator.rs`, a `harness = false` binary that is skipped under Miri).
+   The trace subsystem likewise, whenever `letopis/`, `tree.rs`, `bucket.rs`, `rbtree.rs` or
+   `orisnik.rs` changes: `cargo clippy --all-targets --features trace -- -D warnings` and
+   `cargo test --features trace` (the hooks are compiled out of every other build), then the
+   corpus — every `../examples/traces/*/*.trace` through
+   `cargo run --example replay --features trace` must equal its `.record` (`../docs/traces.md`).
 3. `cargo test` — and `cargo test --release` (with and without `--features debug-allocator`) when
    `Drop`, the debug hooks or anything behind `debug_assertions` changes: the release profile
    compiles out the address-stability tripwire and so runs different code. Also

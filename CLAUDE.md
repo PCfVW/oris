@@ -20,8 +20,18 @@ must produce **identical internal state transitions** across both ports — same
 spawns, same tree-rotation count, same coalescing operations, same final RSS.
 
 Any change to size-class math, tree rotation, coalescing order, or on-heap metadata layout in
-one port must be mirrored in the other. From v0.3.0 a CI trace-corpus parity check enforces
-this. Treat such changes as touching that gate.
+one port must be mirrored in the other. The trace gate enforces this (`trace-ci.yml`;
+`docs/traces.md`): every trace under `examples/traces/` must replay to its committed
+`.record` — written by the HPHA oracle — on both ports. Treat such changes as touching that
+gate:
+
+- A state transition added, removed or moved emits its `letopis` event at the same point in
+  Rust (`chronicle!`), Zig (`if (config.trace) self.tap.emit(...)`) **and**
+  `Cpp/oracle/letopis.patch`, and `examples/traces/EVENTS.md` is updated in the same commit.
+- Records are regenerated from the oracle (`Cpp/oracle/build_trace_oracle.ps1`, Windows +
+  MSVC), never from a port; both ports must then reproduce them byte for byte.
+- `benchmarks/scripts/tracegen` changes regenerate the corpus (`tracegen generate`), and
+  `tracegen verify` must pass.
 
 The invariant covers the allocator's own state. Debug-only diagnostic storage (the record-book
 pages, callstack contents) is outside it: record size and page capacity differ between the

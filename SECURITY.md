@@ -78,7 +78,8 @@ Please report suspected vulnerabilities **privately**, not as a public issue:
 
 - Preferred: GitHub **private vulnerability reporting** — the **Security → Report a
   vulnerability** button on <https://github.com/PCfVW/oris>.
-- Include a minimal reproducer (an alloc/free sequence, ideally as a trace), the
+- Include a minimal reproducer (an alloc/free sequence, ideally as a trace — see
+  [`docs/traces.md`](docs/traces.md); a `Recorder` captures one from a running program), the
   affected port(s), and the version or commit.
 
 Because both ports share one algorithm and one cross-port invariant, a memory-safety

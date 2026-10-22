@@ -19,7 +19,11 @@ Every `.zig` file begins with `// SPDX-License-Identifier: MIT OR Apache-2.0` as
    every out-of-memory path via `os.test_vm.failMapAfter`. See `CONVENTIONS.md` § *Verification
    gate*. A new raw-memory path is *pending* until a safe-build test exercises it.
 3. Build `ReleaseFast` to confirm the hot path compiles with safety checks off.
-4. Update `CHANGELOG.md` — a bullet under `[Unreleased]` for any user-visible change.
+4. When `tree.zig`, `bucket.zig`, `rbtree.zig`, `orisnitsa.zig` or a `letopis_*.zig` file
+   changes: `zig build test` covers the `Orisnitsa(.{ .trace = true })` instantiation, and
+   every `../examples/traces/*/*.trace` through `zig build replay -- <trace>` must equal its
+   `.record` (`../docs/traces.md`).
+5. Update `CHANGELOG.md` — a bullet under `[Unreleased]` for any user-visible change.
 
 ## Zig version
 

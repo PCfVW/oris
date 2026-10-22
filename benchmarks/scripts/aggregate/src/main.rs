@@ -128,7 +128,7 @@ fn main() -> Result<()> {
         };
         let _ = writeln!(
             out,
-            "{} — {}, {} logical cores, {} GB RAM ({}); {}; {}; commit `{}`{}, {}.\n",
+            "{} — {}, {} logical cores, {} GB RAM ({}); {}; zig {}; commit `{}`{}, {}.\n",
             field("os"),
             field("cpu"),
             field("logical_cores"),

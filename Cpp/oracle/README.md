@@ -1,5 +1,13 @@
 # The C++ oracle harness
 
+Three tools that put the 2007 HPHA source itself next to the ports:
+
+| Tool | What it checks | Where it runs |
+|---|---|---|
+| [`oracle_trace.cpp`](oracle_trace.cpp) (below) | the red-black tree alone, against both ports' trees | manually |
+| [`main_c_abi.cpp`](main_c_abi.cpp) (below) | Lazarov's own benchmark, over either port's `oris_*` C ABI | manually |
+| [`trace_replay.cpp`](trace_replay.cpp) (last section) | the whole allocator: HPHA's transition record for every trace of the corpus | CI (`trace-ci.yml`, Windows) |
+
 `oracle_trace.cpp` is the C++ side of the three-way RB-tree cross-validation this
 project's `CHANGELOG.md` and `Rust/src/rbtree.rs`/`Zig/src/rbtree.zig` refer to: it
 links against the real, unmodified `../hpha.h`/`../hpha.cpp` and drives HPHA's own

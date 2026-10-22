@@ -21,6 +21,12 @@
 //! module; Zig's `export fn` already gives them global C linkage independent of
 //! any `pub`/import visibility within this package).
 //!
+//! `letopis` (*летопис*, "chronicle") checks the cross-port invariant: `letopis.replay` runs
+//! an allocation trace on `OrisnitsaWith(.{ .trace = true })` and writes its transition
+//! record, byte-identical to what `orisnik` and the HPHA reference write for the same trace;
+//! `letopis.Recorder` captures a program's calls as a trace. The hooks exist only in a
+//! `.trace = true` instantiation. See `docs/traces.md` in the repository.
+//!
 //! ```zig
 //! const std = @import("std");
 //! const orisnitsa = @import("orisnitsa");

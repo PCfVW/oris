@@ -61,3 +61,13 @@ The default reference for both ports is the source in this directory. Anything p
 ## Known defects in this reference
 
 The ports do not reproduce this source uncritically. [`ERRATA.md`](ERRATA.md) is the register of defects found in it, split by what each port does about them — fixed, deliberately preserved, unreachable, or already fixed upstream. Each entry records whether the difference is visible to the cross-port trace gate described in [`../ROADMAP.md`](../ROADMAP.md).
+
+## Modified copies are made elsewhere, never here
+
+The v0.3.0 trace oracle needs HPHA to report its state transitions, which the 2007 source
+has no way to do. It does not get that by editing this directory:
+[`oracle/build_trace_oracle.ps1`](oracle/build_trace_oracle.ps1) copies `hpha.h` and
+`hpha.cpp` to a scratch directory outside the repository and applies
+[`oracle/letopis.patch`](oracle/letopis.patch) there — 40 added lines, each a call that
+reports a pointer or a size the surrounding code already has, nothing removed or changed. The
+files in this directory stay exactly as received; see [`oracle/README.md`](oracle/README.md).

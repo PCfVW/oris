@@ -29,9 +29,9 @@ From v0.1.0 onward, both Oris ports satisfy the following property:
 
 > *Given an identical allocation/deallocation sequence at the public API level, both ports produce identical internal state transitions — same bucket-page spawns, same tree-rotation count, same coalescing operations, same final RSS.*
 
-This is a stricter property than "the API behaves the same"; it is "the algorithm executes the same." Verified in CI from v0.3.0 onward against a corpus of reproducible traces.
+This is a stricter property than "the API behaves the same"; it is "the algorithm executes the same." Verified in CI from v0.3.0 onward against a corpus of reproducible traces — and against the 2007 HPHA reference itself, whose transition records the corpus's are ([`docs/traces.md`](docs/traces.md)).
 
-**Scope.** The invariant covers the allocator's own state — in the default build, and in the debug configuration for everything the guard reservation changes (size classes, block sizes, bucket/tree routing), which is identical in both ports. Debug-only *diagnostic storage* is outside it: the allocation-record book's pages differ in size between the ports (`orisnitsa` inlines an 8-frame callstack in each record; `orisnik` holds an owning `Backtrace`), so record-page capacity — and with it debug-mode RSS — differs, and a Rust instance used as a `#[global_allocator]` records no callstack at all. The v0.3.0 trace gate therefore runs the non-debug build, or excludes record pages. It also compares allocator state *before* teardown: `Drop`/`deinit` returns idle memory by different means in the two ports (`orisnik` reads its structures and unmaps; `orisnitsa` calls `purge`, which erases and rotates tree nodes), so rotation counts across teardown are not comparable, though the final result — every idle page released — is.
+**Scope.** The invariant covers the allocator's own state — in the default build, and in the debug configuration for everything the guard reservation changes (size classes, block sizes, bucket/tree routing), which is identical in both ports. Debug-only *diagnostic storage* is outside it: the allocation-record book's pages differ in size between the ports (`orisnitsa` inlines an 8-frame callstack in each record; `orisnik` holds an owning `Backtrace`), so record-page capacity — and with it debug-mode RSS — differs, and a Rust instance used as a `#[global_allocator]` records no callstack at all. The v0.3.0 trace gate therefore runs the non-debug build. It also compares allocator state *before* teardown: `Drop`/`deinit` returns idle memory by different means in the two ports (`orisnik` reads its structures and unmaps; `orisnitsa` calls `purge`, which erases and rotates tree nodes), so rotation counts across teardown are not comparable, though the final result — every idle page released — is.
 
 This invariant is the property that justifies maintaining two ports rather than one. Without it, the ports are merely two implementations; with it, they are two views of the same machine.
 
@@ -73,13 +73,15 @@ This invariant is the property that justifies maintaining two ports rather than 
 
 **Theme:** Reproducibility and credibility.
 
-- **Trace format:** a small, language-agnostic allocation-sequence format. ISO/IEC 14977 EBNF grammar in `examples/traces/GRAMMAR.md` — mirroring the priority queue project's grammar discipline.
-- **Trace recorder and replayer** in both ports
-- **State-transition harness:** same trace → byte-identical transition record across both ports; CI gate enforces equality
-- **Standalone trace generator** as a `benchmarks/scripts/tracegen/` crate (mirroring `graphgen/` from the priority queue project) producing seeded, reproducible traces from planner, parser, and synthetic workloads
-- **mimalloc-bench integration:** Oris runs in the standard allocator benchmark harness against `mimalloc`, `jemalloc`, `snmalloc`, system malloc, plus Zig's `SmpAllocator` and Rust's allocator landscape where applicable
-- **`benchmarks/methodology.md`** documenting the reproducibility protocol: 3-pass, warmup + median-of-N with IQR — same shape as the priority queue project's protocol
-- **Initial published results:** wall-time, peak RSS, fragmentation, worst-case latency on each workload class, with the trace corpus shipped alongside
+**Progress (unreleased):** every bullet below is implemented, in both ports where it applies. The trace gate holds against the 2007 reference itself: the 19 traces of the corpus replay byte-identically on HPHA, `orisnik` and `orisnitsa` locally (Windows; `orisnik` also on Linux), and `trace-ci.yml` enforces it on all three OSes once pushed. See [`docs/traces.md`](docs/traces.md) and [`benchmarks/`](benchmarks/README.md).
+
+- **Trace format:** a small, language-agnostic allocation-sequence format, and the *transition record* every replayer writes. ISO/IEC 14977 EBNF grammars in `examples/traces/GRAMMAR.md` — mirroring the priority queue project's grammar discipline — with the semantic constraints that keep a replay clear of undefined behaviour and of the inputs `Cpp/ERRATA.md` records as broken upstream.
+- **Trace recorder and replayer** in both ports: `letopis`, behind the `trace` Cargo feature / `Config.trace`, with every state transition emitted by compiled-out-when-off hooks (`examples/traces/EVENTS.md`)
+- **State-transition harness:** same trace → byte-identical transition record across both ports *and the HPHA reference* (a scratch copy patched with the same hooks, `Cpp/oracle/`); CI gate (`trace-ci.yml`) enforces equality with the records HPHA wrote
+- **Standalone trace generator** as a `benchmarks/scripts/tracegen/` crate (mirroring `graphgen/` from the priority queue project) producing seeded, reproducible traces from planner, parser, and synthetic workloads — identical on every OS, CI tier committed with its records, bench tier pinned by checksum
+- **mimalloc-bench integration:** Oris runs in the standard allocator benchmark harness (pinned commit, `LD_PRELOAD` shims for both ports, a global lock since Oris is single-threaded) against `mimalloc`, `jemalloc`, `snmalloc` and glibc, on its self-contained programs; plus trace-replay harnesses for Zig's `SmpAllocator` and `c_allocator` and Rust's allocator landscape (system, mimalloc, jemalloc, snmalloc), which mimalloc-bench cannot reach
+- **`benchmarks/methodology.md`** documenting the reproducibility protocol: 3 passes per cell, each in its own process (wall time: 2 warm-ups + median of 10 with IQR; per-operation latency; memory), the same shape as the priority queue project's protocol
+- **Initial published results:** wall-time, peak RSS, fragmentation, worst-case latency on each workload class (`benchmarks/results/v0.3.0/`), with the trace corpus shipped alongside (the generator, its seeds and the bench traces' checksums)
 
 ### v0.4.0 — Examples and the planner
 

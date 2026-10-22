@@ -538,8 +538,16 @@ This constrains how Rust code is written, not just what it computes:
    rotations and the physical-neighbor coalescing, preserve operation *order*, not just the
    final tree shape — the invariant counts transitions, not just end states.
 
-From v0.3.0 a CI gate replays the shared trace corpus through both ports and asserts a
-byte-identical transition record. Treat any change under this section as touching that gate.
+5. **Every state transition emits its `letopis` event, where HPHA performs it.** A split, shift,
+   merge, page spawn/release/move, tree or small-list insertion or removal, map or unmap goes
+   through the hook (`chronicle!(self.tap, Event::...)`) at the point `examples/traces/EVENTS.md` names —
+   in this port, in the Zig port, and in `Cpp/oracle/letopis.patch`. The record is
+   ordered, so an event one call too early is a divergence even when the final state agrees.
+
+The gate is real since v0.3.0: `trace-ci.yml` replays the trace corpus (`examples/traces/`)
+through both ports on three OSes and through the HPHA oracle on Windows, and every transition
+record must equal the committed one, which HPHA wrote. Treat any change under this section as
+touching that gate; `docs/traces.md` describes what to do when a record changes.
 
 ---
 
