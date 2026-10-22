@@ -877,6 +877,9 @@ impl<T: RbNode> IntrusiveMultiRbTree<T> {
     /// Inserts `node`. If an equal-key element already exists, `node` is chained onto
     /// it instead of becoming a new tree position. Ports `intrusive_multi_rbtree::
     /// do_insert`.
+    // The tree allocator calls the counted form; the uncounted one serves the debug record
+    // store and the tests, so a plain build has no caller.
+    #[cfg_attr(not(feature = "debug-allocator"), allow(dead_code))]
     pub(crate) fn insert(&self, node: NonNull<T>) {
         let _ = self.insert_counted(node);
     }
@@ -927,6 +930,9 @@ impl<T: RbNode> IntrusiveMultiRbTree<T> {
     }
 
     /// Removes `node`. Ports `intrusive_multi_rbtree::do_erase`.
+    // The tree allocator calls the counted form; the uncounted one serves the debug record
+    // store and the tests, so a plain build has no caller.
+    #[cfg_attr(not(feature = "debug-allocator"), allow(dead_code))]
     pub(crate) fn erase(&self, node: NonNull<T>) {
         let _ = self.erase_counted(node);
     }

@@ -68,6 +68,9 @@ pub const OrisError = @import("spomen_failure.zig").OrisError;
 /// The out-parameter `Orisnitsa.check` fills with a human-readable description of the first
 /// problem it finds. See `spomen_failure.zig`.
 pub const Diagnostic = @import("spomen_failure.zig").Diagnostic;
+/// Traces and transition records (`letopis`, "chronicle"): `replay`, `Recorder`. See
+/// `letopis.zig` and `docs/traces.md`.
+pub const letopis = @import("letopis.zig");
 
 // Imported only so their `test` blocks are reachable from this root module via
 // this file's own `test { refAllDecls(...) }` block below — not re-exported as
@@ -96,6 +99,11 @@ const spomen_store = @import("spomen_store.zig");
 const spomen_failure = @import("spomen_failure.zig");
 const rand = @import("rand.zig");
 const capi = @import("capi.zig");
+const letopis_event = @import("letopis_event.zig");
+const letopis_trace = @import("letopis_trace.zig");
+const letopis_record = @import("letopis_record.zig");
+const letopis_replay = @import("letopis_replay.zig");
+const letopis_recorder = @import("letopis_recorder.zig");
 
 test "a consumer can instantiate the debug allocator and hand it out as a std.mem.Allocator" {
     // Only what this file exports: the way an importing package reaches the debug allocator.
@@ -139,4 +147,10 @@ test {
     std.testing.refAllDecls(orisnitsa_mod);
     std.testing.refAllDecls(allocator_mod);
     std.testing.refAllDecls(capi);
+    std.testing.refAllDecls(letopis);
+    std.testing.refAllDecls(letopis_event);
+    std.testing.refAllDecls(letopis_trace);
+    std.testing.refAllDecls(letopis_record);
+    std.testing.refAllDecls(letopis_replay);
+    std.testing.refAllDecls(letopis_recorder);
 }

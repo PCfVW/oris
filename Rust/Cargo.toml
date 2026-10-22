@@ -51,6 +51,13 @@ nightly = []
 # `debug_assert!` Invariants section.
 debug-allocator = []
 
+# Enables `letopis` (src/letopis/): the trace replayer and recorder that check the
+# cross-port invariant (ROADMAP.md v0.3.0). Every state-transition hook in `bucket.rs` and
+# `tree.rs` goes through the `chronicle!` macro, which this feature alone turns on; without
+# it the hooks do not exist in the compiled code. Adds the public `orisnik::letopis` module.
+# See examples/traces/GRAMMAR.md and docs/traces.md in the repository.
+trace = []
+
 [target.'cfg(unix)'.dependencies]
 # mmap/munmap and their flag constants (MAP_ANON differs numerically between Linux
 # and macOS/BSD) — hand-rolling these is a well-known source of silent platform bugs,
@@ -65,6 +72,13 @@ libc = "0.2"
 name = "catch_an_overrun"
 path = "examples/catch_an_overrun.rs"
 required-features = ["debug-allocator"]
+
+# Replays a trace file and prints its transition record: the Rust leg of the cross-port
+# trace gate (.github/workflows/trace-ci.yml, docs/traces.md).
+[[example]]
+name = "replay"
+path = "examples/replay.rs"
+required-features = ["trace"]
 
 # Global-allocator integration test (see the file's own doc). No libtest harness: a global
 # allocator is process-wide and `Orisnik` is single-threaded by contract, so `main` must be
