@@ -1,0 +1,27 @@
+oris-record 1
+#0 alloc h0 24 -> m0+0x0 a=65536
+  map b m0 65536
+  page+ b2 m0
+#1 alloc h1 1000 -> m1+0x20 a=131072
+  map t m1 65536
+  split m1+0x10 1008
+  mr m1+0x410
+#2 realloc h1 2000 -> m1+0x20 a=131072
+  mr -
+  merge m1+0x410
+  split m1+0x10 2000
+  mr m1+0x7f0
+#3 free_sized h0 24 -> - a=131072
+#4 free h1 -> - a=131072
+  mr -
+  merge m1+0x7f0
+  mr m1+0x10
+#5 purge -> - a=0
+  tree+ m1+0x10 65488 node rot=0
+  mr -
+  tree- m1+0x10 65488 node rot=0
+  unmap m1 65536
+  mr -
+  page- b2 m0
+  unmap m0 65536
+end ops=6 maps=2 unmaps=2 rotations=0 allocated=0

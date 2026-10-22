@@ -1,0 +1,23 @@
+oris-trace 1
+# Every branch of tree_realloc, in order: shrink in place (split; the remainder
+# coalesces with any free neighbour), grow into a free next block, grow backwards into
+# a free previous block (the pointer moves), and the alloc-copy-free fallback. Then a
+# bucket realloc that stays in its slot, one that moves to a bigger bucket, and one
+# that leaves the bucket path for the tree.
+alloc h0 2000
+alloc h1 2000
+alloc h2 2000
+realloc h1 1000
+realloc h1 1500
+free h0
+realloc h1 3000
+realloc h1 20000
+alloc h3 20
+realloc h3 24
+realloc h3 100
+realloc h3 1000
+realloc h3 50
+free h1
+free h2
+free h3
+purge

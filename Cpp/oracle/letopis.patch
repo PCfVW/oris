@@ -1,0 +1,270 @@
+diff --git a/hpha.cpp b/hpha.cpp
+index 9cbc578..9a019aa 100644
+--- a/hpha.cpp
++++ b/hpha.cpp
+@@ -26,11 +26,13 @@ void intrusive_multi_rbtree_base::insert_fixup(node_base* node) {
+ 			if (cur == p->child(o)) {
+ 				cur = p;
+ 				cur->rotate(s);
++				++letopis_rotations;
+ 				p = cur->parent();
+ 			}
+ 			p->make_black();
+ 			pp->make_red();
+ 			pp->rotate(o);
++			++letopis_rotations;
+ 		} 
+ 	}
+ 	mHead.child(LEFT)->make_black();
+@@ -50,6 +52,7 @@ void intrusive_multi_rbtree_base::erase_fixup(node_base* node) {
+ 			p->make_red();
+ 			w = w->child(s);
+ 			p->rotate(s);
++			++letopis_rotations;
+ 		}
+ 		assert(w != &mHead);
+ 		if (w->child(LEFT)->black() && w->child(RIGHT)->black()) { 
+@@ -61,6 +64,7 @@ void intrusive_multi_rbtree_base::erase_fixup(node_base* node) {
+ 				w->make_red();
+ 				node_base* c = w->child(s);
+ 				w->rotate(o);
++				++letopis_rotations;
+ 				w = c;
+ 				assert(w != &mHead);
+ 			}
+@@ -69,6 +73,7 @@ void intrusive_multi_rbtree_base::erase_fixup(node_base* node) {
+ 			p->make_black();
+ 			w->child(o)->make_black();
+ 			p->rotate(s);
++			++letopis_rotations;
+ 			cur = mHead.child(LEFT);
+ 		}
+ 	}
+@@ -154,6 +159,7 @@ void* allocator::bucket::alloc(page* p) {
+ 	p->mFreeList = next;
+ 	if (!next) {
+ 		// if full, auto sort to back
++		letopis_event(LETOPIS_PAGE_FULL, p, p->bucket_index());
+ 		p->unlink();
+ 		mPageList.push_back(p);
+ 	}
+@@ -169,6 +175,7 @@ void allocator::bucket::free(page* p, void* ptr) {
+ 	p->dec_ref();
+ 	if (!free) {
+ 		// if the page was previously full, auto sort to front
++		letopis_event(LETOPIS_PAGE_REFILL, p, p->bucket_index());
+ 		p->unlink();
+ 		mPageList.push_front(p);
+ 	}
+@@ -183,12 +190,14 @@ void* allocator::bucket_system_alloc() {
+ 		mutex::scoped lock(mTreeMutex);
+ 		#endif
+ 		mTotalAllocatedSizeBuckets += PAGE_SIZE;
++		letopis_event(LETOPIS_MAP_BUCKET, ptr, PAGE_SIZE);
+ 	}
+ 	return ptr;
+ }
+ 
+ void allocator::bucket_system_free(void* ptr) {
+ 	assert(ptr);
++	letopis_event(LETOPIS_UNMAP, ptr, PAGE_SIZE);
+ 	virtual_free(ptr);
+ 	#ifdef MULTITHREADED
+ 	mutex::scoped lock(mTreeMutex);
+@@ -232,6 +241,7 @@ void* allocator::bucket_alloc(size_t size) {
+ 		if (!p)
+ 			return NULL;
+ 		mBuckets[bi].add_free_page(p);
++		letopis_event(LETOPIS_PAGE_SPAWN, p, bi);
+ 	}
+ 	assert(p->elem_size() >= size);
+ 	return mBuckets[bi].alloc(p);
+@@ -249,6 +259,7 @@ void* allocator::bucket_alloc_direct(unsigned bi) {
+ 		if (!p)
+ 			return NULL;
+ 		mBuckets[bi].add_free_page(p);
++		letopis_event(LETOPIS_PAGE_SPAWN, p, bi);
+ 	}
+ 	return mBuckets[bi].alloc(p);
+ }
+@@ -302,6 +313,7 @@ void allocator::bucket_purge() {
+ 			if (p->empty()) {
+ 				assert(p->mFreeList);
+ 				p->unlink();
++				letopis_event(LETOPIS_PAGE_RELEASE, p, i);
+ 				void* memAddr = align_down((char*)p, PAGE_SIZE);
+ 				bucket_system_free(memAddr);
+ 			}
+@@ -311,6 +323,7 @@ void allocator::bucket_purge() {
+ }
+ 
+ void allocator::split_block(block_header* bl, size_t size) {
++	letopis_event(LETOPIS_SPLIT, bl, size);
+ 	assert(size + sizeof(block_header) + sizeof(free_node) <= bl->size());
+ 	block_header* newBl = (block_header*)((char*)bl + size + sizeof(block_header));
+ 	newBl->link_after(bl);
+@@ -318,6 +331,7 @@ void allocator::split_block(block_header* bl, size_t size) {
+ }
+ 
+ allocator::block_header* allocator::shift_block(block_header* bl, size_t offs) {
++	letopis_event(LETOPIS_SHIFT, bl, offs);
+ 	assert(offs > 0);
+ 	block_header* prev = bl->prev();
+ 	bl->unlink();
+@@ -332,11 +346,13 @@ allocator::block_header* allocator::coalesce_block(block_header* bl) {
+ 	block_header* next = bl->next();
+ 	if (!next->used()) {
+ 		tree_detach(next);
++		letopis_event(LETOPIS_MERGE, next, 0);
+ 		next->unlink();
+ 	}
+ 	block_header* prev = bl->prev();
+ 	if (!prev->used()) {
+ 		tree_detach(prev);
++		letopis_event(LETOPIS_MERGE, bl, 0);
+ 		bl->unlink();
+ 		bl = prev;
+ 	}
+@@ -348,12 +364,15 @@ void* allocator::tree_system_alloc(size_t size) {
+ 	void* ptr = virtual_alloc(size);
+ 	if (ptr)
+ 		mTotalAllocatedSizeTree += size;
++	if (ptr)
++		letopis_event(LETOPIS_MAP_TREE, ptr, size);
+ 	return ptr;
+ }
+ 
+ void allocator::tree_system_free(void* ptr, size_t size) {
+ 	assert(ptr);
+ 	assert(size/PAGE_SIZE*PAGE_SIZE == size);
++	letopis_event(LETOPIS_UNMAP, ptr, size);
+ 	virtual_free(ptr);
+ 	mTotalAllocatedSizeTree -= size;
+ }
+@@ -441,23 +460,31 @@ void allocator::tree_attach(block_header* bl) {
+ 	if (mMRFreeBlock) {
+ 		block_header* lastBl = mMRFreeBlock;
+ 		if (lastBl->size() > MAX_SMALL_ALLOCATION) {
++			letopis_rotations = 0;
+ 			mFreeTree.insert((free_node*)lastBl->mem());
++			letopis_event(LETOPIS_TREE_INSERT, lastBl, lastBl->size());
+ 		} else {
+ 			mSmallFreeList.push_back((small_free_node*)lastBl->mem());
++			letopis_event(LETOPIS_LIST_PUSH, lastBl, lastBl->size());
+ 		}
+ 	}
+ 	mMRFreeBlock = bl;
++	letopis_event(LETOPIS_MR, bl, 0);
+ }
+ 
+ void allocator::tree_detach(block_header* bl) {
+ 	if (mMRFreeBlock == bl) {
+ 		mMRFreeBlock = NULL;
++		letopis_event(LETOPIS_MR, NULL, 0);
+ 		return;
+ 	}
+ 	if (bl->size() > MAX_SMALL_ALLOCATION) {
++		letopis_rotations = 0;
+ 		mFreeTree.erase((free_node*)bl->mem());
++		letopis_event(LETOPIS_TREE_ERASE, bl, bl->size());
+ 	} else {
+ 		mSmallFreeList.erase((small_free_node*)bl->mem());
++		letopis_event(LETOPIS_LIST_ERASE, bl, bl->size());
+ 	}
+ }
+ 
+@@ -545,6 +572,7 @@ void* allocator::tree_realloc(void* ptr, size_t size) {
+ 	if (blSize + nextSize >= size) {
+ 		assert(!next->used());
+ 		tree_detach(next);
++		letopis_event(LETOPIS_MERGE, next, 0);
+ 		next->unlink();
+ 		assert(bl->size() >= size);
+ 		if (bl->size() >= size + sizeof(block_header) + sizeof(free_node)) {
+@@ -559,9 +587,11 @@ void* allocator::tree_realloc(void* ptr, size_t size) {
+ 	if (blSize + prevSize + nextSize >= size) {
+ 		assert(!prev->used());
+ 		tree_detach(prev);
++		letopis_event(LETOPIS_MERGE, bl, 0);
+ 		bl->unlink();
+ 		if (!next->used()) {
+ 			tree_detach(next);
++			letopis_event(LETOPIS_MERGE, next, 0);
+ 			next->unlink();
+ 		}
+ 		bl = prev;
+@@ -611,6 +641,7 @@ void* allocator::tree_realloc_aligned(void* ptr, size_t size, size_t alignment)
+ 	if (blSize + nextSize >= size) {
+ 		assert(!next->used());
+ 		tree_detach(next);
++		letopis_event(LETOPIS_MERGE, next, 0);
+ 		next->unlink();
+ 		assert(bl->size() >= size);
+ 		if (bl->size() >= size + sizeof(block_header) + sizeof(free_node)) {
+@@ -625,9 +656,11 @@ void* allocator::tree_realloc_aligned(void* ptr, size_t size, size_t alignment)
+ 	if (blSize + prevSize + nextSize >= size + alignmentOffs) {
+ 		assert(!prev->used());
+ 		tree_detach(prev);
++		letopis_event(LETOPIS_MERGE, bl, 0);
+ 		bl->unlink();
+ 		if (!next->used()) {
+ 			tree_detach(next);
++			letopis_event(LETOPIS_MERGE, next, 0);
+ 			next->unlink();
+ 		}
+ 		if (alignmentOffs >= sizeof(block_header) + sizeof(free_node)) {
+@@ -679,6 +712,7 @@ size_t allocator::tree_resize(void* ptr, size_t size) {
+ 	block_header* next = bl->next();
+ 	if (!next->used() && blSize + next->size() + sizeof(block_header) >= size) {
+ 		tree_detach(next);
++		letopis_event(LETOPIS_MERGE, next, 0);
+ 		next->unlink();
+ 		if (bl->size() >= size + sizeof(block_header) + sizeof(free_node)) {
+ 			split_block(bl, size);
+diff --git a/hpha.h b/hpha.h
+index 86ad09f..e73d3d8 100644
+--- a/hpha.h
++++ b/hpha.h
+@@ -8,6 +8,7 @@
+ #include <string.h>
+ #include <assert.h>
+ #include <new>
++#include "letopis_hooks.h" // letopis: trace oracle hooks
+ 
+ #if defined(WIN32)
+ #ifndef WIN32_LEAN_AND_MEAN
+@@ -672,11 +673,13 @@ protected:
+ 			if (node->data() < curNode->data()) {
+ 				s = LEFT;
+ 			} else if (!(node->data() > curNode->data())) {
++				letopis_branch = LETOPIS_BRANCH_CHAIN;
+ 				node->link(curNode);
+ 				return;
+ 			}
+ 			curNode = curNode->child(s);
+ 		}
++		letopis_branch = LETOPIS_BRANCH_NODE;
+ 		node->attach_to(lastNode, s);
+ 		insert_fixup(node);
+ 		#ifdef DEBUG_MULTI_RBTREE
+@@ -688,6 +691,7 @@ protected:
+ 			if (!node->head()) {
+ 				assert(node->child(LEFT) == NULL);
+ 				assert(node->child(RIGHT) == NULL);
++				letopis_branch = LETOPIS_BRANCH_LINK;
+ 				node->unlink();
+ 				return;
+ 			}
+@@ -696,10 +700,12 @@ protected:
+ 			assert(!repl->parent());
+ 			assert(repl->child(LEFT) == NULL);
+ 			assert(repl->child(RIGHT) == NULL);
++			letopis_branch = LETOPIS_BRANCH_PROMOTE;
+ 			repl->switch_with(node);
+ 			node->unlink();
+ 			return;
+ 		}
++		letopis_branch = LETOPIS_BRANCH_NODE;
+ 		T* endNode = nil_multi_rbnode();
+ 		T* repl = node;
+ 		side s = LEFT;

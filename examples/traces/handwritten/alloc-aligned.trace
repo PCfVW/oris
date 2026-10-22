@@ -1,0 +1,20 @@
+oris-trace 1
+# tree_alloc_aligned's padding: an offset too small to hold a free block is absorbed by
+# shifting the block (shift); a larger one is split off and freed (split, then the pad
+# joins the free index). Alignment 0 and alignments up to 8 act as plain alloc; up to
+# 256 a small request stays on the bucket path.
+alloc_aligned h0 1000 64
+alloc_aligned h1 1000 4096
+alloc_aligned h2 24 0
+alloc_aligned h3 24 8
+alloc_aligned h4 24 128
+alloc_aligned h5 24 512
+alloc_aligned h6 60000 65536
+free_sized_aligned h0 1000 64
+free_sized_aligned h1 1000 4096
+free_sized h2 24
+free_sized_aligned h3 24 8
+free_sized_aligned h4 24 128
+free_sized_aligned h5 24 512
+free h6
+purge

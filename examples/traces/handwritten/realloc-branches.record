@@ -1,0 +1,83 @@
+oris-record 1
+#0 alloc h0 2000 -> m0+0x20 a=65536
+  map t m0 65536
+  split m0+0x10 2000
+  mr m0+0x7f0
+#1 alloc h1 2000 -> m0+0x800 a=65536
+  mr -
+  split m0+0x7f0 2000
+  mr m0+0xfd0
+#2 alloc h2 2000 -> m0+0xfe0 a=65536
+  mr -
+  split m0+0xfd0 2000
+  mr m0+0x17b0
+#3 realloc h1 1000 -> m0+0x800 a=65536
+  split m0+0x7f0 1008
+  tree+ m0+0x17b0 59440 node rot=0
+  mr m0+0xbf0
+#4 realloc h1 1500 -> m0+0x800 a=65536
+  mr -
+  merge m0+0xbf0
+  split m0+0x7f0 1504
+  mr m0+0xde0
+#5 free h0 -> - a=65536
+  tree+ m0+0xde0 480 node rot=0
+  mr m0+0x10
+#6 realloc h1 3000 -> m0+0x20 a=65536
+  mr -
+  merge m0+0x7f0
+  tree- m0+0xde0 480 node rot=0
+  merge m0+0xde0
+  split m0+0x10 3008
+  mr m0+0xbe0
+#7 realloc h1 20000 -> m0+0x17c0 a=65536
+  tree- m0+0x17b0 59440 node rot=0
+  split m0+0x17b0 20000
+  tree+ m0+0xbe0 992 node rot=0
+  mr m0+0x65e0
+  tree- m0+0xbe0 992 node rot=0
+  merge m0+0xbe0
+  tree+ m0+0x65e0 39424 node rot=0
+  mr m0+0x10
+#8 alloc h3 20 -> m1+0x0 a=131072
+  map b m1 65536
+  page+ b2 m1
+#9 realloc h3 24 -> m1+0x0 a=131072
+#10 realloc h3 100 -> m2+0x0 a=196608
+  map b m2 65536
+  page+ b12 m2
+#11 realloc h3 1000 -> m0+0x20 a=196608
+  mr -
+  split m0+0x10 1008
+  mr m0+0x410
+#12 realloc h3 50 -> m0+0x20 a=196608
+  split m0+0x10 64
+  mr -
+  merge m0+0x410
+  mr m0+0x60
+#13 free h1 -> - a=196608
+  tree- m0+0x65e0 39424 node rot=0
+  merge m0+0x65e0
+  tree+ m0+0x60 3936 node rot=0
+  mr m0+0x17b0
+#14 free h2 -> - a=196608
+  mr -
+  merge m0+0x17b0
+  tree- m0+0x60 3936 node rot=0
+  merge m0+0xfd0
+  mr m0+0x60
+#15 free h3 -> - a=196608
+  mr -
+  merge m0+0x60
+  mr m0+0x10
+#16 purge -> - a=0
+  tree+ m0+0x10 65488 node rot=0
+  mr -
+  tree- m0+0x10 65488 node rot=0
+  unmap m0 65536
+  mr -
+  page- b2 m1
+  unmap m1 65536
+  page- b12 m2
+  unmap m2 65536
+end ops=17 maps=3 unmaps=3 rotations=0 allocated=0
