@@ -172,8 +172,9 @@ two ports.
 HPHA has no notion of a transition record, so the events have to come from inside it.
 They do, without touching `../hpha.h`/`../hpha.cpp`:
 
-- **`letopis.patch`** adds one `#include "letopis_hooks.h"` and one call per hook site
-  (40 added lines, nothing removed or changed), at exactly the places
+- **`letopis.patch`** adds one `#include "letopis_hooks.h"` and, at each hook site, a
+  statement that records an event, a tree branch or a rotation (40 added lines, nothing
+  removed or changed), at exactly the places
   `../../examples/traces/EVENTS.md` lists. Every hook only *reports*: it reads a
   pointer or a size the surrounding code already has, so the patched allocator makes
   the same decisions as the original.
@@ -207,10 +208,15 @@ together. After such a change, and after adding a trace, regenerate every record
 the oracle (never from a port) and check both ports against them:
 
 ```sh
-for t in examples/traces/*/*.trace; do "$ORACLE" "$t" > "${t%.trace}.record"; done
+for t in examples/traces/handwritten/*.trace examples/traces/generated/*.trace; do
+  "$ORACLE" "$t" > "${t%.trace}.record"
+done
 ```
 
 ### Verified
+
+The traces under `rejected/` have no record: each must be refused, and its `.expected` file
+holds the message all three replayers print (after the `replay: <path>: ` prefix).
 
 Run 2026-10-22: the 12 hand-written traces and the 7 generated ones
 (`../../benchmarks/traces.toml`, CI tier) — 54,710 record lines in all, every event

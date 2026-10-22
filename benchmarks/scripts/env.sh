@@ -30,7 +30,9 @@ rustc="$(rustc --version 2>/dev/null || echo none)"
 zig="$(zig version 2>/dev/null || echo none)"
 cc="$( (cc --version 2>/dev/null || echo none) | head -1)"
 commit="$(git -C "$root" rev-parse --short HEAD)"
-dirty="$(git -C "$root" status --porcelain | grep -qv '^??' && echo true || echo false)"
+# Captured first, then filtered: `grep -q` exiting early could SIGPIPE git under pipefail.
+changes="$(git -C "$root" status --porcelain)"
+dirty="$(printf '%s\n' "$changes" | grep -v '^??' | grep -q . && echo true || echo false)"
 date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 printf '{"platform":%s,"os":%s,"kernel":%s,"cpu":%s,"logical_cores":%s,"ram_gb":%s,"cpu_governor":%s,"rustc":%s,"zig":%s,"cc":%s,"commit":%s,"dirty":%s,"date":%s,"host":"redacted"}\n' \

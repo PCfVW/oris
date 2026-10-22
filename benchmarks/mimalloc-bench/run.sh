@@ -15,7 +15,7 @@ set -euo pipefail
 readonly MB_DIR="${MB_DIR:-$HOME/mimalloc-bench}"
 readonly here="$(cd "$(dirname "$0")" && pwd)"
 readonly bench="$(cd "$here/.." && pwd)"
-platform="${1:-linux-x86_64}"
+platform="${1:-linux-wsl2-x86_64}"
 repeats="${2:--r=3}"
 readonly version="v0.3.0"
 readonly out="$bench/results/$version/mimalloc-bench"

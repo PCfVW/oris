@@ -112,7 +112,8 @@ fn main() -> Result<()> {
     let mut platforms: Vec<PathBuf> = std::fs::read_dir(&results)
         .with_context(|| format!("failed to read {}", results.display()))?
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.is_dir() && p.join("env.json").exists())
+        // `mimalloc-bench/` has an `env.json` too, but it is not a trace-replay platform.
+        .filter(|p| p.is_dir() && p.join("env.json").exists() && !p.ends_with("mimalloc-bench"))
         .collect();
     platforms.sort();
 

@@ -54,7 +54,8 @@ debug-allocator = []
 # Enables `letopis` (src/letopis/): the trace replayer and recorder that check the
 # cross-port invariant (ROADMAP.md v0.3.0). Every state-transition hook in `bucket.rs` and
 # `tree.rs` goes through the `chronicle!` macro, which this feature alone turns on; without
-# it the hooks do not exist in the compiled code. Adds the public `orisnik::letopis` module.
+# it no emission exists in the compiled code (only the tree fixups' rotation count remains, a
+# local the compiler drops when unread). Adds the public `orisnik::letopis` module.
 # See examples/traces/GRAMMAR.md and docs/traces.md in the repository.
 trace = []
 

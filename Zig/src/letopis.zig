@@ -9,9 +9,9 @@
 //! byte-identical. Both formats are specified in `examples/traces/GRAMMAR.md` in the
 //! repository; `docs/traces.md` is the user guide.
 //!
-//! - `replay` runs a trace on a fresh `Orisnitsa(.{ .trace = true })` and writes its
+//! - `replay` runs a trace on a fresh `OrisnitsaWith(.{ .trace = true })` and writes its
 //!   record.
-//! - `Recorder(config)` wraps an `Orisnitsa(config)` and writes the calls made through it
+//! - `Recorder(config)` wraps an `OrisnitsaWith(config)` instance and writes the calls made through it
 //!   as a trace; its `allocator()` makes it a `std.mem.Allocator`.
 //!
 //! The hooks exist only in an instantiation with `Config.trace` set; in every other one

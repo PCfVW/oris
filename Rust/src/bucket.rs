@@ -551,6 +551,7 @@ impl Buckets {
     fn note_refill(&self, bi: usize, page: NonNull<Page>) {
         // SAFETY: `page` is live (a member of bucket `bi`'s list, the caller's contract).
         if unsafe { Page::is_full(page.as_ptr()) } {
+            // PROVENANCE: addresses read for their value only, to name memory in the record.
             self.tap.emit(Event::PageRefill {
                 bucket: bi,
                 page: page.addr().get(),
@@ -579,6 +580,7 @@ impl Buckets {
         self.home.latch(self);
         self.allocated_bytes
             .set(self.allocated_bytes.get() + os::PAGE_SIZE);
+        // PROVENANCE: addresses read for their value only, to name memory in the record.
         chronicle!(
             self.tap,
             Event::Map {
@@ -595,6 +597,7 @@ impl Buckets {
     /// # Safety
     /// `ptr` must be a still-live result of [`Buckets::system_alloc`] on `self`.
     unsafe fn system_free(&self, ptr: NonNull<u8>) {
+        // PROVENANCE: addresses read for their value only, to name memory in the record.
         chronicle!(
             self.tap,
             Event::Unmap {
@@ -649,6 +652,7 @@ impl Buckets {
         } else {
             let p = self.grow(bi)?;
             bucket.add_free_page(p);
+            // PROVENANCE: addresses read for their value only, to name memory in the record.
             chronicle!(
                 self.tap,
                 Event::PageSpawn {
@@ -666,6 +670,7 @@ impl Buckets {
         #[cfg(feature = "trace")]
         // SAFETY: `page` is live (above).
         if unsafe { Page::is_full(page.as_ptr()) } {
+            // PROVENANCE: addresses read for their value only, to name memory in the record.
             self.tap.emit(Event::PageFull {
                 bucket: bi,
                 page: page.addr().get(),
@@ -852,6 +857,7 @@ impl Buckets {
                 // SAFETY: `page` is live.
                 if unsafe { Page::is_empty(page.as_ptr()) } {
                     crate::list::unlink_node(page);
+                    // PROVENANCE: addresses read for their value only, to name memory in the record.
                     chronicle!(
                         self.tap,
                         Event::PageRelease {

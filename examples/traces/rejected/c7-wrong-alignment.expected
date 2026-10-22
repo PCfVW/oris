@@ -1,0 +1,1 @@
+trace rejected (line 3): C7: free_sized_aligned h0 64 32 does not directly follow alloc_aligned h0 64 32

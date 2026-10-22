@@ -28,8 +28,10 @@ out="$bench/results/$version/$platform"
 target="${CARGO_TARGET_DIR:-$bench/scripts/target-$platform}"
 
 if $build; then
-  (cd "$bench/scripts/tracegen" && CARGO_TARGET_DIR="$target/tracegen" cargo run --release -q -- generate --tier bench)
+  # verify first: it regenerates every trace in memory and checks it against the committed
+  # checksums, which `generate` would otherwise rewrite before they could be compared.
   (cd "$bench/scripts/tracegen" && CARGO_TARGET_DIR="$target/tracegen" cargo run --release -q -- verify)
+  (cd "$bench/scripts/tracegen" && CARGO_TARGET_DIR="$target/tracegen" cargo run --release -q -- generate --tier bench)
   (cd "$bench/scripts/bench-rust" && CARGO_TARGET_DIR="$target/bench-rust" cargo build --release -q)
   (cd "$bench/scripts/bench-zig" && zig build -Doptimize=ReleaseFast --prefix "$target/bench-zig")
 fi

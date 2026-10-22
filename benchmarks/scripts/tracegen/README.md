@@ -16,6 +16,11 @@ floating-point math library is involved (log-uniform sizes are drawn with intege
 arithmetic), so the output is the same on every OS — CI's `tracegen verify` runs on
 Linux, Windows and macOS against files generated on one machine.
 
+One known skew, kept because fixing it changes every trace and record: when the upper bound
+of a log-uniform draw is a power of two, the top "octave" is that single value, so it is drawn
+far more often than its neighbours (about one size in ten is exactly 256 KiB in
+`synthetic-large`). Fold the fix into the next deliberate corpus regeneration.
+
 Every trace is valid by construction: workloads write through a builder that only emits
 operations satisfying GRAMMAR.md's semantic constraints, and each finished trace is
 replayed through `orisnik` before it is written.

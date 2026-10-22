@@ -66,10 +66,14 @@ fn loadTrace(arena: std.mem.Allocator, io: std.Io, path: []const u8) !Trace {
             continue;
         }
         const handle = tokens.next() orelse return error.BadLine;
+        if (handle.len < 2 or handle[0] != 'h') return error.BadLine;
         const h = try std.fmt.parseInt(u64, handle[1..], 10);
         var nums: [2]usize = .{ 0, 0 };
         var count: usize = 0;
-        while (tokens.next()) |t| : (count += 1) nums[count] = try std.fmt.parseInt(usize, t, 10);
+        while (tokens.next()) |t| : (count += 1) {
+            if (count == nums.len) return error.BadLine;
+            nums[count] = try std.fmt.parseInt(usize, t, 10);
+        }
         const entry = try slot_of.getOrPut(arena, h);
         if (!entry.found_existing) {
             entry.value_ptr.* = slot_of.count() - 1;

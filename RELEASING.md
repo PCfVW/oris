@@ -111,9 +111,10 @@ place, empty, for the next cycle.
 - The trace subsystem: `cargo clippy --all-targets --features trace -- -D warnings`,
   `cargo test --features trace` (also `--release`, and on 1.85), and
   `cargo +nightly miri test --features nightly,trace` (same `MIRIFLAGS`)
-- The trace gate by hand: every `examples/traces/*/*.trace` through
-  `cargo run --example replay --features trace`, `zig build replay` and, on Windows, the HPHA
-  oracle (`Cpp/oracle/build_trace_oracle.ps1`) must equal its `.record`; and
+- The trace gate by hand: every trace under `examples/traces/handwritten/` and `generated/`
+  through `cargo run --example replay --features trace`, `zig build replay` and, on Windows, the
+  HPHA oracle (`Cpp/oracle/build_trace_oracle.ps1`) must equal its `.record`, and every trace
+  under `rejected/` must be refused with its `.expected` message; and
   `cargo run --release -- verify` in `benchmarks/scripts/tracegen`
 - The C smoke test, `tests/c-abi/smoke.c`, against **both** ports' built libraries (see
   `.github/workflows/c-abi-ci.yml` for the exact commands)

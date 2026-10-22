@@ -6,7 +6,7 @@
 
 ## Versioning policy
 
-Oris ports ship in lockstep. **The same version number on `orisnik` (crates.io) and `orisnitsa` (Zig package registry) carries the same feature set and the same internal-state-transition behavior** — that is the project's defining invariant. Semantic versioning applies, with the understanding that any change to the public API or to the algorithm's externally-visible state transitions is at minimum a minor version bump.
+Oris ports ship in lockstep. **The same version number on `orisnik` (crates.io) and `orisnitsa` (GitHub Release) carries the same feature set and the same internal-state-transition behavior** — that is the project's defining invariant. Semantic versioning applies, with the understanding that any change to the public API or to the algorithm's externally-visible state transitions is at minimum a minor version bump.
 
 ### Fidelity fixes are patches
 

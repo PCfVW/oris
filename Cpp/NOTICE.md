@@ -68,6 +68,7 @@ The v0.3.0 trace oracle needs HPHA to report its state transitions, which the 20
 has no way to do. It does not get that by editing this directory:
 [`oracle/build_trace_oracle.ps1`](oracle/build_trace_oracle.ps1) copies `hpha.h` and
 `hpha.cpp` to a scratch directory outside the repository and applies
-[`oracle/letopis.patch`](oracle/letopis.patch) there — 40 added lines, each a call that
-reports a pointer or a size the surrounding code already has, nothing removed or changed. The
+[`oracle/letopis.patch`](oracle/letopis.patch) there — 40 added lines: one `#include`, and
+hook statements that only record a pointer, a size, a tree branch or a rotation count the
+surrounding code already has; nothing removed or changed. The
 files in this directory stay exactly as received; see [`oracle/README.md`](oracle/README.md).

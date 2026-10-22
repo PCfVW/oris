@@ -71,7 +71,10 @@ pub const Normalizer = struct {
                 try w.print("map {c} m{d} {d}", .{ kind, id, e.bytes });
             },
             .unmap => |e| {
-                const index = try self.find(e.base);
+                // An unmap names a whole mapping, by its base exactly.
+                const index = for (self.live.items, 0..) |m, i| {
+                    if (m.base == e.base) break i;
+                } else return error.Unmapped;
                 const id = self.live.swapRemove(index).id;
                 self.unmaps += 1;
                 try w.print("unmap m{d} {d}", .{ id, e.bytes });

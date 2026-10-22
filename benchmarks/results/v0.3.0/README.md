@@ -9,18 +9,20 @@ better than any single number.
 
 ## The two ports perform alike
 
-On every trace and both platforms, `orisnik` and `orisnitsa` are within a few percent of each
-other in time, and their memory figures agree to the megabyte — as they should, since the
-trace gate proves they perform the same transitions. Where they differ by more (the
-mimalloc-bench rows for `alloc-test1` and the threaded `sh6bench`/`sh8bench`, where the Zig
-shim is slower), the difference lies outside the shared algorithm — in the shim or the
-compiled code around it — and is noted here as unexplained rather than guessed at.
+On every trace and both platforms, `orisnik` and `orisnitsa` are within about 15% of each
+other in time (typically under 10%), and their memory figures agree to the megabyte — as they
+should, since the trace gate proves they perform the same transitions; the time gap is the
+compiled code around the shared algorithm, not the algorithm. In mimalloc-bench the Zig shim
+is slower on several rows (`alloc-test1`, `cfrac`, and the threaded `alloc-testN`,
+`sh6bench`, `sh8bench`); that difference lies in the shim or the code around it, and is noted
+here as unexplained rather than guessed at.
 
 ## Speed: mid-pack, and slow where Oris goes back to the OS
 
 - **The modern allocators win on raw speed.** mimalloc is faster than Oris on every trace, by
   1.1× (`small`, Windows) to about 15× (`large`, Linux); snmalloc and jemalloc are faster on most,
-  though on the `mixed` trace both come within 1.2–1.5× of Oris and behind glibc.
+  though on the `mixed` trace both come within 1.15–1.6× of Oris and behind glibc. (Both are
+  measured on Linux only; see the methodology.)
 - **Against the platform allocator it depends.** On Windows, Oris replays the `mixed` trace 4×
   faster than the system heap (165 ms vs 698 ms) and the `small` one 2× faster; on Linux, Oris
   is slightly faster than glibc on `small` (15.0 ms vs 16.5 ms) and slower on every other
@@ -28,11 +30,13 @@ compiled code around it — and is noted here as unexplained rather than guessed
 - **The cost is concentrated in `purge`.** The `planner` and `parser` workloads purge every few
   plans or files, as the brief's planner is meant to; each purge returns idle 64 KiB pages,
   which the next plan maps again. That OS round trip is where Oris's p99.9 latency on those
-  traces goes (15–40 µs, where every other allocator stays under 0.5 µs; on the large-block
-  traces every allocator's tail reaches tens of µs), and much of its wall time — and it costs about
+  traces goes (15–36 µs, where every other allocator stays under 0.5 µs on Linux and 3 µs on
+  Windows), and much of its wall time — and it costs about
   twice as much under WSL2 as on native Windows. HPHA's lazy return is a design choice (`BRIEF.md`:
   "memory returned only on explicit `purge()`"); a planner that purged less often would pay
-  less.
+  less. The comparison is lopsided in Oris's disfavour here: for the other allocators `purge`
+  is a no-op, so they neither pay for returning memory nor show its effect on their resident
+  set.
 
 ## Memory: lean on large blocks
 
@@ -50,10 +54,11 @@ compiled code around it — and is noted here as unexplained rather than guessed
 ## mimalloc-bench: fine single-threaded, serialized when threaded
 
 - **Single-threaded programs** (cfrac, espresso, barnes, alloc-test1, glibc-simple, mleak):
-  `orisnik` runs at 0.91–1.15× glibc's time and 0.96–1.45× its peak memory; `orisnitsa` matches it
-  except on `alloc-test1` (1.91×), unexplained so far.
+  `orisnik` runs at 0.91–1.15× glibc's time and 0.96–1.45× its peak memory; `orisnitsa` at
+  0.93–1.30×, except on `alloc-test1` (1.91×), unexplained so far.
 - **Threaded programs** (marked † in the tables) run behind the shims' global lock, and pay for
-  it: up to 40× glibc's time (`larson`), typically 5–20×. These rows measure serialization, as the methodology warns; Oris is a
+  it: typically 5–20× glibc's time, up to 39× for `orisnik` (`larson`, where the figure is
+  inverse throughput) and 67× for `orisnitsa` (`sh6bench`). These rows measure serialization, as the methodology warns; Oris is a
   single-threaded allocator until v2.x. (A few threaded tests show Oris using *less* memory —
   `xmalloc-test`, `larson` — because they run for a fixed time and a serialized allocator simply
   does less work in it.)

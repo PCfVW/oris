@@ -16,6 +16,9 @@ from pathlib import Path
 
 ORDER = ["sys", "mi", "je", "sn", "onik", "onit"]
 NAMES = {"sys": "glibc", "mi": "mimalloc", "je": "jemalloc", "sn": "snmalloc", "onik": "**orisnik**", "onit": "**orisnitsa**"}
+# Tests that run for a fixed time and report throughput: bench.sh replaces their elapsed time
+# by a relative time (inverse throughput), and their peak RSS grows with the work done.
+FIXED_TIME = ("larson", "rptest", "xmalloc", "glibc-thread")
 # Tests that allocate from several threads: Oris serializes them behind its shim's lock.
 THREADED = ("larson", "mstress", "rptest", "alloc-testN", "sh6bench", "sh8bench", "xmalloc", "cache-scratchN", "cache-thrashN", "glibc-thread")
 
@@ -57,7 +60,12 @@ def main(results):
         "*serialized*, not a multithreaded Oris (that is v2.x on the roadmap). The shims also "
         "round every request up to 16 bytes, the alignment `malloc` owes its callers.\n"
     )
-    for title, data, fmt in (("Elapsed time, seconds", time, "{:.2f}"), ("Peak RSS, MiB", rss, "{:.1f}")):
+    out.append(
+        "**Rows marked ‡ run for a fixed time.** mimalloc-bench reports their *time* as a relative "
+        "time derived from throughput (lower is better, as for elapsed time), and their *peak RSS* "
+        "grows with the work done in that time — so a slower allocator can look leaner.\n"
+    )
+    for title, data, fmt in (("Elapsed time, seconds (‡ relative time)", time, "{:.2f}"), ("Peak RSS, MiB", rss, "{:.1f}")):
         out.append(f"### {title} (relative to glibc)\n")
         out.append("| test | " + " | ".join(NAMES[a] for a in allocs) + " |")
         out.append("|---|" + "---:|" * len(allocs))
@@ -71,7 +79,7 @@ def main(results):
                 v = statistics.median(data[test, a])
                 rel = f" ({v / base:.2f}×)" if base and a != "sys" else ""
                 cells.append(fmt.format(v) + rel)
-            mark = " †" if test.startswith(THREADED) else ""
+            mark = (" †" if test.startswith(THREADED) else "") + (" ‡" if test.startswith(FIXED_TIME) else "")
             out.append(f"| {test}{mark} | " + " | ".join(cells) + " |")
         out.append("")
     (results / "summary.md").write_text("\n".join(out) + "\n", encoding="utf-8")

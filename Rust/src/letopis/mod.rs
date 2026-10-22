@@ -14,7 +14,7 @@
 //!
 //! Present only with the `trace` Cargo feature. Without it, every hook the allocator
 //! carries is compiled out (`chronicle!` expands to nothing), so the shipped allocator is
-//! unchanged. **This API is unstable until 1.0**: the record format may grow events as the
+//! unchanged — only the red-black tree's fixups always count their rotations, a local counter the compiler drops when nothing reads it. **This API is unstable until 1.0**: the record format may grow events as the
 //! invariant is tightened.
 
 mod event;

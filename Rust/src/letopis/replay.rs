@@ -55,6 +55,7 @@ pub fn replay<W: fmt::Write>(trace: &str, out: &mut W) -> Result<(), ReplayError
                 .map(|event| norm.event_line(event))
                 .collect::<Result<Vec<_>, _>>()?;
             let result = match outcome {
+                // PROVENANCE: an address read for its value only (a table key or a record location).
                 Outcome::Pointer(Some(ptr)) => norm.location(ptr.addr().get())?,
                 Outcome::Pointer(None) => "null".to_owned(),
                 Outcome::Size(size) => size.to_string(),
@@ -103,8 +104,8 @@ unsafe fn execute(
 ) -> Outcome {
     let pointer =
         |handles: &HashMap<u64, Option<NonNull<u8>>>, h| handles.get(&h).copied().flatten();
-    // CAST: u64 -> usize; every size and alignment in a valid trace is at most 2^30
-    // (constraint C4) and the crate is 64-bit only, so nothing is truncated.
+    // CAST: u64 -> usize; the crate is 64-bit only, so the conversion is lossless (sizes and
+    // alignments are moreover bounded by constraints C3/C4; a calloc's count is not, but fits).
     #[allow(clippy::as_conversions, clippy::cast_possible_truncation)]
     let us = |v: u64| v as usize;
     match op {

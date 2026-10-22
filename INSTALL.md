@@ -32,8 +32,8 @@ Oris is a two-port monorepo; each port builds independently with its own toolcha
   `cargo run --example catch_an_overrun --features debug-allocator`.
 - **`--features trace`** enables `letopis` (*летопис*, "chronicle"), new in v0.3.0: the
   transition hooks, the trace replayer and the recorder that check the cross-port invariant
-  (the public `orisnik::letopis` module). Stable, no nightly needed; off by default and
-  compiled out entirely. `cargo test --features trace`, and
+  (the public `orisnik::letopis` module). Stable, no nightly needed; off by default, and
+  without it no event emission is compiled in. `cargo test --features trace`, and
   `cargo run --example replay --features trace -- <trace-file>` to print a trace's
   transition record. See [`docs/traces.md`](docs/traces.md).
 

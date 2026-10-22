@@ -22,7 +22,8 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
     red-black tree inserts and erases (with which branch ran and how many rotations it cost),
     small-free-list pushes and erases, and the most-recently-freed cache.
     [`examples/traces/EVENTS.md`](examples/traces/EVENTS.md) lists each site in HPHA, Rust
-    and Zig. With the feature or flag off the hooks do not exist in the compiled code.
+    and Zig. With the feature or flag off no emission exists in the compiled code (only the
+    tree fixups' rotation counting remains, a local count nothing reads).
   - **`replay`** runs a trace on a fresh instance and writes its **transition record**, every
     address normalized to (mapping id, offset), so records compare byte for byte across
     ports and OSes. A trace is checked in full first: malformed lines and calls with no
@@ -43,7 +44,8 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
     from seeded planner, parser and synthetic workloads, identically on every OS.
   - **Trace CI** (`.github/workflows/trace-ci.yml`): `tracegen verify`, and both ports
     replaying the corpus on Linux, Windows and macOS, and HPHA on Windows, every record
-    compared with the committed one.
+    compared with the committed one; every trace of `examples/traces/rejected/` refused by all
+    three with the same message; and the benchmark tools built.
 - **Benchmarks (v0.3.0).** [`benchmarks/`](benchmarks/README.md): a trace-replay harness per
   port (Rust: `orisnik` against the system allocator, mimalloc, jemalloc and snmalloc;
   Zig: `orisnitsa` against `smp_allocator` and `c_allocator`) measuring wall time,

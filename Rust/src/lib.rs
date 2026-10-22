@@ -26,7 +26,7 @@
 //! and a `Recorder` that captures a program's calls as such a trace.
 //! The same trace replayed by `orisnitsa` (the Zig port) and by the HPHA reference must give
 //! a byte-identical record: that is how the two ports' shared invariant is checked. Without
-//! the feature every hook is compiled out.
+//! the feature every event emission is compiled out.
 //!
 //! ```no_run
 //! use orisnik::Orisnik;

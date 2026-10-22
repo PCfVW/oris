@@ -26,7 +26,9 @@ const spomen = @import("spomen.zig");
 /// - **A null pointer passed to `free`, `resize` or `querySize`** is forwarded but not
 ///   recorded: the call does nothing, and a trace has no handle for it.
 /// - **A pointer the recorder did not hand out** is forwarded unchanged and recorded under a
-///   handle that was never bound — which the replayer rejects (constraint C2).
+///   handle that was never bound. Freed, resized or sized, that handle makes the replayer
+///   reject the trace (constraint C2); passed to `realloc`, it is legal and replays as
+///   `realloc(null, size)` — the recorded trace then differs from what the program did.
 ///
 /// Neither a write error nor running out of memory for the table interrupts the program:
 /// the first one is remembered, reported by `finish`, and nothing more is written after it.

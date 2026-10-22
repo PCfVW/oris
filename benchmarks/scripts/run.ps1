@@ -28,12 +28,15 @@ function Invoke-Checked([scriptblock]$Block) {
     if ($LASTEXITCODE -ne 0) { throw "failed: $Block" }
 }
 
+$savedTargetDir = $env:CARGO_TARGET_DIR
 if (-not $SkipBuild) {
     Push-Location (Join-Path $bench 'scripts\tracegen')
     try {
         $env:CARGO_TARGET_DIR = "$target\tracegen"
-        Invoke-Checked { cargo run --release -q -- generate --tier bench }
+        # verify first: it regenerates every trace in memory and checks it against the committed
+        # checksums, which `generate` would otherwise rewrite before they could be compared.
         Invoke-Checked { cargo run --release -q -- verify }
+        Invoke-Checked { cargo run --release -q -- generate --tier bench }
     } finally { Pop-Location }
     Push-Location (Join-Path $bench 'scripts\bench-rust')
     try {
@@ -42,7 +45,7 @@ if (-not $SkipBuild) {
     } finally { Pop-Location }
     Push-Location (Join-Path $bench 'scripts\bench-zig')
     try { Invoke-Checked { zig build -Doptimize=ReleaseFast --prefix "$target\bench-zig" } } finally { Pop-Location }
-    Remove-Item Env:CARGO_TARGET_DIR
+    $env:CARGO_TARGET_DIR = $savedTargetDir
 }
 $rustBin = "$target\bench-rust\release\bench-rust.exe"
 $zigBin = "$target\bench-zig\bin\bench-zig.exe"

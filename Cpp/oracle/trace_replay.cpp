@@ -24,6 +24,10 @@
 #include <string>
 #include <vector>
 
+// Records name sizes and offsets as 64-bit values, and the ports are 64-bit only: a 32-bit
+// oracle (an x86 developer prompt) would write different records, so refuse to build one.
+static_assert(sizeof(void*) == 8, "the trace oracle must be built for a 64-bit target (vcvars64)");
+
 // ---- the hooks' storage (declared in letopis_hooks.h) ----
 
 int letopis_branch = LETOPIS_BRANCH_NODE;
@@ -395,13 +399,17 @@ struct Normalizer {
 			live[e.a] = Mapping{e.b, id};
 			*out = format("map %c m%llu %zu", e.type == LETOPIS_MAP_BUCKET ? 'b' : 't', id, e.b);
 			return true;
-		case LETOPIS_UNMAP:
-			if (!mapping(e.a, &id))
+		case LETOPIS_UNMAP: {
+			// An unmap names a whole mapping, by its base exactly.
+			std::map<size_t, Mapping>::iterator it = live.find(e.a);
+			if (it == live.end())
 				return false;
-			live.erase(e.a);
+			id = it->second.id;
+			live.erase(it);
 			++unmaps;
 			*out = format("unmap m%llu %zu", id, e.b);
 			return true;
+		}
 		case LETOPIS_PAGE_SPAWN:
 		case LETOPIS_PAGE_RELEASE:
 		case LETOPIS_PAGE_FULL:
@@ -526,6 +534,9 @@ int replay(const std::vector<Op>& ops) {
 } // namespace
 
 int main(int argc, char** argv) {
+	// HPHA's asserts are on, on purpose. A failing one should print and exit, never wait on a
+	// Windows Error Reporting dialog (which would stall an unattended CI runner).
+	_set_abort_behavior(0, _CALL_REPORTFAULT);
 	if (argc != 2) {
 		fprintf(stderr, "usage: trace_replay <trace-file>\n");
 		return 2;

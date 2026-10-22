@@ -225,6 +225,7 @@ impl Tree {
     // `self` carries the event tap, which exists only with `trace`.
     #[cfg_attr(not(feature = "trace"), allow(clippy::unused_self))]
     unsafe fn split(&self, bl: *mut BlockHeader, size: usize) {
+        // PROVENANCE: addresses read for their value only, to name memory in the record.
         chronicle!(
             self.tap,
             Event::Split {
@@ -244,6 +245,7 @@ impl Tree {
     // `self` carries the event tap, which exists only with `trace`.
     #[cfg_attr(not(feature = "trace"), allow(clippy::unused_self))]
     unsafe fn shift(&self, bl: *mut BlockHeader, offs: usize) -> *mut BlockHeader {
+        // PROVENANCE: addresses read for their value only, to name memory in the record.
         chronicle!(
             self.tap,
             Event::Shift {
@@ -265,6 +267,7 @@ impl Tree {
     // `self` carries the event tap, which exists only with `trace`.
     #[cfg_attr(not(feature = "trace"), allow(clippy::unused_self))]
     unsafe fn merge(&self, bl: *mut BlockHeader) {
+        // PROVENANCE: addresses read for their value only, to name memory in the record.
         chronicle!(self.tap, Event::Merge { block: bl.addr() });
         // SAFETY: forwarded from this function's own contract.
         unsafe { BlockHeader::unlink(bl) };
@@ -330,6 +333,7 @@ impl Tree {
         let ptr = os::map(size)?;
         self.home.latch(self);
         self.allocated_bytes.set(self.allocated_bytes.get() + size);
+        // PROVENANCE: addresses read for their value only, to name memory in the record.
         chronicle!(
             self.tap,
             Event::Map {
@@ -346,6 +350,7 @@ impl Tree {
     /// # Safety
     /// `ptr`/`size` must be a still-live result of [`Tree::system_alloc`] on `self`.
     unsafe fn system_free(&self, ptr: NonNull<u8>, size: usize) {
+        // PROVENANCE: addresses read for their value only, to name memory in the record.
         chronicle!(
             self.tap,
             Event::Unmap {
@@ -563,6 +568,7 @@ impl Tree {
                 let node = unsafe { NonNull::new_unchecked(node) };
                 #[cfg_attr(not(feature = "trace"), allow(unused_variables))]
                 let (kind, rotations) = self.free_tree.insert_counted(node);
+                // PROVENANCE: addresses read for their value only, to name memory in the record.
                 chronicle!(
                     self.tap,
                     Event::TreeInsert {
@@ -580,6 +586,7 @@ impl Tree {
                 // SAFETY: same non-null reasoning as the `FreeNode` case above.
                 let node = unsafe { NonNull::new_unchecked(node) };
                 self.small_free_list.push_back(node);
+                // PROVENANCE: addresses read for their value only, to name memory in the record.
                 chronicle!(
                     self.tap,
                     Event::ListPush {
@@ -590,6 +597,7 @@ impl Tree {
             }
         }
         self.mr_free_block.set(bl);
+        // PROVENANCE: addresses read for their value only, to name memory in the record.
         chronicle!(
             self.tap,
             Event::Mr {
@@ -621,6 +629,7 @@ impl Tree {
             let node = unsafe { NonNull::new_unchecked(node) };
             #[cfg_attr(not(feature = "trace"), allow(unused_variables))]
             let (kind, rotations) = self.free_tree.erase_counted(node);
+            // PROVENANCE: addresses read for their value only, to name memory in the record.
             chronicle!(
                 self.tap,
                 Event::TreeErase {
@@ -637,6 +646,7 @@ impl Tree {
             // SAFETY: same non-null reasoning as the `FreeNode` case above.
             let node = unsafe { NonNull::new_unchecked(node) };
             list::unlink_node(node);
+            // PROVENANCE: addresses read for their value only, to name memory in the record.
             chronicle!(
                 self.tap,
                 Event::ListErase {

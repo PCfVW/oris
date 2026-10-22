@@ -39,7 +39,7 @@ event is emitted in each implementation.
 
 trace              = header , { line } ;
 
-header             = "oris-trace" , sp , "1" , [ sp ] , eol ;
+header             = [ sp ] , "oris-trace" , sp , "1" , [ sp ] , eol ;
 
 line               = blank_line | comment_line | op_line ;
 blank_line         = [ sp ] , eol ;
@@ -68,9 +68,13 @@ number             = "0" | nonzero_digit , { digit } ;
 
 nonzero_digit      = "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
 digit              = "0" | nonzero_digit ;
-sp                 = ( " " | "\t" ) , { " " | "\t" } ;
-eol                = [ "\r" ] , "\n" ;
-text_char          = ? any Unicode scalar value except "\r" and "\n" ? ;
+sp                 = ( " " | tab ) , { " " | tab } ;
+eol                = [ cr ] , lf ;
+text_char          = ? any Unicode scalar value except carriage return and line feed ? ;
+
+tab                = ? US-ASCII character 9 (horizontal tab) ? ;
+cr                 = ? US-ASCII character 13 (carriage return) ? ;
+lf                 = ? US-ASCII character 10 (line feed) ? ;
 ```
 
 Every `number` must fit in an unsigned 64-bit integer; a reader rejects one that does not. The
@@ -123,7 +127,7 @@ replayer never executes undefined behaviour and the C++ oracle never meets an in
 | C1 | `alloc`, `alloc_aligned` and `calloc` name an **unbound** handle. | Rebinding a bound handle would lose its pointer: a leak, and a handle that no longer names one block. |
 | C2 | `free`, `free_sized`, `free_sized_aligned`, `resize` and `size` name a **bound** handle. | An unbound handle is either never allocated or already freed: a use-after-free or double free. (A handle bound to null is fine; every one of these calls accepts null.) |
 | C3 | Every alignment is 0 or a power of two, and at most **65536**. | HPHA asserts the power of two. Above 65536 (HPHA's `PAGE_SIZE`), `tree_extract_aligned` compares *absolute* addresses modulo the alignment, and the OS gives no guarantee about those; at or below it, every mapping is 65536-aligned in all three implementations, so the decision depends only on offsets. |
-| C4 | Every size is at most **2³⁰** (1 GiB), and so is `N × S` for a `calloc`. | Excludes E1 and E2 (wrapping size arithmetic). It also keeps every request one a real machine serves: an out-of-memory result would depend on the OS, so the record would too. |
+| C4 | Every size is at most **2³⁰** (1 GiB), and so is the product `N × S` of a `calloc` (its factors are bounded only through it). | Excludes E1 and E2 (wrapping size arithmetic). It also keeps every request one a real machine serves: an out-of-memory result would depend on the OS, so the record would too. |
 | C5 | `resize` sizes are at least 1. | E7: HPHA asserts `size > 0`. |
 | C6 | `free_sized h S` only directly after the handle was bound by `alloc h S`, or by `calloc h N M` with `N × M = S`, or by `alloc_aligned h S A` with `A ≤ 8` — no `realloc`, `realloc_aligned` or `resize` of the handle in between — and `S ≥ 1`. | The size of a sized free selects a bucket (`bucket_spacing_function(S)`); after a realloc that stayed in its slot, a different size would select a different bucket than the one the block lives in. `S = 0` is E3. |
 | C7 | `free_sized_aligned h S A` only directly after the handle was bound by `alloc_aligned h S A`, with the same `S` and `A`, under the same no-intervening-call rule as C6; `S ≥ 1` and `A ≥ 1`. | As C6, with the alignment also selecting the bucket. `A = 0` is E4. |
@@ -151,12 +155,16 @@ Writers (`tracegen`, the recorders) emit:
   reject a trace that violates §1.3 before replaying it, and MUST report the 1-based line number
   of the first offending line.
 - **Readers MAY** accept a final line that lacks its `eol`.
+- **Readers treat the file as bytes.** An operation line is ASCII or a syntax error; the bytes of
+  a comment are skipped unread, so a comment need not be valid UTF-8 (all three replayers accept
+  it).
 
 ### 1.6 Annotated example
 
 ```text
 oris-trace 1
-# A small allocation, a large one, a realloc that grows in place, and a purge.
+# The annotated example of GRAMMAR.md section 1.6: a small allocation, a large one,
+# a realloc that grows in place, a sized free, a free, and a purge.
 alloc h0 24
 alloc h1 1000
 realloc h1 2000
@@ -172,6 +180,7 @@ purge
   place, so the pointer does not move.
 - `free_sized h0 24` is allowed by C6: the handle was bound by `alloc h0 24` and nothing has
   touched it since.
+- `free h1` needs no size: the allocator recovers everything from the pointer.
 - `purge` returns the now-idle arena and the empty bucket page to the OS.
 
 ---
@@ -185,10 +194,12 @@ purge
 
 record        = "oris-record 1" , lf , { entry } , summary ;
 
-entry         = "#" , number , " " , op , " -> " , result , " a=" , number , lf ,
+entry         = "#" , number , " " , canonical_op , " -> " , result , " a=" , number , lf ,
                 { "  " , event , lf } ;
 
-(* `op` is the canonical rendering of a trace operation, section 1.1. *)
+(* A trace operation (section 1.1) in its canonical form (section 1.4): the same productions
+   with every `sp` a single " ". *)
+canonical_op  = ? op of section 1.1, each sp replaced by exactly one " " ? ;
 result        = location | "null" | number | "-" ;
 
 event         = map | unmap
@@ -224,7 +235,7 @@ number        = "0" | nonzero_digit , { digit } ;
 nonzero_digit = "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
 digit         = "0" | nonzero_digit ;
 hex_digit     = digit | "a" | "b" | "c" | "d" | "e" | "f" ;
-lf            = "\n" ;
+lf            = ? US-ASCII character 10 (line feed) ? ;
 ```
 
 ### 2.2 Normalization

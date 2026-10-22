@@ -112,8 +112,8 @@ fn unmapped(err: Error, diagnostic: ?*Diagnostic, line: usize) Error {
 /// (for `realloc`/`reallocAligned` only) unbound — what a trace that passed
 /// `letopis_trace.parse` guarantees.
 fn execute(gpa: std.mem.Allocator, allocator: *Traced, op: Op, handles: *Handles) Error!Outcome {
-    // CAST: u64 -> usize; every size and alignment in a valid trace is at most 2^30
-    // (constraint C4) and the package is 64-bit only, so nothing is truncated.
+    // CAST: u64 -> usize; the package is 64-bit only, so every `@intCast` below is lossless
+    // (sizes and alignments are moreover bounded by constraints C3/C4; a calloc's count is not).
     switch (op) {
         .alloc => |o| return bind(gpa, handles, o.h, allocator.alloc(@intCast(o.size))),
         .alloc_aligned => |o| return bind(gpa, handles, o.h, allocator.allocAligned(@intCast(o.size), @intCast(o.alignment))),

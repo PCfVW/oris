@@ -14,14 +14,14 @@ A Rust and Zig port of Dimitar Lazarov's **HPHA** (2007).
 [![Zig](https://img.shields.io/badge/Zig-0.16.0-f7a41d?logo=zig)](https://ziglang.org/)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
-**Document revision 0.6. v0.2.0 has shipped: both the `orisnik` (Rust) and `orisnitsa` (Zig) allocator cores are released, in lockstep. v0.3.0 is in progress on `main`.**
+**Document revision 0.6. v0.2.0 has shipped: both the `orisnik` (Rust) and `orisnitsa` (Zig) allocator cores are released, in lockstep. v0.3.0 is in progress.**
 
 ## Status
 
 - **`orisnik` (Rust)** — v0.2.0 is released: the bucket (small-allocation) and red-black-tree best-fit (large-allocation) sub-allocators, plus the three public surfaces (`oris_*` C-ABI, `GlobalAlloc`, an optional `Allocator` trait), and — new in v0.2.0 — an opt-in debug allocator (guard bytes, allocation records, leak detection, `check()`/`report()`; see the [user guide](docs/debug-allocator.md)). 115 tests (212 with the debug allocator), the entire public surface Miri-covered. See [Rust/README.md](Rust/README.md) for details and [CHANGELOG.md](CHANGELOG.md) for what shipped.
 - **`orisnitsa` (Zig)** — v0.2.0 is released: the same bucket and red-black-tree best-fit sub-allocators, plus the three public surfaces (`Orisnitsa`'s own methods, a `std.mem.Allocator` vtable, the `oris_*` C-ABI), and the same opt-in debug allocator (`OrisnitsaWith(.{ .debug = true })`). 195+ tests, verified in Debug/ReleaseSafe/ReleaseFast across all three OSes — Zig's analog of the Rust port's Miri gate. See [Zig/README.md](Zig/README.md) for details and [CHANGELOG.md](CHANGELOG.md) for what shipped.
 - Both ports **ship in lockstep** (see [Versioning policy](ROADMAP.md#versioning-policy)): one version number means the same feature set and the same internal state transitions on both sides. See [RELEASING.md](RELEASING.md) for the checklist that cuts each release.
-- **v0.3.0 (unreleased, on `main`) checks that promise instead of arguing it.** An allocation *trace* replayed by `orisnik`, by `orisnitsa` and by the 2007 HPHA reference itself must produce a byte-identical *transition record* — every page spawn, split, merge, tree insertion and rotation. A corpus of 19 traces does, on every push (`trace-ci.yml`). The same milestone brings the first benchmarks: trace replay against the system allocator, mimalloc, jemalloc, snmalloc and Zig's allocators, and mimalloc-bench. See [docs/traces.md](docs/traces.md) and [benchmarks/](benchmarks/README.md).
+- **v0.3.0 (unreleased) checks that promise instead of arguing it.** An allocation *trace* replayed by `orisnik`, by `orisnitsa` and by the 2007 HPHA reference itself must produce a byte-identical *transition record* — every page spawn, split, merge, tree insertion and rotation. A corpus of 19 traces does, checked on every pull request and push to `main` (`trace-ci.yml`). The same milestone brings the first benchmarks: trace replay against the system allocator, mimalloc, jemalloc, snmalloc and Zig's allocators, and mimalloc-bench. See [docs/traces.md](docs/traces.md) and [benchmarks/](benchmarks/README.md).
 
 The two foundational documents:
 
@@ -31,8 +31,8 @@ The two foundational documents:
 And, for using the allocator rather than understanding it:
 
 - **[docs/debug-allocator.md](docs/debug-allocator.md)** — the debug allocator's user guide: what it catches, how to read its messages, the `#[global_allocator]` recipe. Runnable examples: `cargo run --example catch_an_overrun --features debug-allocator` (from `Rust/`), `zig build example` (from `Zig/`).
-- **[docs/traces.md](docs/traces.md)** — traces and transition records: replaying a trace, recording your own program, the corpus and the CI gate that holds both ports to HPHA (v0.3.0, on `main`).
-- **[benchmarks/](benchmarks/README.md)** — how Oris compares with the allocators in use today, and the protocol behind every number ([methodology](benchmarks/methodology.md)) (v0.3.0, on `main`).
+- **[docs/traces.md](docs/traces.md)** — traces and transition records: replaying a trace, recording your own program, the corpus and the CI gate that holds both ports to HPHA (v0.3.0, unreleased).
+- **[benchmarks/](benchmarks/README.md)** — how Oris compares with the allocators in use today, and the protocol behind every number ([methodology](benchmarks/methodology.md)) (v0.3.0, unreleased).
 
 ## Structure
 

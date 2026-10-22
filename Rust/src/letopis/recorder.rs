@@ -27,8 +27,10 @@ use std::collections::HashMap;
 ///   recorded: the call does nothing, and a trace has no handle for it.
 /// - **A pointer the recorder did not hand out** (from another allocator, or from before
 ///   recording started) is passed through to the allocator unchanged and recorded under a
-///   handle that was never bound — which the replayer rejects (constraint C2), so a
-///   recording that would not replay says so.
+///   handle that was never bound. Freed, resized or sized, that handle makes the replayer
+///   reject the trace (constraint C2), so a recording that would not replay says so; passed
+///   to `realloc`, it is legal and replays as `realloc(null, size)` — the recorded trace then
+///   differs from what the program did, and nothing can tell.
 ///
 /// A write error does not interrupt the program: the first one is kept and returned by
 /// [`finish`](Self::finish), and nothing more is written after it.
@@ -103,12 +105,14 @@ impl<'a, W: fmt::Write> Recorder<'a, W> {
 
     /// The handle `ptr` was recorded under, or a never-bound one (see the type's doc).
     fn handle_of(&mut self, ptr: Option<NonNull<u8>>) -> u64 {
+        // PROVENANCE: an address read for its value only (a table key or a record location).
         let known = ptr.and_then(|p| self.handles.get(&p.addr().get()).copied());
         known.unwrap_or_else(|| self.fresh_handle())
     }
 
     fn bind(&mut self, h: u64, ptr: Option<NonNull<u8>>) -> Option<NonNull<u8>> {
         if let Some(p) = ptr {
+            // PROVENANCE: an address read for its value only (a table key or a record location).
             self.handles.insert(p.addr().get(), h);
         }
         ptr
@@ -118,6 +122,7 @@ impl<'a, W: fmt::Write> Recorder<'a, W> {
     fn unbind(&mut self, ptr: Option<NonNull<u8>>) -> Option<u64> {
         let p = ptr?;
         let h = self.handle_of(ptr);
+        // PROVENANCE: an address read for its value only (a table key or a record location).
         self.handles.remove(&p.addr().get());
         Some(h)
     }
@@ -190,6 +195,7 @@ impl<'a, W: fmt::Write> Recorder<'a, W> {
     ) -> Option<NonNull<u8>> {
         if new.is_some() || size == 0 {
             if let Some(p) = old {
+                // PROVENANCE: an address read for its value only (a table key or a record location).
                 self.handles.remove(&p.addr().get());
             }
         }

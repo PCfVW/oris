@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Reading a trace: the contract grammar of `examples/traces/GRAMMAR.md` §1.1, then the
 //! semantic constraints of §1.3, so that nothing undefined is ever replayed. Ports
-//! `orisnik`'s `letopis/trace.rs`; the error messages are the same, word for word.
+//! `orisnik`'s `letopis/trace.rs`; the error messages are the same, word for word (a message
+//! longer than 511 bytes, which only a pathological token makes, is truncated here and in the
+//! C++ oracle).
 
 const std = @import("std");
 
@@ -32,8 +34,9 @@ pub const Error = error{
 pub const Diagnostic = struct {
     /// The offending line, or 0.
     line: usize = 0,
-    /// Backing storage for the message.
-    buf: [256]u8 = undefined,
+    /// Backing storage for the message. 512 bytes, as the C++ oracle's buffer: a message
+    /// longer than that (only a pathologically long token makes one) is truncated in both.
+    buf: [512]u8 = undefined,
     /// How many bytes of `buf` hold the message.
     len: usize = 0,
 
@@ -276,6 +279,7 @@ fn validate(gpa: std.mem.Allocator, ops: []const Line, diag: *Diagnostic) Error!
                 const fits = if (entry.value) |b| o.size >= 1 and o.alignment >= 1 and b.size == o.size and b.alignment == o.alignment else false;
                 if (!fits) return semantic(diag, n, "C7: free_sized_aligned h{d} {d} {d} does not directly follow alloc_aligned h{d} {d} {d}", .{ o.h, o.size, o.alignment, o.h, o.size, o.alignment });
             },
+            // EXPLICIT: `purge` binds and frees nothing; no constraint applies.
             .purge => {},
         }
     }

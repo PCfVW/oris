@@ -85,8 +85,12 @@ impl Normalizer {
                 let _ = write!(line, "map {kind} m{id} {bytes}");
             }
             Event::Unmap { base, bytes } => {
-                let id = self.mapping(base)?;
-                self.live.remove(&base);
+                // An unmap names a whole mapping, by its base exactly.
+                let id = self
+                    .live
+                    .remove(&base)
+                    .ok_or(ReplayError::Unmapped { address: base })?
+                    .id;
                 self.unmaps += 1;
                 let _ = write!(line, "unmap m{id} {bytes}");
             }

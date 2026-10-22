@@ -2,7 +2,7 @@
 //! Replays a trace file on a fresh `Orisnik` and prints its transition record on stdout.
 //!
 //! ```text
-//! cargo run --example replay --features trace -- ../examples/traces/handwritten/realloc.trace
+//! cargo run --example replay --features trace -- ../examples/traces/handwritten/realloc-branches.trace
 //! ```
 //!
 //! The Rust leg of the cross-port trace gate: `orisnitsa`'s `zig build replay -- <file>` and
@@ -19,8 +19,10 @@ fn main() -> ExitCode {
         eprintln!("usage: replay <trace-file>");
         return ExitCode::from(2);
     };
-    let trace = match std::fs::read_to_string(&path) {
-        Ok(trace) => trace,
+    // Read as bytes and decode leniently: a comment may hold anything (GRAMMAR.md §1.5), and the
+    // Zig and C++ replayers read raw bytes too; an operation line is ASCII or a syntax error.
+    let trace = match std::fs::read(&path) {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
         Err(error) => {
             eprintln!("replay: failed to read {path}: {error}");
             return ExitCode::from(2);

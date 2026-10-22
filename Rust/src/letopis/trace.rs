@@ -315,6 +315,7 @@ fn validate(ops: &[Line]) -> Result<(), ReplayError> {
                     ));
                 }
             }
+            // EXPLICIT: `purge` binds and frees nothing; no constraint applies.
             Op::Purge => {}
         }
     }
