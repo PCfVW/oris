@@ -1,0 +1,40 @@
+[package]
+name = "bench-rust"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Replays Oris traces through orisnik and the Rust allocator landscape, measuring wall time, latency and memory"
+
+[[bin]]
+name = "bench-rust"
+path = "src/main.rs"
+
+[dependencies]
+orisnik = { path = "../../../Rust" }
+serde_json = "1"
+mimalloc = { version = "0.1", default-features = false, optional = true }
+snmalloc-rs = { version = "0.3", optional = true }
+
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+# jemalloc does not build with MSVC; the Windows results simply have no jemalloc column.
+tikv-jemallocator = { version = "0.6", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_ProcessStatus", "Win32_System_Threading", "Win32_System_Memory", "Win32_Foundation"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[features]
+default = ["mimalloc", "jemalloc", "snmalloc"]
+mimalloc = ["dep:mimalloc"]
+jemalloc = ["dep:tikv-jemallocator"]
+snmalloc = ["dep:snmalloc-rs"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = false

@@ -8,6 +8,12 @@
 # and the helper crates' build output
 /benchmarks/traces/
 /benchmarks/scripts/*/target/
+/benchmarks/scripts/target-*/
+/benchmarks/scripts/bench-zig/.zig-cache/
+/benchmarks/scripts/bench-zig/zig-out/
+/benchmarks/mimalloc-bench/preload-rust/target/
+/benchmarks/mimalloc-bench/preload-zig/.zig-cache/
+/benchmarks/mimalloc-bench/preload-zig/zig-out/
 
 # Zig
 /Zig/zig-cache/
