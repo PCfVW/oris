@@ -418,8 +418,16 @@ zero-filled heap allocation. A native `cargo test` still exercises the real sysc
 adds coverage rather than substituting for it, and `os.rs`'s own tests stay Miri-ignored on
 purpose — they are the ones testing the syscalls themselves.
 
-Two consequences for new tests:
+Three consequences for new tests:
 
+- **A doc example that allocates cannot reach the stand-in.** Rustdoc builds each example
+  against the library without `cfg(test)`, so its allocations reach the real syscalls: on Unix
+  Miri rejects `os::map`'s trimming `munmap` (it frees a mapping only whole), on Windows it cannot
+  call `VirtualAlloc` at all. Wrap such an example in a hidden `# #[cfg(not(miri))] { … # }` with
+  a hidden comment naming the unit test that Miri-covers the same calls — there must be one (see
+  `letopis::Recorder`'s example). A native `cargo test` still runs the example in full. Found by
+  v0.3.0's first hosted Miri run, because the local runs had been filtered to the unit tests: run
+  the gate unfiltered, doc tests included, before a tag.
 - **Do not add `#[cfg_attr(miri, ignore)]` to an allocator test.** It is no longer needed, and
   it silently removes the test from the gate. Reserve it for tests whose *runtime* under Miri is
   prohibitive, and then scale the workload instead where you can (see

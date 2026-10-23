@@ -36,6 +36,11 @@ use std::collections::HashMap;
 /// [`finish`](Self::finish), and nothing more is written after it.
 ///
 /// ```
+/// # // A doc test is built without `cfg(test)`, so it maps real memory (no `os::test_vm`),
+/// # // which Miri cannot model: the Unix `os::map` trims an over-sized mapping, and Miri
+/// # // only frees a mapping whole. Under Miri this example compiles to nothing; the same
+/// # // calls are Miri-covered by `the_recorder_writes_what_replays_to_the_same_record`.
+/// # #[cfg(not(miri))] {
 /// use orisnik::Orisnik;
 /// use orisnik::letopis::{Recorder, replay};
 ///
@@ -50,6 +55,7 @@ use std::collections::HashMap;
 /// let mut record = String::new();
 /// replay(&trace, &mut record).unwrap();
 /// assert!(record.starts_with("oris-record 1\n#0 alloc h0 24 -> m0+0x0 a=65536\n"));
+/// # }
 /// ```
 pub struct Recorder<'a, W: fmt::Write> {
     /// The allocator every call is forwarded to.
