@@ -12,6 +12,12 @@
 //! - `wall`: `--warmup` untimed replays, then `--repetitions` timed ones (one record each).
 //! - `latency`: `--warmup` untimed replays, then one replay timing every operation.
 //! - `memory`: one replay (no warmup) sampling the resident set every 256 operations.
+//! - `breakdown` (diagnosis): as `latency`, but every operation's time is filed under its kind
+//!   and path (`alloc small`, `realloc small->large`, `free large`, `purge`, ...), with count,
+//!   total and percentiles per category — where the wall time goes.
+//!
+//! `--no-purge` turns the trace's `purge` operations into no-ops for every allocator (they
+//! already are for all but `orisnik`): the ablation that isolates what purging costs.
 //!
 //! The trace is parsed before anything is measured. One allocator instance serves every
 //! replay of the process; between replays whatever the trace left live is freed, untimed.
@@ -39,6 +45,8 @@ struct Args {
     warmup: usize,
     repetitions: usize,
     env: serde_json::Value,
+    /// Run the trace's `purge` operations (the default), or skip them (`--no-purge`).
+    purge: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -49,6 +57,7 @@ fn parse_args() -> Result<Args, String> {
         warmup: 2,
         repetitions: 10,
         env: serde_json::Value::Null,
+        purge: true,
     };
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
@@ -69,6 +78,7 @@ fn parse_args() -> Result<Args, String> {
                     .map_err(|e| format!("failed to read {path}: {e}"))?;
                 args.env = serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
             }
+            "--no-purge" => args.purge = false,
             "--list" => {
                 println!("{}", backend::NAMES.join(" "));
                 std::process::exit(0);
@@ -77,7 +87,7 @@ fn parse_args() -> Result<Args, String> {
         }
     }
     if args.allocator.is_empty() || args.trace.is_empty() || args.pass.is_empty() {
-        return Err("usage: bench-rust --allocator <name> --trace <file> --pass wall|latency|memory [--warmup N] [--repetitions N] [--env-file <json>]".into());
+        return Err("usage: bench-rust --allocator <name> --trace <file> --pass wall|latency|memory|breakdown [--warmup N] [--repetitions N] [--no-purge] [--env-file <json>]".into());
     }
     Ok(args)
 }
@@ -125,6 +135,7 @@ fn record(args: &Args, trace: &Trace, extra: serde_json::Value) -> serde_json::V
         "trace": trace.name,
         "ops": trace.ops.len(),
         "pass": args.pass,
+        "purge": args.purge,
         "env": args.env,
     });
     if let (Some(base), serde_json::Value::Object(fields)) = (record.as_object_mut(), extra) {
@@ -138,12 +149,12 @@ fn run(backend: &dyn Backend, trace: &Trace, args: &Args) -> Result<(), String> 
     match args.pass.as_str() {
         "wall" => {
             for _ in 0..args.warmup {
-                replay(backend, trace, &mut slots, &mut Probe::None)?;
+                replay(backend, trace, &mut slots, args.purge, &mut Probe::None)?;
                 release(backend, &mut slots);
             }
             for rep in 0..args.repetitions {
                 let start = Instant::now();
-                replay(backend, trace, &mut slots, &mut Probe::None)?;
+                replay(backend, trace, &mut slots, args.purge, &mut Probe::None)?;
                 let wall_ns = start.elapsed().as_nanos();
                 release(backend, &mut slots);
                 println!(
@@ -158,11 +169,17 @@ fn run(backend: &dyn Backend, trace: &Trace, args: &Args) -> Result<(), String> 
         }
         "latency" => {
             for _ in 0..args.warmup {
-                replay(backend, trace, &mut slots, &mut Probe::None)?;
+                replay(backend, trace, &mut slots, args.purge, &mut Probe::None)?;
                 release(backend, &mut slots);
             }
             let mut times = Vec::with_capacity(trace.ops.len());
-            replay(backend, trace, &mut slots, &mut Probe::Latency(&mut times))?;
+            replay(
+                backend,
+                trace,
+                &mut slots,
+                args.purge,
+                &mut Probe::Latency(&mut times),
+            )?;
             release(backend, &mut slots);
             times.sort_unstable();
             let at = |q: f64| {
@@ -184,13 +201,58 @@ fn run(backend: &dyn Backend, trace: &Trace, args: &Args) -> Result<(), String> 
                 )
             );
         }
+        "breakdown" => {
+            for _ in 0..args.warmup {
+                replay(backend, trace, &mut slots, args.purge, &mut Probe::None)?;
+                release(backend, &mut slots);
+            }
+            let mut times: std::collections::BTreeMap<&'static str, Vec<u64>> =
+                std::collections::BTreeMap::new();
+            replay(
+                backend,
+                trace,
+                &mut slots,
+                args.purge,
+                &mut Probe::Breakdown(&mut times),
+            )?;
+            release(backend, &mut slots);
+            let mut categories = serde_json::Map::new();
+            let mut total_ns = 0u64;
+            for (name, mut t) in times {
+                t.sort_unstable();
+                let at = |q: f64| t[((t.len() as f64 - 1.0) * q).round() as usize];
+                let sum: u64 = t.iter().sum();
+                total_ns += sum;
+                categories.insert(
+                    name.to_owned(),
+                    serde_json::json!({
+                        "count": t.len(), "total_ns": sum, "p50_ns": at(0.5), "p99_ns": at(0.99),
+                        "p999_ns": at(0.999), "max_ns": t[t.len() - 1],
+                    }),
+                );
+            }
+            println!(
+                "{}",
+                record(
+                    args,
+                    trace,
+                    serde_json::json!({ "total_ns": total_ns, "categories": categories })
+                )
+            );
+        }
         "memory" => {
             let baseline = rss::current();
             let mut sampler = Sampler {
                 peak_rss: baseline,
                 peak_mapped: backend.mapped().unwrap_or(0),
             };
-            replay(backend, trace, &mut slots, &mut Probe::Memory(&mut sampler))?;
+            replay(
+                backend,
+                trace,
+                &mut slots,
+                args.purge,
+                &mut Probe::Memory(&mut sampler),
+            )?;
             let after = rss::current();
             sampler.peak_rss = sampler.peak_rss.max(after);
             let peak_live = trace.peak_live;
@@ -240,6 +302,56 @@ enum Probe<'a> {
     None,
     Latency(&'a mut Vec<u64>),
     Memory(&'a mut Sampler),
+    Breakdown(&'a mut std::collections::BTreeMap<&'static str, Vec<u64>>),
+}
+
+/// The category an operation's time is filed under in the `breakdown` pass: its kind and
+/// path — `small` up to 256 bytes (the bucket path), `large` above — judged by the size
+/// requested, or for a free/resize/size by the size the block has.
+fn category(op: Op, slots: &[trace::Slot]) -> &'static str {
+    let small = |size: usize| size <= 256;
+    match op {
+        Op::Alloc { size, align, .. } => match (small(size), align > 8) {
+            (true, false) => "alloc small",
+            (false, false) => "alloc large",
+            (true, true) => "alloc_aligned small",
+            (false, true) => "alloc_aligned large",
+        },
+        Op::Calloc { count, size, .. } => {
+            if small(count * size) {
+                "calloc small"
+            } else {
+                "calloc large"
+            }
+        }
+        Op::Realloc { slot, size, .. } => {
+            let old = slots[slot];
+            match (old.ptr.is_null(), small(old.size), small(size)) {
+                (true, _, true) => "realloc null->small",
+                (true, _, false) => "realloc null->large",
+                (false, true, true) => "realloc small->small",
+                (false, true, false) => "realloc small->large",
+                (false, false, true) => "realloc large->small",
+                (false, false, false) => "realloc large->large",
+            }
+        }
+        Op::Resize { slot, .. } => {
+            if small(slots[slot].size) {
+                "resize small"
+            } else {
+                "resize large"
+            }
+        }
+        Op::Size { .. } => "size",
+        Op::Free { slot, .. } => {
+            if small(slots[slot].size) {
+                "free small"
+            } else {
+                "free large"
+            }
+        }
+        Op::Purge => "purge",
+    }
 }
 
 /// One replay of `trace` through `backend`, with `slots` (one per handle) empty on entry.
@@ -247,10 +359,22 @@ fn replay(
     backend: &dyn Backend,
     trace: &Trace,
     slots: &mut [trace::Slot],
+    purge: bool,
     probe: &mut Probe<'_>,
 ) -> Result<(), String> {
     for (i, op) in trace.ops.iter().enumerate() {
+        if !purge && matches!(op, Op::Purge) {
+            continue;
+        }
         match probe {
+            Probe::Breakdown(times) => {
+                let name = category(*op, slots);
+                let start = Instant::now();
+                // SAFETY: the trace passed tracegen's constraints and `slots` mirrors it.
+                unsafe { step(backend, *op, slots) };
+                let ns = start.elapsed().as_nanos() as u64;
+                times.entry(name).or_default().push(ns);
+            }
             Probe::Latency(times) => {
                 let start = Instant::now();
                 // SAFETY: the trace passed tracegen's constraints and `slots` mirrors it.

@@ -13,6 +13,7 @@ the numbers are in [`results/`](results/).
 | [`scripts/bench-rust/`](scripts/bench-rust/), [`scripts/bench-zig/`](scripts/bench-zig/) | replay a trace through one allocator, one measurement pass per process |
 | [`scripts/run.sh`](scripts/run.sh), [`scripts/run.ps1`](scripts/run.ps1), [`scripts/env.*`](scripts/) | run every cell and record the environment |
 | [`scripts/aggregate/`](scripts/aggregate/) | turns the raw records into `SUMMARY.md` |
+| [`scripts/purge-ablation.py`](scripts/purge-ablation.py) | diagnosis: every bench trace with and without its `purge` operations, per-category timings, OS-mapping counts ([results](results/v0.3.0/README.md#without-purge-the-ablation)) |
 | [`mimalloc-bench/`](mimalloc-bench/) | Oris's two `LD_PRELOAD` shims and the pinned mimalloc-bench integration |
 
 The trace corpus also drives the cross-port invariant check (the CI tier of
