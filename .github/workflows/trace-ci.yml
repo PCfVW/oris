@@ -76,7 +76,8 @@ jobs:
       - name: Replay every trace and compare with its record
         shell: bash
         run: |
-          set -uo pipefail
+          # `shell: bash` runs with -e; turn it off so an expected non-zero exit is captured and reported.
+          set +e -uo pipefail
           status=0
           for trace in examples/traces/handwritten/*.trace examples/traces/generated/*.trace; do
             record="${trace%.trace}.record"
@@ -94,7 +95,8 @@ jobs:
       - name: Refuse every rejected trace, with the committed message
         shell: bash
         run: |
-          set -uo pipefail
+          # `shell: bash` runs with -e; turn it off so an expected non-zero exit is captured and reported.
+          set +e -uo pipefail
           status=0
           for trace in examples/traces/rejected/*.trace; do
             expected="$(cat "${trace%.trace}.expected")"
@@ -129,7 +131,8 @@ jobs:
       - name: Replay every trace and compare with its record
         shell: bash
         run: |
-          set -uo pipefail
+          # `shell: bash` runs with -e; turn it off so an expected non-zero exit is captured and reported.
+          set +e -uo pipefail
           status=0
           for trace in examples/traces/handwritten/*.trace examples/traces/generated/*.trace; do
             record="${trace%.trace}.record"
