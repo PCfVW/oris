@@ -1,13 +1,12 @@
 [package]
 name = "orisnik"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Eric Jacopin"]
 license = "MIT OR Apache-2.0"
 description = "A Rust port of Dimitar Lazarov's HPHA (2007): a bucket + red-black-tree best-fit heap allocator, with oris_* C-ABI, GlobalAlloc, and optional Allocator surfaces."
 repository = "https://github.com/PCfVW/oris"
-homepage = "https://github.com/PCfVW/oris"
 readme = "README.md"
 keywords = ["allocator", "heap", "memory", "global-allocator", "hpha"]
 categories = ["memory-management"]

@@ -52,7 +52,7 @@ Once published, depend on it from crates.io:
 
 ```toml
 [dependencies]
-orisnik = "0.2"
+orisnik = "0.3"
 ```
 
 ## Zig — `orisnitsa`

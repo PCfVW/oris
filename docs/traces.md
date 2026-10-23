@@ -7,7 +7,7 @@ rotations, the same memory mapped and returned ([`ROADMAP.md`](../ROADMAP.md#cro
 This guide covers the machinery that checks it, **`letopis`** (*летопис*, "chronicle"), and
 how to use it on your own programs.
 
-> **Status:** new in v0.3.0 (unreleased). The API is marked unstable until 1.0:
+> **Status:** new in v0.3.0. The API is marked unstable until 1.0:
 > the record format may grow events as the invariant is tightened.
 
 ## The two formats

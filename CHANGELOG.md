@@ -10,6 +10,8 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-23
+
 ### Added
 
 - **The cross-port invariant is now checked, not argued (v0.3.0).** An identical allocation
@@ -714,7 +716,8 @@ requires; findings are numbered as in
     cross-validation, reconstructed and re-verified live: all 3000 steps match
     byte-for-byte across every C++/Rust/Zig pairing.
 
-[Unreleased]: https://github.com/PCfVW/oris/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/PCfVW/oris/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/PCfVW/oris/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/PCfVW/oris/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/PCfVW/oris/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/PCfVW/oris/releases/tag/v0.1.0

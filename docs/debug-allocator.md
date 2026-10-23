@@ -38,7 +38,7 @@ continuing with). `check()` is the way to *ask* instead, and get an error back.
 
 ```toml
 [dependencies]
-orisnik = { version = "0.2", features = ["debug-allocator"] }
+orisnik = { version = "0.3", features = ["debug-allocator"] }
 ```
 
 **Zig** — instantiate the generic instead of using the plain `Orisnitsa`:
