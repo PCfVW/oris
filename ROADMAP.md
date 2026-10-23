@@ -91,8 +91,8 @@ This invariant is the property that justifies maintaining two ports rather than 
 - **`examples/parser/`** — an AST-building parser demonstrating small-allocation churn
 - Both purge at the cadence the v0.3.0 diagnosis recommends — between levels or sessions, not between plans or files — and say why
 - **`examples/replay/`** — builds on the v0.3.0 replayers (`letopis`) to plot a trace's mapped bytes and RSS over time
-- **Per-language documentation polish:** "Why this crate?" differentiator sections, instrumentation examples, absolute GitHub URLs verified for external rendering on crates.io and the Zig package registry
-- **README polish across all surfaces** (top-level, per-port, registries)
+- **Per-language documentation polish:** "Why this crate?" differentiator sections, instrumentation examples, absolute GitHub URLs verified for external rendering on crates.io and in the `orisnitsa` release tarball (Zig has no central package registry; a Zig project fetches the tarball by URL)
+- **README polish across all surfaces** (top-level, per-port, crates.io, the GitHub Release)
 
 ### v0.5.0 — Faithful performance
 
@@ -119,7 +119,7 @@ The v0.3.0 diagnosis ([`benchmarks/results/v0.3.0/`](benchmarks/results/v0.3.0/R
 
 - **Public API freeze.** Any post-1.0 change to the surface is a 2.0.
 - **The faithful baseline:** v1.0 is HPHA exactly, as fast as v0.5.0 made it — the reference every later departure (below) is measured against
-- **Test coverage targets:** 80+ tests per port; cross-port API parity verified
+- **Measured test coverage:** line and branch coverage of each port's suite, measured in CI and published per release, with a target set from the first measurement; cross-port API parity verified
 - **Full mimalloc-bench results** published in `benchmarks/results/v1.0.0/` against the major allocators — the whole suite, including the programs that build a large external project (lean, redis, rocksdb, …), which v0.3.0 left out
 - **Migration guide:** replacing system allocator with Oris in real codebases
 - **Long-term support commitment** for the v1.x line: bug fixes, security patches, no breaking changes
@@ -131,10 +131,9 @@ The v0.3.0 diagnosis ([`benchmarks/results/v0.3.0/`](benchmarks/results/v0.3.0/R
 
 These are candidate themes, not commitments. Order and scope subject to feedback from real use.
 
-- **v1.x — Beyond HPHA: a faster, opt-in mode.** The changes the v0.3.0 diagnosis points to but HPHA's transitions rule out, behind an explicit configuration in both ports, with the faithful mode staying the default and gated against HPHA as before. Candidates: a purge that keeps a few idle pages per size class or tree instead of returning them all (hysteresis); a most-recently-freed cache of more than HPHA's one block; deferred coalescing. Each is measured against the v1.0 baseline, and the new mode gets its own records, which Rust and Zig must reproduce byte for byte — the cross-language invariant without the oracle. A new configuration is a minor version; the default's behaviour never changes.
+- **v1.x — Beyond HPHA: a faster, opt-in mode.** The changes the v0.3.0 diagnosis points to but HPHA's transitions rule out, behind an explicit configuration in both ports, with the faithful mode staying the default and gated against HPHA as before. Candidates: a purge that keeps a few idle pages per size class or tree instead of returning them all (hysteresis); a most-recently-freed cache of more than HPHA's one block; deferred coalescing; and, once the multithreaded mode exists (v2.x below), thread-local bucket caches. Each is measured against the v1.0 baseline, and the new mode gets its own records, which Rust and Zig must reproduce byte for byte — the cross-language invariant without the oracle. A new configuration is a minor version; the default's behaviour never changes.
 - **v1.x — Trace visualizer.** Web-based replay of allocation traces: block-layout animation, RSS curves, bucket activity heatmaps, fragmentation visualizations. The demo equivalent of the priority queue project's Dijkstra visualization. Substantial work; deliberately deferred past v1.0.
 - **v2.x — Multithreaded mode.** Port HPHA's `MULTITHREADED` mode with per-bucket and per-tree locks. Modest scaling; not competitive with mimalloc on many-core. Offered as a convenience for users who want a single allocator across both single- and multi-threaded paths in their codebase, not as a serious bid for the server-allocator niche.
-- **v2.x — Per-thread caches.** Optional thread-local bucket caching, opt-in. Changes the design's character; flagged as a deliberate divergence from HPHA rather than a faithful port.
 - **Additional language ports** if and only if there's a sustained user base asking. The Bulgarian-folklore naming family can extend with native-speaker review, but the cross-language invariant cost grows linearly with the number of ports.
 - **Experiment sidebar.** A small research piece, mirroring the priority queue project's AI code generation study. Candidate topic: *how well do AI models handle intrusive data structures and pointer tagging?* — the kind of code allocators rely on and AI models are notoriously uneven at.
 
