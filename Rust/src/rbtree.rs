@@ -60,6 +60,34 @@ impl Side {
     }
 }
 
+/// How [`IntrusiveMultiRbTree::insert_counted`] placed a node: the `chain`/`node` field
+/// of a transition record's `tree+` event (`examples/traces/GRAMMAR.md` §2). The two
+/// branches of HPHA's `intrusive_multi_rbtree::do_insert`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum InsertKind {
+    /// Linked into the equal-key chain of an existing tree node; the tree's shape is
+    /// untouched (`node->link(curNode)`).
+    Chain,
+    /// Attached as a new tree node and rebalanced (`attach_to` + `insert_fixup`).
+    Node,
+}
+
+/// How [`IntrusiveMultiRbTree::erase_counted`] removed a node: the `link`/`promote`/`node`
+/// field of a transition record's `tree-` event. The three branches of HPHA's
+/// `intrusive_multi_rbtree::do_erase`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum EraseKind {
+    /// A chain member that is not the tree-attached head: unlinked from the chain,
+    /// tree untouched.
+    Link,
+    /// The tree-attached head of a chain: its chain successor takes over its tree
+    /// position (`switch_with`), tree shape untouched.
+    Promote,
+    /// A node with no equal-key duplicates: spliced out of the tree and rebalanced
+    /// (`substitute_with` + `erase_fixup`).
+    Node,
+}
+
 /// A red-black tree node's colour. Ports `colour`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Colour {
@@ -334,6 +362,8 @@ impl NodeBase {
     /// `parent_side` equal to `this` (the standard rotation precondition); `this`'s
     /// side-`o` child must be a live, non-nil node.
     pub(crate) unsafe fn rotate(this: *mut NodeBase, s: Side) {
+        #[cfg(test)]
+        tests::count_rotation();
         let o = s.other();
         // SAFETY: forwarded from this function's own contract.
         let ps = unsafe { NodeBase::parent_side(this) };
@@ -583,12 +613,15 @@ impl NodeBase {
     }
 }
 
-/// Rebalances after [`NodeBase::attach_to`] attached `node` as a fresh red leaf. Ports
-/// `intrusive_multi_rbtree_base::insert_fixup` (`Cpp/hpha.cpp`).
+/// Rebalances after [`NodeBase::attach_to`] attached `node` as a fresh red leaf, and
+/// returns the number of rotations it performed (at most two). Ports
+/// `intrusive_multi_rbtree_base::insert_fixup` (`Cpp/hpha.cpp`); the count is this
+/// port's addition, for the transition record's `rot=` field.
 ///
 /// # Safety
 /// `head` must be a live tree sentinel; `node` must be a live, just-attached node.
-unsafe fn insert_fixup(head: *mut NodeBase, node: *mut NodeBase) {
+unsafe fn insert_fixup(head: *mut NodeBase, node: *mut NodeBase) -> u32 {
+    let mut rotations = 0;
     let mut cur = node;
     // SAFETY: `cur` is live (this function's contract).
     let mut p = unsafe { NodeBase::parent(cur) };
@@ -623,6 +656,7 @@ unsafe fn insert_fixup(head: *mut NodeBase, node: *mut NodeBase) {
                 cur = p;
                 // SAFETY: `cur` is live.
                 unsafe { NodeBase::rotate(cur, s) };
+                rotations += 1;
                 // SAFETY: `cur` is live.
                 p = unsafe { NodeBase::parent(cur) };
             }
@@ -632,19 +666,23 @@ unsafe fn insert_fixup(head: *mut NodeBase, node: *mut NodeBase) {
             unsafe { NodeBase::make_red(pp) };
             // SAFETY: `pp` is live.
             unsafe { NodeBase::rotate(pp, o) };
+            rotations += 1;
         }
     }
     // SAFETY: `head` is live (this function's contract).
     let root = unsafe { NodeBase::child(head, Side::Left) };
     // SAFETY: `root` is live (the tree's root is always live, nil or not).
     unsafe { NodeBase::make_black(root) };
+    rotations
 }
 
 /// Rebalances after a black node was spliced out during erase, starting from the
 /// child (`node`) that took its place (possibly the tree's own nil sentinel — that is
 /// exactly the "double black at an empty subtree" case this walk terminates from via
-/// the `cur != root` / `cur` red checks, matching HPHA exactly). Ports
-/// `intrusive_multi_rbtree_base::erase_fixup` (`Cpp/hpha.cpp`).
+/// the `cur != root` / `cur` red checks, matching HPHA exactly), and returns the number
+/// of rotations it performed (at most three). Ports
+/// `intrusive_multi_rbtree_base::erase_fixup` (`Cpp/hpha.cpp`); the count is this port's
+/// addition, for the transition record's `rot=` field.
 ///
 /// # Safety
 /// `head` must be a live tree sentinel; `node` must be live.
@@ -655,7 +693,8 @@ unsafe fn insert_fixup(head: *mut NodeBase, node: *mut NodeBase) {
 // `w_s_child` are deliberately parallel names for symmetric concepts (`w`'s child on
 // side `o` vs. side `s`), not a naming mistake.
 #[allow(clippy::many_single_char_names, clippy::similar_names)]
-unsafe fn erase_fixup(head: *mut NodeBase, node: *mut NodeBase) {
+unsafe fn erase_fixup(head: *mut NodeBase, node: *mut NodeBase) -> u32 {
+    let mut rotations = 0;
     let mut cur = node;
     // SAFETY: `head` is live (this function's contract).
     let root = unsafe { NodeBase::child(head, Side::Left) };
@@ -681,6 +720,7 @@ unsafe fn erase_fixup(head: *mut NodeBase, node: *mut NodeBase) {
             w = unsafe { NodeBase::child(w, s) };
             // SAFETY: `p` is live.
             unsafe { NodeBase::rotate(p, s) };
+            rotations += 1;
         }
         // SAFETY: `w` is live.
         let w_left = unsafe { NodeBase::child(w, Side::Left) };
@@ -708,6 +748,7 @@ unsafe fn erase_fixup(head: *mut NodeBase, node: *mut NodeBase) {
                 let c = w_s_child;
                 // SAFETY: `w` is live.
                 unsafe { NodeBase::rotate(w, o) };
+                rotations += 1;
                 w = c;
             }
             // SAFETY: `p` is live.
@@ -722,11 +763,13 @@ unsafe fn erase_fixup(head: *mut NodeBase, node: *mut NodeBase) {
             unsafe { NodeBase::make_black(w_o_child) };
             // SAFETY: `p` is live.
             unsafe { NodeBase::rotate(p, s) };
+            rotations += 1;
             cur = root;
         }
     }
     // SAFETY: `cur` is live.
     unsafe { NodeBase::make_black(cur) };
+    rotations
 }
 
 /// Marks `Self` as usable as an [`IntrusiveMultiRbTree`] element.
@@ -834,7 +877,18 @@ impl<T: RbNode> IntrusiveMultiRbTree<T> {
     /// Inserts `node`. If an equal-key element already exists, `node` is chained onto
     /// it instead of becoming a new tree position. Ports `intrusive_multi_rbtree::
     /// do_insert`.
+    // The tree allocator calls the counted form; the uncounted one serves the debug record
+    // store and the tests, so a plain build has no caller.
+    #[cfg_attr(not(feature = "debug-allocator"), allow(dead_code))]
     pub(crate) fn insert(&self, node: NonNull<T>) {
+        let _ = self.insert_counted(node);
+    }
+
+    /// [`insert`](Self::insert), also reporting which branch placed the node and how
+    /// many rotations rebalancing cost (always 0 for [`InsertKind::Chain`]). The tree
+    /// allocator's `attach` uses this for its transition-record `tree+` event; the
+    /// operation itself is identical.
+    pub(crate) fn insert_counted(&self, node: NonNull<T>) -> (InsertKind, u32) {
         let head = self.head_ptr();
         let node_base = T::node(node).as_ptr();
         let end = head;
@@ -862,7 +916,7 @@ impl<T: RbNode> IntrusiveMultiRbTree<T> {
                     // SAFETY: `node_base` is caller-supplied and not yet linked
                     // anywhere; `cur` is live.
                     unsafe { NodeBase::link_into_chain(node_base, cur) };
-                    return;
+                    return (InsertKind::Chain, 0);
                 }
             }
             // SAFETY: `cur` is live.
@@ -871,11 +925,23 @@ impl<T: RbNode> IntrusiveMultiRbTree<T> {
         // SAFETY: `node_base` is unlinked (caller-supplied, fresh); `last` is live.
         unsafe { NodeBase::attach_to(node_base, last, s) };
         // SAFETY: `head` is live; `node_base` is now a live, freshly-attached node.
-        unsafe { insert_fixup(head, node_base) };
+        let rotations = unsafe { insert_fixup(head, node_base) };
+        (InsertKind::Node, rotations)
     }
 
     /// Removes `node`. Ports `intrusive_multi_rbtree::do_erase`.
+    // The tree allocator calls the counted form; the uncounted one serves the debug record
+    // store and the tests, so a plain build has no caller.
+    #[cfg_attr(not(feature = "debug-allocator"), allow(dead_code))]
     pub(crate) fn erase(&self, node: NonNull<T>) {
+        let _ = self.erase_counted(node);
+    }
+
+    /// [`erase`](Self::erase), also reporting which branch removed the node and how
+    /// many rotations rebalancing cost (always 0 for [`EraseKind::Link`] and
+    /// [`EraseKind::Promote`]). The tree allocator's `detach` uses this for its
+    /// transition-record `tree-` event; the operation itself is identical.
+    pub(crate) fn erase_counted(&self, node: NonNull<T>) -> (EraseKind, u32) {
         let head = self.head_ptr();
         let node_base = T::node(node).as_ptr();
         // SAFETY: `node_base` is live (caller-supplied, currently in this tree).
@@ -886,7 +952,7 @@ impl<T: RbNode> IntrusiveMultiRbTree<T> {
                 // O(1) removal, no tree structure touched.
                 // SAFETY: `node_base` is live and chained (just checked above).
                 unsafe { NodeBase::unlink_from_chain(node_base) };
-                return;
+                return (EraseKind::Link, 0);
             }
             // `node_base` is the group's tree-attached representative, and the group
             // has more members: promote the next chain member into its tree position.
@@ -900,7 +966,7 @@ impl<T: RbNode> IntrusiveMultiRbTree<T> {
             // SAFETY: `node_base` is live and still chained (only its tree position
             // was taken over above; the chain links are untouched until this call).
             unsafe { NodeBase::unlink_from_chain(node_base) };
-            return;
+            return (EraseKind::Promote, 0);
         }
         // Genuine tree removal: `node_base` has no equal-key duplicates at all.
         let end = head;
@@ -936,10 +1002,13 @@ impl<T: RbNode> IntrusiveMultiRbTree<T> {
             // SAFETY: `repl != node_base`; `node_base` is live and attached.
             unsafe { NodeBase::switch_with(repl, node_base) };
         }
-        if !red {
+        let rotations = if red {
+            0
+        } else {
             // SAFETY: `head` is live; `repl_child` is live (possibly the sentinel).
-            unsafe { erase_fixup(head, repl_child) };
-        }
+            unsafe { erase_fixup(head, repl_child) }
+        };
+        (EraseKind::Node, rotations)
     }
 
     /// The first element not ordered before `key` (`!(element < key)`). Ports
@@ -1151,7 +1220,24 @@ pub(crate) fn next<T: RbNode>(node: NonNull<T>) -> NonNull<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::cell::Cell;
     use std::collections::BTreeMap;
+
+    thread_local! {
+        /// Every [`NodeBase::rotate`] executed on this thread: an independent witness
+        /// for the counts `insert_counted`/`erase_counted` report (the fixups count
+        /// their own calls; this counts inside `rotate` itself).
+        static ROTATIONS: Cell<u32> = const { Cell::new(0) };
+    }
+
+    /// Called from [`NodeBase::rotate`] in test builds only.
+    pub(super) fn count_rotation() {
+        ROTATIONS.with(|r| r.set(r.get() + 1));
+    }
+
+    fn rotations_witnessed() -> u32 {
+        ROTATIONS.with(Cell::get)
+    }
 
     #[repr(C)]
     struct TestNode {
@@ -1317,6 +1403,119 @@ mod tests {
         assert!(tree.is_empty());
         for n in nodes {
             // SAFETY: erased above before being dropped here.
+            unsafe { drop_boxed(n) };
+        }
+    }
+
+    #[test]
+    fn counted_insert_reports_branch_and_rotations() {
+        let tree: IntrusiveMultiRbTree<TestNode> = IntrusiveMultiRbTree::new();
+        let nodes = [boxed(1, 0), boxed(2, 1), boxed(3, 2), boxed(3, 3)];
+        let [one, two, third, third_twin] = nodes;
+        assert_eq!(tree.insert_counted(one), (InsertKind::Node, 0));
+        assert_eq!(tree.insert_counted(two), (InsertKind::Node, 0));
+        // 1-2-3 ascending: the classic single left rotation at the root.
+        assert_eq!(tree.insert_counted(third), (InsertKind::Node, 1));
+        assert_eq!(tree.insert_counted(third_twin), (InsertKind::Chain, 0));
+        assert_eq!(tree.erase_counted(third), (EraseKind::Promote, 0));
+        assert_eq!(tree.erase_counted(third_twin), (EraseKind::Node, 0));
+        assert_eq!(tree.erase_counted(one), (EraseKind::Node, 0));
+        assert_eq!(tree.erase_counted(two), (EraseKind::Node, 0));
+        assert!(tree.is_empty());
+        for n in nodes {
+            // SAFETY: every node was erased above.
+            unsafe { drop_boxed(n) };
+        }
+
+        // 3-1-2: the zig-zag case, a double rotation.
+        let zig = [boxed(3, 0), boxed(1, 1), boxed(2, 2)];
+        let tree: IntrusiveMultiRbTree<TestNode> = IntrusiveMultiRbTree::new();
+        assert_eq!(tree.insert_counted(zig[0]), (InsertKind::Node, 0));
+        assert_eq!(tree.insert_counted(zig[1]), (InsertKind::Node, 0));
+        assert_eq!(tree.insert_counted(zig[2]), (InsertKind::Node, 2));
+        for n in zig {
+            tree.erase(n);
+            // SAFETY: just erased.
+            unsafe { drop_boxed(n) };
+        }
+    }
+
+    #[test]
+    fn counted_operations_match_the_rotation_witness() {
+        // How often each insert/erase branch ran.
+        #[derive(Default, Debug)]
+        struct Seen {
+            chain: u32,
+            attach: u32,
+            link: u32,
+            promote: u32,
+            splice: u32,
+        }
+        // Same xorshift and decision logic as the stress test below, with keys drawn
+        // from a narrow range so every insert/erase branch occurs, and a chain member
+        // erased as often as a tree node.
+        let mut state: u32 = 0x9e37_79b9;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state
+        };
+        let tree: IntrusiveMultiRbTree<TestNode> = IntrusiveMultiRbTree::new();
+        let mut live: Vec<NonNull<TestNode>> = Vec::new();
+        let mut seen = Seen::default();
+        let mut reported = 0u32;
+        let start = rotations_witnessed();
+        for step in 0..2000u32 {
+            // CAST: u32 -> i32, bounded to [0, 24) by the modulo.
+            #[allow(clippy::as_conversions, clippy::cast_possible_wrap)]
+            let key = (next() % 24) as i32;
+            let before = rotations_witnessed();
+            if live.is_empty() || next() % 3 != 0 {
+                let n = boxed(key, step);
+                let (kind, rotations) = tree.insert_counted(n);
+                assert_eq!(
+                    rotations,
+                    rotations_witnessed() - before,
+                    "insert at {step}"
+                );
+                match kind {
+                    InsertKind::Chain => seen.chain += 1,
+                    InsertKind::Node => seen.attach += 1,
+                }
+                reported += rotations;
+                live.push(n);
+            } else {
+                // CAST: u32 -> usize, bounded by `live.len()` via the modulo.
+                #[allow(clippy::as_conversions)]
+                let idx = (next() as usize) % live.len();
+                let n = live.swap_remove(idx);
+                let (kind, rotations) = tree.erase_counted(n);
+                assert_eq!(rotations, rotations_witnessed() - before, "erase at {step}");
+                match kind {
+                    EraseKind::Link => seen.link += 1,
+                    EraseKind::Promote => seen.promote += 1,
+                    EraseKind::Node => seen.splice += 1,
+                }
+                reported += rotations;
+                // SAFETY: just erased.
+                unsafe { drop_boxed(n) };
+            }
+            check_invariants(&tree);
+        }
+        assert_eq!(reported, rotations_witnessed() - start);
+        assert!(reported > 0);
+        let taken = [
+            seen.chain,
+            seen.attach,
+            seen.link,
+            seen.promote,
+            seen.splice,
+        ];
+        assert!(taken.iter().all(|&k| k > 0), "branch never taken: {seen:?}");
+        for n in live {
+            tree.erase(n);
+            // SAFETY: just erased.
             unsafe { drop_boxed(n) };
         }
     }

@@ -1,0 +1,14 @@
+oris-trace 1
+# A free tree block of at most 256 bytes goes to the small free list, not the red-black
+# tree. A 1000-byte block shrunk in place to 100 bytes (112 with its rounding) leaves its
+# tail free; an 860-byte request takes that tail, so the small block now sits between two
+# live ones. Freed, it is the most-recently-freed block; the next free flushes it to the
+# small list (list+); freeing its neighbour coalesces it away (list-).
+alloc h0 1000
+alloc h1 300
+realloc h0 100
+alloc h2 860
+free h0
+free h1
+free h2
+purge

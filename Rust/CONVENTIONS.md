@@ -418,8 +418,16 @@ zero-filled heap allocation. A native `cargo test` still exercises the real sysc
 adds coverage rather than substituting for it, and `os.rs`'s own tests stay Miri-ignored on
 purpose — they are the ones testing the syscalls themselves.
 
-Two consequences for new tests:
+Three consequences for new tests:
 
+- **A doc example that allocates cannot reach the stand-in.** Rustdoc builds each example
+  against the library without `cfg(test)`, so its allocations reach the real syscalls: on Unix
+  Miri rejects `os::map`'s trimming `munmap` (it frees a mapping only whole), on Windows it cannot
+  call `VirtualAlloc` at all. Wrap such an example in a hidden `# #[cfg(not(miri))] { … # }` with
+  a hidden comment naming the unit test that Miri-covers the same calls — there must be one (see
+  `letopis::Recorder`'s example). A native `cargo test` still runs the example in full. Found by
+  v0.3.0's first hosted Miri run, because the local runs had been filtered to the unit tests: run
+  the gate unfiltered, doc tests included, before a tag.
 - **Do not add `#[cfg_attr(miri, ignore)]` to an allocator test.** It is no longer needed, and
   it silently removes the test from the gate. Reserve it for tests whose *runtime* under Miri is
   prohibitive, and then scale the workload instead where you can (see
@@ -538,8 +546,16 @@ This constrains how Rust code is written, not just what it computes:
    rotations and the physical-neighbor coalescing, preserve operation *order*, not just the
    final tree shape — the invariant counts transitions, not just end states.
 
-From v0.3.0 a CI gate replays the shared trace corpus through both ports and asserts a
-byte-identical transition record. Treat any change under this section as touching that gate.
+5. **Every state transition emits its `letopis` event, where HPHA performs it.** A split, shift,
+   merge, page spawn/release/move, tree or small-list insertion or removal, map or unmap goes
+   through the hook (`chronicle!(self.tap, Event::...)`) at the point `examples/traces/EVENTS.md` names —
+   in this port, in the Zig port, and in `Cpp/oracle/letopis.patch`. The record is
+   ordered, so an event one call too early is a divergence even when the final state agrees.
+
+The gate is real since v0.3.0: `trace-ci.yml` replays the trace corpus (`examples/traces/`)
+through both ports on three OSes and through the HPHA oracle on Windows, and every transition
+record must equal the committed one, which HPHA wrote. Treat any change under this section as
+touching that gate; `docs/traces.md` describes what to do when a record changes.
 
 ---
 

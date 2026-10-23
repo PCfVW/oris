@@ -1,0 +1,4 @@
+oris-trace 1
+alloc h0 100
+realloc h0 20
+free_sized h0 20

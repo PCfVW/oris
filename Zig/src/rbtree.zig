@@ -48,6 +48,7 @@
 //! `undefined` on principle, not merely as a style preference.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const tag = @import("tag.zig");
 
 /// Which of a node's two children/neighbours/tree-order-links a position refers to.
@@ -66,6 +67,44 @@ pub const Side = enum(u1) {
         };
     }
 };
+
+/// How `IntrusiveMultiRbTree.insertCounted` placed a node: the `chain`/`node` field of a
+/// transition record's `tree+` event (`examples/traces/GRAMMAR.md` §2). The two branches of
+/// HPHA's `intrusive_multi_rbtree::do_insert`. Parity: `orisnik`'s `InsertKind`.
+pub const InsertKind = enum {
+    /// Linked into the equal-key chain of an existing tree node; the tree's shape is
+    /// untouched (`node->link(curNode)`).
+    chain,
+    /// Attached as a new tree node and rebalanced (`attach_to` + `insert_fixup`).
+    node,
+};
+
+/// How `IntrusiveMultiRbTree.eraseCounted` removed a node: the `link`/`promote`/`node`
+/// field of a transition record's `tree-` event. The three branches of HPHA's
+/// `intrusive_multi_rbtree::do_erase`. Parity: `orisnik`'s `EraseKind`.
+pub const EraseKind = enum {
+    /// A chain member that is not the tree-attached head: unlinked from the chain, tree
+    /// untouched.
+    link,
+    /// The tree-attached head of a chain: its chain successor takes over its tree
+    /// position (`switch_with`), tree shape untouched.
+    promote,
+    /// A node with no equal-key duplicates: spliced out of the tree and rebalanced
+    /// (`substitute_with` + `erase_fixup`).
+    node,
+};
+
+/// What `insertCounted` reports: the branch taken and the rotations it cost.
+pub const Insertion = struct { kind: InsertKind, rotations: u32 };
+
+/// What `eraseCounted` reports: the branch taken and the rotations it cost.
+pub const Erasure = struct { kind: EraseKind, rotations: u32 };
+
+/// Every `NodeBase.rotate` executed in a test build: an independent witness for the
+/// counts `insertCounted`/`eraseCounted` report (the fixups count their own calls; this
+/// counts inside `rotate` itself). Zig's test runner is single-threaded, so a plain
+/// global is enough; it does not exist outside test builds.
+var test_rotations: if (builtin.is_test) u32 else void = if (builtin.is_test) 0 else {};
 
 /// A red-black tree node's colour. Ports `colour`. Backed by `u1` matching
 /// `tag.BIT_COLOUR`'s bit meaning (set = red).
@@ -226,6 +265,7 @@ pub const NodeBase = extern struct {
     /// `parentSide` equal to `this` (the standard rotation precondition); `this`'s
     /// side-`o` child must be non-nil.
     pub fn rotate(this: *NodeBase, s: Side) void {
+        if (builtin.is_test) test_rotations += 1;
         const o = s.other();
         const ps = this.parentSide();
         const this_parent = this.parentPtr().?;
@@ -408,11 +448,14 @@ comptime {
     std.debug.assert(@offsetOf(NodeBase, "parent") == 4 * @sizeOf(usize));
 }
 
-/// Rebalances after `NodeBase.attachTo` attached `node` as a fresh red leaf. Ports
-/// `intrusive_multi_rbtree_base::insert_fixup` (`Cpp/hpha.cpp`).
+/// Rebalances after `NodeBase.attachTo` attached `node` as a fresh red leaf, and returns
+/// the number of rotations it performed (at most two). Ports
+/// `intrusive_multi_rbtree_base::insert_fixup` (`Cpp/hpha.cpp`); the count is this port's
+/// addition, for the transition record's `rot=` field.
 ///
 /// `head` must be a live tree sentinel; `node` must be a live, just-attached node.
-fn insertFixup(head: *NodeBase, node: *NodeBase) void {
+fn insertFixup(head: *NodeBase, node: *NodeBase) u32 {
+    var rotations: u32 = 0;
     var cur = node;
     var p = cur.parentPtr().?;
     // EXPLICIT: climb and recolour/rotate while the parent is red; `cur`/`p` are the
@@ -433,22 +476,27 @@ fn insertFixup(head: *NodeBase, node: *NodeBase) void {
             if (cur == p_o_child) {
                 cur = p;
                 cur.rotate(s);
+                rotations += 1;
                 p = cur.parentPtr().?;
             }
             p.makeBlack();
             pp.makeRed();
             pp.rotate(o);
+            rotations += 1;
         }
     }
     const root = head.child(.left);
     root.makeBlack();
+    return rotations;
 }
 
 /// Rebalances after a black node was spliced out during erase, starting from the
 /// child (`node`) that took its place (possibly the tree's own nil sentinel — that is
 /// exactly the "double black at an empty subtree" case this walk terminates from via
-/// the `cur != root` / `cur` red checks, matching HPHA exactly). Ports
-/// `intrusive_multi_rbtree_base::erase_fixup` (`Cpp/hpha.cpp`).
+/// the `cur != root` / `cur` red checks, matching HPHA exactly), and returns the number of
+/// rotations it performed (at most three). Ports `intrusive_multi_rbtree_base::erase_fixup`
+/// (`Cpp/hpha.cpp`); the count is this port's addition, for the transition record's `rot=`
+/// field.
 ///
 /// `head` must be a live tree sentinel; `node` must be live.
 ///
@@ -456,7 +504,8 @@ fn insertFixup(head: *NodeBase, node: *NodeBase) void {
 /// `s`, `o`, `w`, `c`) line-for-line, so this algorithm can be audited side by side
 /// against the reference it ports — renaming them to longer names would work against
 /// exactly the review that matters most for this function.
-fn eraseFixup(head: *NodeBase, node: *NodeBase) void {
+fn eraseFixup(head: *NodeBase, node: *NodeBase) u32 {
+    var rotations: u32 = 0;
     var cur = node;
     const root = head.child(.left);
     // EXPLICIT: climb and rebalance while `cur` is black and not the root; `cur` is
@@ -471,6 +520,7 @@ fn eraseFixup(head: *NodeBase, node: *NodeBase) void {
             p.makeRed();
             w = w.child(s);
             p.rotate(s);
+            rotations += 1;
         }
         const w_left = w.child(.left);
         const w_right = w.child(.right);
@@ -487,6 +537,7 @@ fn eraseFixup(head: *NodeBase, node: *NodeBase) void {
                 w.makeRed();
                 const c = w_s_child;
                 w.rotate(o);
+                rotations += 1;
                 w = c;
             }
             w.setColour(p.colour());
@@ -498,10 +549,12 @@ fn eraseFixup(head: *NodeBase, node: *NodeBase) void {
             const w_o_child2 = w.child(o);
             w_o_child2.makeBlack();
             p.rotate(s);
+            rotations += 1;
             cur = root;
         }
     }
     cur.makeBlack();
+    return rotations;
 }
 
 /// An intrusive multi-tree of `T`, headed by a self-referential sentinel. Ports
@@ -567,6 +620,14 @@ pub fn IntrusiveMultiRbTree(comptime T: type) type {
         /// onto it instead of becoming a new tree position. Ports
         /// `intrusive_multi_rbtree::do_insert`.
         pub fn insert(self: *Self, node: *T) void {
+            _ = self.insertCounted(node);
+        }
+
+        /// `insert`, also reporting which branch placed the node and how many rotations
+        /// rebalancing cost (always 0 for `.chain`). The tree allocator's `attach` uses
+        /// this for its transition-record `tree+` event; the operation itself is
+        /// identical.
+        pub fn insertCounted(self: *Self, node: *T) Insertion {
             const head = self.headPtr();
             const node_base = &node.node;
             const end = head;
@@ -583,17 +644,25 @@ pub fn IntrusiveMultiRbTree(comptime T: type) type {
                     .gt => s = .right,
                     .eq => {
                         node_base.linkIntoChain(cur);
-                        return;
+                        return .{ .kind = .chain, .rotations = 0 };
                     },
                 }
                 cur = cur.child(s);
             }
             node_base.attachTo(last, s);
-            insertFixup(head, node_base);
+            return .{ .kind = .node, .rotations = insertFixup(head, node_base) };
         }
 
         /// Removes `node`. Ports `intrusive_multi_rbtree::do_erase`.
         pub fn erase(self: *Self, node: *T) void {
+            _ = self.eraseCounted(node);
+        }
+
+        /// `erase`, also reporting which branch removed the node and how many rotations
+        /// rebalancing cost (always 0 for `.link` and `.promote`). The tree allocator's
+        /// `detach` uses this for its transition-record `tree-` event; the operation
+        /// itself is identical.
+        pub fn eraseCounted(self: *Self, node: *T) Erasure {
             const head = self.headPtr();
             const node_base = &node.node;
             if (node_base.chained()) {
@@ -601,7 +670,7 @@ pub fn IntrusiveMultiRbTree(comptime T: type) type {
                     // Plain chain link, not the group's tree-attached representative:
                     // O(1) removal, no tree structure touched.
                     node_base.unlinkFromChain();
-                    return;
+                    return .{ .kind = .link, .rotations = 0 };
                 }
                 // `node_base` is the group's tree-attached representative, and the
                 // group has more members: promote the next chain member into its
@@ -613,7 +682,7 @@ pub fn IntrusiveMultiRbTree(comptime T: type) type {
                 // `node_base` is live and still chained (only its tree position was
                 // taken over above; the chain links are untouched until this call).
                 node_base.unlinkFromChain();
-                return;
+                return .{ .kind = .promote, .rotations = 0 };
             }
             // Genuine tree removal: `node_base` has no equal-key duplicates at all.
             const end = head;
@@ -643,9 +712,8 @@ pub fn IntrusiveMultiRbTree(comptime T: type) type {
             if (repl != node_base) {
                 repl.switchWith(node_base);
             }
-            if (!red) {
-                eraseFixup(head, repl_child);
-            }
+            const rotations: u32 = if (red) 0 else eraseFixup(head, repl_child);
+            return .{ .kind = .node, .rotations = rotations };
         }
 
         /// The first element not ordered before `key` (`!(element < key)`). Ports
@@ -849,6 +917,98 @@ test "descending insert stress maintains invariants" {
         checkInvariants(&tree);
     }
     try testing.expect(tree.isEmpty());
+}
+
+test "counted insert/erase report branch and rotations" {
+    const allocator = testing.allocator;
+    var tree: IntrusiveMultiRbTree(TestNode) = .init();
+    const one = try boxed(allocator, 1, 0);
+    defer allocator.destroy(one);
+    const two = try boxed(allocator, 2, 1);
+    defer allocator.destroy(two);
+    const third = try boxed(allocator, 3, 2);
+    defer allocator.destroy(third);
+    const third_twin = try boxed(allocator, 3, 3);
+    defer allocator.destroy(third_twin);
+
+    try testing.expectEqual(Insertion{ .kind = .node, .rotations = 0 }, tree.insertCounted(one));
+    try testing.expectEqual(Insertion{ .kind = .node, .rotations = 0 }, tree.insertCounted(two));
+    // 1-2-3 ascending: the classic single left rotation at the root.
+    try testing.expectEqual(Insertion{ .kind = .node, .rotations = 1 }, tree.insertCounted(third));
+    try testing.expectEqual(Insertion{ .kind = .chain, .rotations = 0 }, tree.insertCounted(third_twin));
+    try testing.expectEqual(Erasure{ .kind = .promote, .rotations = 0 }, tree.eraseCounted(third));
+    try testing.expectEqual(Erasure{ .kind = .node, .rotations = 0 }, tree.eraseCounted(third_twin));
+    try testing.expectEqual(Erasure{ .kind = .node, .rotations = 0 }, tree.eraseCounted(one));
+    try testing.expectEqual(Erasure{ .kind = .node, .rotations = 0 }, tree.eraseCounted(two));
+    try testing.expect(tree.isEmpty());
+
+    // 3-1-2: the zig-zag case, a double rotation.
+    var zig_tree: IntrusiveMultiRbTree(TestNode) = .init();
+    const zig = [_]*TestNode{
+        try boxed(allocator, 3, 0),
+        try boxed(allocator, 1, 1),
+        try boxed(allocator, 2, 2),
+    };
+    defer for (zig) |n| allocator.destroy(n);
+    try testing.expectEqual(Insertion{ .kind = .node, .rotations = 0 }, zig_tree.insertCounted(zig[0]));
+    try testing.expectEqual(Insertion{ .kind = .node, .rotations = 0 }, zig_tree.insertCounted(zig[1]));
+    try testing.expectEqual(Insertion{ .kind = .node, .rotations = 2 }, zig_tree.insertCounted(zig[2]));
+    for (zig) |n| zig_tree.erase(n);
+}
+
+test "counted operations match the rotation witness" {
+    // Same xorshift and decision logic as the stress test below, with keys drawn from a
+    // narrow range so every insert/erase branch occurs. Mirrors `orisnik`'s
+    // `counted_operations_match_the_rotation_witness`.
+    const allocator = testing.allocator;
+    const State = struct {
+        state: u32 = 0x9e37_79b9,
+        fn next(self: *@This()) u32 {
+            self.state ^= self.state << 13;
+            self.state ^= self.state >> 17;
+            self.state ^= self.state << 5;
+            return self.state;
+        }
+    };
+    var rng: State = .{};
+    var tree: IntrusiveMultiRbTree(TestNode) = .init();
+    var live: std.ArrayList(*TestNode) = .empty;
+    defer live.deinit(allocator);
+    var seen = [_]u32{0} ** 5; // chain, node (insert); link, promote, node (erase)
+    var reported: u32 = 0;
+    const start = test_rotations;
+
+    var step: u32 = 0;
+    while (step < 2000) : (step += 1) {
+        const key: i32 = @intCast(rng.next() % 24);
+        const before = test_rotations;
+        if (live.items.len == 0 or rng.next() % 3 != 0) {
+            const n = try boxed(allocator, key, step);
+            const outcome = tree.insertCounted(n);
+            try testing.expectEqual(test_rotations - before, outcome.rotations);
+            // INDEX: 0 or 1, within the 5-element array.
+            seen[@intFromEnum(outcome.kind)] += 1;
+            reported += outcome.rotations;
+            try live.append(allocator, n);
+        } else {
+            const idx: usize = @intCast(rng.next() % @as(u32, @intCast(live.items.len)));
+            const n = live.swapRemove(idx);
+            const outcome = tree.eraseCounted(n);
+            try testing.expectEqual(test_rotations - before, outcome.rotations);
+            // INDEX: 2, 3 or 4, within the 5-element array.
+            seen[2 + @as(usize, @intFromEnum(outcome.kind))] += 1;
+            reported += outcome.rotations;
+            allocator.destroy(n);
+        }
+        checkInvariants(&tree);
+    }
+    try testing.expectEqual(test_rotations - start, reported);
+    try testing.expect(reported > 0);
+    for (seen) |count| try testing.expect(count > 0);
+    for (live.items) |n| {
+        tree.erase(n);
+        allocator.destroy(n);
+    }
 }
 
 test "pseudo-random insert/erase stress matches a reference ordered map" {

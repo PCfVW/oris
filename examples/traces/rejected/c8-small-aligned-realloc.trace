@@ -1,0 +1,3 @@
+oris-trace 1
+alloc h0 100
+realloc_aligned h0 100 512

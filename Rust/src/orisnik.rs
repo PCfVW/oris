@@ -1022,6 +1022,35 @@ impl Orisnik {
         self.debug_assert_not_moved();
         self.buckets.allocated() + self.tree.allocated()
     }
+
+    /// Runs `f` with `log` installed as the destination of every transition event this
+    /// instance emits (`letopis`; `examples/traces/EVENTS.md`), and uninstalls it before
+    /// returning — also when `f` unwinds. The borrow of `log` is what makes the raw
+    /// pointer the sub-allocators hold sound: it outlives the installation by construction.
+    ///
+    /// Crate-private on purpose: the event log appends to a `Vec`, which allocates through
+    /// the global allocator, so installing one on an instance that *is* the global
+    /// allocator would re-enter it. The replayer only ever traces a local instance.
+    #[cfg(feature = "trace")]
+    pub(crate) fn with_letopis<R>(
+        &self,
+        log: &crate::letopis::EventLog,
+        f: impl FnOnce() -> R,
+    ) -> R {
+        /// Empties both taps when dropped, so an unwinding `f` leaves no dangling pointer.
+        struct Uninstall<'a>(&'a Orisnik);
+        impl Drop for Uninstall<'_> {
+            fn drop(&mut self) {
+                self.0.buckets.tap().set(None);
+                self.0.tree.tap().set(None);
+            }
+        }
+        let log = NonNull::from(log);
+        self.buckets.tap().set(Some(log));
+        self.tree.tap().set(Some(log));
+        let _uninstall = Uninstall(self);
+        f()
+    }
 }
 
 /// The debug hooks with `debug-allocator` off: identities and no-ops the compiler

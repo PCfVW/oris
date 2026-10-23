@@ -1,0 +1,23 @@
+[package]
+name = "oris-preload-rust"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "LD_PRELOAD malloc shim over orisnik, for mimalloc-bench (allocator name `onik`)"
+
+[lib]
+name = "orispreload_rust"
+crate-type = ["cdylib"]
+
+[dependencies]
+orisnik = { path = "../../../Rust" }
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+# A panic must never unwind through `malloc`.
+panic = "abort"

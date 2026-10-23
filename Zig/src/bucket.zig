@@ -40,6 +40,7 @@ const guard = @import("guard.zig");
 const list = @import("list.zig");
 const os = @import("os.zig");
 const spomen = @import("spomen.zig");
+const letopis_event = @import("letopis_event.zig");
 
 const Config = spomen.Config;
 
@@ -400,20 +401,15 @@ pub const Bucket = struct {
 /// Ports the bucket-related slice of `allocator` (`mBuckets`,
 /// `mTotalAllocatedSizeBuckets`, and the free `bucket_*` methods).
 ///
-/// Generic over the `spomen` debug-subsystem `Config` (see `Zig/CONVENTIONS.md`'s
-/// "`comptime` Toggles" section) so a phase that needs debug-only state here can
-/// specialize this type's layout and methods per instantiation with a
-/// compiler-enforced zero-cost-when-disabled guarantee. Nothing in this type reads
-/// `config`: guard bytes, poisoning and the allocation records all live at
-/// `Orisnitsa`'s dispatch layer (mirroring HPHA, where `bucket_alloc` and friends
-/// are guard-oblivious) plus `isSmallAllocation`'s free function, so `Bucket`/`Page`
-/// need no parameterization of their own unless a later phase stores debug-only
-/// state in them.
+/// Generic over `Config` (see `Zig/CONVENTIONS.md`'s "`comptime` Toggles" section) with
+/// a compiler-enforced zero-cost-when-disabled guarantee. This type reads only
+/// `config.trace`, which adds the `tap` field and the transition-event emissions
+/// (`letopis`; `examples/traces/EVENTS.md`). `config.debug` is not read here: guard
+/// bytes, poisoning and the allocation records all live at `Orisnitsa`'s dispatch layer
+/// (mirroring HPHA, where `bucket_alloc` and friends are guard-oblivious) plus
+/// `isSmallAllocation`'s free function, so `Bucket`/`Page` need no parameterization of
+/// their own.
 pub fn Buckets(comptime config: Config) type {
-    // Not yet read (see the doc above) — kept, rather than dropped, so a later
-    // phase that does store debug-only state here need not re-thread it through
-    // every `Buckets(...)` instantiation site.
-    _ = config;
     return struct {
         const Self = @This();
 
@@ -428,6 +424,9 @@ pub fn Buckets(comptime config: Config) type {
         /// A plain field, not `orisnik`'s `Cell<usize>` — see the module doc's "`&self`
         /// vs `*Self`" section.
         allocated_bytes: usize = 0,
+        /// Where this path's transition events go (`letopis`; empty unless a replay
+        /// installed a log). `void` unless `config.trace`.
+        tap: if (config.trace) letopis_event.Tap else void = if (config.trace) .{} else {},
 
         /// Builds a fresh set of empty buckets, none of them yet holding any pages.
         pub fn init() Self {
@@ -444,6 +443,8 @@ pub fn Buckets(comptime config: Config) type {
         fn systemAlloc(self: *Self) ?[*]u8 {
             const ptr = os.map(os.PAGE_SIZE) orelse return null;
             self.allocated_bytes += os.PAGE_SIZE;
+            // PROVENANCE: address read for its value only, to name the mapping.
+            if (config.trace) self.tap.emit(.{ .map = .{ .kind = .bucket, .base = @intFromPtr(ptr), .bytes = os.PAGE_SIZE } });
             return ptr;
         }
 
@@ -451,6 +452,8 @@ pub fn Buckets(comptime config: Config) type {
         ///
         /// `ptr` must be a still-live result of `systemAlloc` on `self`.
         fn systemFree(self: *Self, ptr: [*]u8) void {
+            // PROVENANCE: as in `systemAlloc`.
+            if (config.trace) self.tap.emit(.{ .unmap = .{ .base = @intFromPtr(ptr), .bytes = os.PAGE_SIZE } });
             os.unmap(ptr, os.PAGE_SIZE);
             self.allocated_bytes -= os.PAGE_SIZE;
         }
@@ -487,12 +490,20 @@ pub fn Buckets(comptime config: Config) type {
             const page = bucket.getFreePage() orelse blk: {
                 const p = self.grow(bi) orelse return null;
                 bucket.addFreePage(p);
+                // PROVENANCE: address read for its value only, to name the page.
+                if (config.trace) self.tap.emit(.{ .page_spawn = .{ .bucket = bi, .page = @intFromPtr(p) } });
                 break :blk p;
             };
             // `page` is live and was just confirmed to have a free slot
             // (`getFreePage`'s own check) or was freshly grown (always has free
             // slots); it is a member of `bucket`'s page list either way.
-            return bucket.alloc(page);
+            const slot = bucket.alloc(page);
+            // `Bucket.alloc` moved the page to the back of its list iff this slot filled it.
+            if (config.trace and page.isFull()) {
+                // PROVENANCE: as above.
+                self.tap.emit(.{ .page_full = .{ .bucket = bi, .page = @intFromPtr(page) } });
+            }
+            return slot;
         }
 
         /// Grows or shrinks a bucket-path allocation in place if the current slot's
@@ -528,6 +539,7 @@ pub fn Buckets(comptime config: Config) type {
             const bi = page.bucketIndex();
             std.debug.assert(bi < NUM_BUCKETS);
             const bucket = &self.buckets[bi];
+            if (config.trace) self.noteRefill(bi, page);
             bucket.free(page, ptr);
         }
 
@@ -544,7 +556,17 @@ pub fn Buckets(comptime config: Config) type {
             // (mirrors HPHA's own `assert(bi == p->bucket_index())`).
             std.debug.assert(page.bucketIndex() == bi);
             const bucket = &self.buckets[bi];
+            if (config.trace) self.noteRefill(bi, page);
             bucket.free(page, ptr);
+        }
+
+        /// Emits `page-refill` if `page` is full — called just before a slot goes back to
+        /// it, which is exactly when `Bucket.free` will move it to the front of its list.
+        fn noteRefill(self: *Self, bi: usize, page: *Page) void {
+            if (page.isFull()) {
+                // PROVENANCE: address read for its value only, to name the page.
+                self.tap.emit(.{ .page_refill = .{ .bucket = bi, .page = @intFromPtr(page) } });
+            }
         }
 
         /// Whether `ptr` is a live bucket-path allocation from this instance — the
@@ -631,6 +653,8 @@ pub fn Buckets(comptime config: Config) type {
                     const next = cur.next.?;
                     if (page.isEmpty()) {
                         list.unlinkNode(page);
+                        // PROVENANCE: address read for its value only, to name the page.
+                        if (config.trace) self.tap.emit(.{ .page_release = .{ .bucket = page.bucketIndex(), .page = @intFromPtr(page) } });
                         // ALIGN: `page` is a live `Page`, always
                         // `PAGE_SIZE - @sizeOf(Page)` bytes into its owning
                         // PAGE_SIZE-aligned mapping (the type's own invariant); rounding

@@ -1,0 +1,1 @@
+trace rejected (line 4): C6: free_sized h0 20 does not directly follow an allocation of exactly 20 bytes at alignment 8 or less

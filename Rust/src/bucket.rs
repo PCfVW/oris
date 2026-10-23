@@ -26,6 +26,8 @@
 //! Miri coverage of the part that actually varies by allocation pattern.
 
 use crate::home::Home;
+#[cfg(feature = "trace")]
+use crate::letopis::{Event, MapKind, Tap};
 use crate::list::{IntrusiveList, ListLink, ListNode};
 use crate::os;
 use core::cell::Cell;
@@ -513,6 +515,10 @@ pub(crate) struct Buckets {
     /// Where this value stood when it first mapped a page; lets `Drop` refuse to walk
     /// sentinels that a later move left pointing at the old address (see [`Home`]).
     home: Home,
+    /// Where this path's transition events go (`letopis`; empty unless a replay installed
+    /// a log). Present only with the `trace` feature.
+    #[cfg(feature = "trace")]
+    tap: Tap,
 }
 
 impl Buckets {
@@ -528,6 +534,28 @@ impl Buckets {
             buckets: [const { Bucket::new() }; NUM_BUCKETS],
             allocated_bytes: Cell::new(0),
             home: Home::new(),
+            #[cfg(feature = "trace")]
+            tap: Tap::new(),
+        }
+    }
+
+    /// This path's event tap, for `Orisnik::with_letopis`.
+    #[cfg(feature = "trace")]
+    pub(crate) fn tap(&self) -> &Tap {
+        &self.tap
+    }
+
+    /// Emits `page-refill` if `page` is full — called just before a slot goes back to it,
+    /// which is exactly when `Bucket::free` will move it to the front of its list.
+    #[cfg(feature = "trace")]
+    fn note_refill(&self, bi: usize, page: NonNull<Page>) {
+        // SAFETY: `page` is live (a member of bucket `bi`'s list, the caller's contract).
+        if unsafe { Page::is_full(page.as_ptr()) } {
+            // PROVENANCE: addresses read for their value only, to name memory in the record.
+            self.tap.emit(Event::PageRefill {
+                bucket: bi,
+                page: page.addr().get(),
+            });
         }
     }
 
@@ -552,6 +580,15 @@ impl Buckets {
         self.home.latch(self);
         self.allocated_bytes
             .set(self.allocated_bytes.get() + os::PAGE_SIZE);
+        // PROVENANCE: addresses read for their value only, to name memory in the record.
+        chronicle!(
+            self.tap,
+            Event::Map {
+                kind: MapKind::Bucket,
+                base: ptr.addr().get(),
+                bytes: os::PAGE_SIZE,
+            }
+        );
         Some(ptr)
     }
 
@@ -560,6 +597,14 @@ impl Buckets {
     /// # Safety
     /// `ptr` must be a still-live result of [`Buckets::system_alloc`] on `self`.
     unsafe fn system_free(&self, ptr: NonNull<u8>) {
+        // PROVENANCE: addresses read for their value only, to name memory in the record.
+        chronicle!(
+            self.tap,
+            Event::Unmap {
+                base: ptr.addr().get(),
+                bytes: os::PAGE_SIZE,
+            }
+        );
         // SAFETY: forwarded from this function's own contract.
         unsafe { os::unmap(ptr, os::PAGE_SIZE) };
         self.allocated_bytes
@@ -607,12 +652,31 @@ impl Buckets {
         } else {
             let p = self.grow(bi)?;
             bucket.add_free_page(p);
+            // PROVENANCE: addresses read for their value only, to name memory in the record.
+            chronicle!(
+                self.tap,
+                Event::PageSpawn {
+                    bucket: bi,
+                    page: p.addr().get(),
+                }
+            );
             p
         };
         // SAFETY: `page` is live and was just confirmed to have a free slot
         // (`get_free_page`'s own check) or was freshly grown (always has free
         // slots); it is a member of `bucket`'s page list either way.
-        Some(unsafe { bucket.alloc(page) })
+        let slot = unsafe { bucket.alloc(page) };
+        // `Bucket::alloc` moved the page to the back of its list iff this slot filled it.
+        #[cfg(feature = "trace")]
+        // SAFETY: `page` is live (above).
+        if unsafe { Page::is_full(page.as_ptr()) } {
+            // PROVENANCE: addresses read for their value only, to name memory in the record.
+            self.tap.emit(Event::PageFull {
+                bucket: bi,
+                page: page.addr().get(),
+            });
+        }
+        Some(slot)
     }
 
     /// Grows or shrinks a bucket-path allocation in place if the current slot's
@@ -664,6 +728,8 @@ impl Buckets {
         // INDEX: `bi < NUM_BUCKETS`, checked above.
         #[allow(clippy::indexing_slicing)]
         let bucket = &self.buckets[bi];
+        #[cfg(feature = "trace")]
+        self.note_refill(bi, page);
         // SAFETY: `page` is a member of this bucket's list; `ptr` is a live slot of
         // it this instance previously handed out (this function's contract).
         unsafe { bucket.free(page, ptr) };
@@ -688,6 +754,8 @@ impl Buckets {
         // INDEX: `bi < NUM_BUCKETS`, checked above.
         #[allow(clippy::indexing_slicing)]
         let bucket = &self.buckets[bi];
+        #[cfg(feature = "trace")]
+        self.note_refill(bi, page);
         // SAFETY: `page` is a member of this bucket's list (caller-guaranteed `bi`);
         // `ptr` is a live slot of it this instance previously handed out.
         unsafe { bucket.free(page, ptr) };
@@ -789,6 +857,15 @@ impl Buckets {
                 // SAFETY: `page` is live.
                 if unsafe { Page::is_empty(page.as_ptr()) } {
                     crate::list::unlink_node(page);
+                    // PROVENANCE: addresses read for their value only, to name memory in the record.
+                    chronicle!(
+                        self.tap,
+                        Event::PageRelease {
+                            // SAFETY: `page` is live (just unlinked, not yet unmapped).
+                            bucket: unsafe { Page::bucket_index(page.as_ptr()) },
+                            page: page.addr().get(),
+                        }
+                    );
                     // ALIGN: `page` is a live `Page`, always
                     // `PAGE_SIZE - size_of::<Page>()` bytes into its owning
                     // PAGE_SIZE-aligned mapping (the type's own invariant); rounding

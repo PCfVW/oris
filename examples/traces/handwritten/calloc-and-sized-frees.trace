@@ -1,0 +1,14 @@
+oris-trace 1
+# calloc is alloc of count x size (then zeroed); a sized free takes the size the block
+# was allocated with, a sized aligned free the size and alignment.
+calloc h0 4 8
+calloc h1 100 10
+calloc h2 0 8
+alloc h3 300
+alloc_aligned h4 200 64
+free_sized h0 32
+free_sized h1 1000
+free h2
+free_sized h3 300
+free_sized_aligned h4 200 64
+purge

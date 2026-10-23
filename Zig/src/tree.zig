@@ -37,6 +37,7 @@ const list = @import("list.zig");
 const os = @import("os.zig");
 const rbtree = @import("rbtree.zig");
 const spomen = @import("spomen.zig");
+const letopis_event = @import("letopis_event.zig");
 
 const BlockHeader = block.BlockHeader;
 const FreeNode = block.FreeNode;
@@ -171,20 +172,15 @@ fn shiftBlock(bl: *BlockHeader, offs: usize) *BlockHeader {
 ///   `systemAlloc` minus those passed to `systemFree` — the total bytes this
 ///   `Tree` currently has mapped from the OS.
 ///
-/// Generic over the `spomen` debug-subsystem `Config` (see `Zig/CONVENTIONS.md`'s
-/// "`comptime` Toggles" section) so a phase that needs debug-only state here can
-/// specialize this type's methods per instantiation with a compiler-enforced
-/// zero-cost-when-disabled guarantee. Nothing in this type reads `config`:
-/// guard bytes, poisoning and the allocation records live entirely at `Orisnitsa`'s dispatch layer
+/// Generic over `Config` (see `Zig/CONVENTIONS.md`'s "`comptime` Toggles" section) with
+/// a compiler-enforced zero-cost-when-disabled guarantee. This type reads only
+/// `config.trace`, which adds the `tap` field and the transition-event emissions
+/// (`letopis`; `examples/traces/EVENTS.md`). `config.debug` is not read here: guard bytes,
+/// poisoning and the allocation records live entirely at `Orisnitsa`'s dispatch layer
 /// (mirroring HPHA, where `tree_alloc` is guard-oblivious and just serves whatever
 /// already-inflated size it is handed), so `block.zig`'s `BlockHeader`/`FreeNode`/
-/// `SmallFreeNode` need no parameterization of their own unless a later phase
-/// stores debug-only state in them.
+/// `SmallFreeNode` need no parameterization of their own.
 pub fn Tree(comptime config: Config) type {
-    // Not yet read (see the doc above) — kept, rather than dropped, so a later
-    // phase that does store debug-only state here need not re-thread it through
-    // every `Tree(...)` instantiation site.
-    _ = config;
     return struct {
         const Self = @This();
 
@@ -201,6 +197,9 @@ pub fn Tree(comptime config: Config) type {
         /// Total bytes currently mapped for the tree path (whole `PAGE_SIZE`-multiple
         /// arenas, fences included).
         allocated_bytes: usize = 0,
+        /// Where this path's transition events go (`letopis`; empty unless a replay
+        /// installed a log). `void` unless `config.trace`.
+        tap: if (config.trace) letopis_event.Tap else void = if (config.trace) .{} else {},
 
         /// Builds an empty tree allocator, with nothing yet mapped from the OS.
         pub fn init() Self {
@@ -211,6 +210,34 @@ pub fn Tree(comptime config: Config) type {
         /// half of `allocator::allocated`.
         pub fn allocated(self: *Self) usize {
             return self.allocated_bytes;
+        }
+
+        /// `splitBlock`, emitting its `split` event. Ports the `allocator::split_block`
+        /// member function, which is where HPHA performs the transition — so every split
+        /// this type makes goes through here. Same contract as `splitBlock`.
+        fn split(self: *Self, bl: *BlockHeader, size: usize) void {
+            // PROVENANCE: address read for its value only, to name the block in the record.
+            if (config.trace) self.tap.emit(.{ .split = .{ .block = @intFromPtr(bl), .size = size } });
+            splitBlock(bl, size);
+        }
+
+        /// `shiftBlock`, emitting its `shift` event. Ports `allocator::shift_block`. Same
+        /// contract as `shiftBlock`.
+        fn shift(self: *Self, bl: *BlockHeader, offs: usize) *BlockHeader {
+            // PROVENANCE: as in `split`.
+            if (config.trace) self.tap.emit(.{ .shift = .{ .block = @intFromPtr(bl), .offset = offs } });
+            return shiftBlock(bl, offs);
+        }
+
+        /// Absorbs `bl` into its physical predecessor (`BlockHeader.unlink`), emitting its
+        /// `merge` event. Every block that disappears this way — in `coalesceBlock`, and in
+        /// the in-place growths of `realloc`/`reallocAligned`/`resize` — goes through here,
+        /// matching the HPHA `block_header::unlink` call sites one for one. Same contract as
+        /// `BlockHeader.unlink`.
+        fn merge(self: *Self, bl: *BlockHeader) void {
+            // PROVENANCE: as in `split`.
+            if (config.trace) self.tap.emit(.{ .merge = @intFromPtr(bl) });
+            bl.unlink();
         }
 
         /// Coalesces `bl` (which must currently be unused) with either physical
@@ -226,7 +253,7 @@ pub fn Tree(comptime config: Config) type {
                 // `nxt` is live and unused, hence currently indexed (in the tree, the
                 // small list, or the MR cache) — a live free block always is.
                 self.detach(nxt);
-                nxt.unlink();
+                self.merge(nxt);
             }
             const prv = bl.prev.?;
             // Named `result`, not reusing `bl` (which `orisnik`'s `coalesce_block`
@@ -237,7 +264,7 @@ pub fn Tree(comptime config: Config) type {
                 // `prv` is live and unused, hence currently indexed (same reasoning
                 // as `nxt` above).
                 self.detach(prv);
-                result.unlink();
+                self.merge(result);
                 result = prv;
             }
             return result;
@@ -249,6 +276,8 @@ pub fn Tree(comptime config: Config) type {
             std.debug.assert(size % os.PAGE_SIZE == 0);
             const ptr = os.map(size) orelse return null;
             self.allocated_bytes += size;
+            // PROVENANCE: address read for its value only, to name the mapping.
+            if (config.trace) self.tap.emit(.{ .map = .{ .kind = .tree, .base = @intFromPtr(ptr), .bytes = size } });
             return ptr;
         }
 
@@ -256,6 +285,8 @@ pub fn Tree(comptime config: Config) type {
         ///
         /// `ptr`/`size` must be a still-live result of `systemAlloc` on `self`.
         fn systemFree(self: *Self, ptr: [*]u8, size: usize) void {
+            // PROVENANCE: as in `systemAlloc`.
+            if (config.trace) self.tap.emit(.{ .unmap = .{ .base = @intFromPtr(ptr), .bytes = size } });
             os.unmap(ptr, size);
             self.allocated_bytes -= size;
         }
@@ -427,7 +458,14 @@ pub fn Tree(comptime config: Config) type {
                     // matches `FreeNode`'s alignment (its only field is `NodeBase`,
                     // align 8).
                     const node: *FreeNode = @ptrCast(@alignCast(mem));
-                    self.free_tree.insert(node);
+                    const outcome = self.free_tree.insertCounted(node);
+                    // PROVENANCE: address read for its value only, to name the block.
+                    if (config.trace) self.tap.emit(.{ .tree_insert = .{
+                        .block = @intFromPtr(last),
+                        .size = size,
+                        .kind = outcome.kind,
+                        .rotations = outcome.rotations,
+                    } });
                 } else {
                     // SAFETY: same payload-size argument as the `FreeNode` cast above
                     // (`SmallFreeNode` is no larger); `last` is free, so the payload is unused.
@@ -436,9 +474,13 @@ pub fn Tree(comptime config: Config) type {
                     // `ListLink`, align 8).
                     const node: *SmallFreeNode = @ptrCast(@alignCast(mem));
                     self.small_free_list.pushBack(node);
+                    // PROVENANCE: as above.
+                    if (config.trace) self.tap.emit(.{ .list_push = .{ .block = @intFromPtr(last), .size = size } });
                 }
             }
             self.mr_free_block = bl;
+            // PROVENANCE: as above.
+            if (config.trace) self.tap.emit(.{ .mr = if (bl) |b| @intFromPtr(b) else null });
         }
 
         /// Removes `bl` from wherever it is currently indexed (the MR cache, the
@@ -446,6 +488,7 @@ pub fn Tree(comptime config: Config) type {
         fn detach(self: *Self, bl: *BlockHeader) void {
             if (self.mr_free_block == bl) {
                 self.mr_free_block = null;
+                if (config.trace) self.tap.emit(.{ .mr = null });
                 return;
             }
             const size = bl.size();
@@ -456,7 +499,14 @@ pub fn Tree(comptime config: Config) type {
                 // `FreeNode` written by `attach`.
                 // ALIGN: see `attach`'s identical cast for why this is 8-aligned.
                 const node: *FreeNode = @ptrCast(@alignCast(mem));
-                self.free_tree.erase(node);
+                const outcome = self.free_tree.eraseCounted(node);
+                // PROVENANCE: address read for its value only, to name the block.
+                if (config.trace) self.tap.emit(.{ .tree_erase = .{
+                    .block = @intFromPtr(bl),
+                    .size = size,
+                    .kind = outcome.kind,
+                    .rotations = outcome.rotations,
+                } });
             } else {
                 // SAFETY: `bl` is a live free block indexed in the small list (size at most
                 // `MAX_SMALL_ALLOCATION`, not the MR block), so its `mem()` holds the
@@ -464,6 +514,8 @@ pub fn Tree(comptime config: Config) type {
                 // ALIGN: see `attach`'s identical cast for why this is 8-aligned.
                 const node: *SmallFreeNode = @ptrCast(@alignCast(mem));
                 list.unlinkNode(node);
+                // PROVENANCE: as above.
+                if (config.trace) self.tap.emit(.{ .list_erase = .{ .block = @intFromPtr(bl), .size = size } });
             }
         }
 
@@ -474,7 +526,7 @@ pub fn Tree(comptime config: Config) type {
             const new_bl_size = new_bl.size();
             std.debug.assert(new_bl_size >= sz);
             if (new_bl_size >= sz + SPLIT_REMAINDER_MIN) {
-                splitBlock(new_bl, sz);
+                self.split(new_bl, sz);
                 self.attach(new_bl.next());
             }
             new_bl.setUsed();
@@ -508,7 +560,7 @@ pub fn Tree(comptime config: Config) type {
                 // `@sizeOf(BlockHeader)` multiple), and this branch's own
                 // `>= SPLIT_REMAINDER_MIN` check is exactly `splitBlock`'s size
                 // precondition applied to that padding block.
-                splitBlock(new_bl, alignment_offs - @sizeOf(BlockHeader));
+                self.split(new_bl, alignment_offs - @sizeOf(BlockHeader));
                 // `new_bl` is live and unused (still its pre-extraction state;
                 // `extractAligned` never marks it used).
                 self.attach(new_bl);
@@ -519,10 +571,10 @@ pub fn Tree(comptime config: Config) type {
                 // real chain); `alignment_offs` is a `@sizeOf(BlockHeader)` multiple
                 // (same reasoning as above) and within `new_bl`'s own span (the
                 // `>= size + alignment_offs` check above).
-                new_bl = shiftBlock(new_bl, alignment_offs);
+                new_bl = self.shift(new_bl, alignment_offs);
             }
             if (new_bl.size() >= sz + SPLIT_REMAINDER_MIN) {
-                splitBlock(new_bl, sz);
+                self.split(new_bl, sz);
                 self.attach(new_bl.next());
             }
             new_bl.setUsed();
@@ -543,7 +595,7 @@ pub fn Tree(comptime config: Config) type {
             const bl_size = bl.size();
             if (bl_size >= sz) {
                 if (bl_size >= sz + SPLIT_REMAINDER_MIN) {
-                    splitBlock(bl, sz);
+                    self.split(bl, sz);
                     const coalesced = self.coalesceBlock(bl.next());
                     self.attach(coalesced);
                 }
@@ -555,11 +607,11 @@ pub fn Tree(comptime config: Config) type {
             if (bl_size + next_size >= sz) {
                 std.debug.assert(!next_used);
                 self.detach(next);
-                next.unlink();
+                self.merge(next);
                 const bl_size_now = bl.size();
                 std.debug.assert(bl_size_now >= sz);
                 if (bl_size_now >= sz + SPLIT_REMAINDER_MIN) {
-                    splitBlock(bl, sz);
+                    self.split(bl, sz);
                     self.attach(bl.next());
                 }
                 return ptr;
@@ -570,10 +622,10 @@ pub fn Tree(comptime config: Config) type {
             if (bl_size + prev_size + next_size >= sz) {
                 std.debug.assert(!prev_used);
                 self.detach(prev);
-                bl.unlink();
+                self.merge(bl);
                 if (!next_used) {
                     self.detach(next);
-                    next.unlink();
+                    self.merge(next);
                 }
                 // Named `merged`, not reusing `bl` (which `orisnik`'s `tree_realloc`
                 // reassigns via `let bl = prev;`) — Zig errors on identifier
@@ -593,7 +645,7 @@ pub fn Tree(comptime config: Config) type {
                 // `@memcpy`.
                 @memmove(new_ptr[0..bl_size], ptr[0..bl_size]);
                 if (merged.size() >= sz + SPLIT_REMAINDER_MIN) {
-                    splitBlock(merged, sz);
+                    self.split(merged, sz);
                     self.attach(merged.next());
                 }
                 return new_ptr;
@@ -626,7 +678,7 @@ pub fn Tree(comptime config: Config) type {
             const bl_size = bl.size();
             if (bl_size >= sz) {
                 if (bl_size >= sz + SPLIT_REMAINDER_MIN) {
-                    splitBlock(bl, sz);
+                    self.split(bl, sz);
                     const coalesced = self.coalesceBlock(bl.next());
                     self.attach(coalesced);
                 }
@@ -638,11 +690,11 @@ pub fn Tree(comptime config: Config) type {
             if (bl_size + next_size >= sz) {
                 std.debug.assert(!next_used);
                 self.detach(next);
-                next.unlink();
+                self.merge(next);
                 const bl_size_now = bl.size();
                 std.debug.assert(bl_size_now >= sz);
                 if (bl_size_now >= sz + SPLIT_REMAINDER_MIN) {
-                    splitBlock(bl, sz);
+                    self.split(bl, sz);
                     self.attach(bl.next());
                 }
                 return ptr;
@@ -660,10 +712,10 @@ pub fn Tree(comptime config: Config) type {
             if (bl_size + prev_size + next_size >= sz + alignment_offs) {
                 std.debug.assert(!prev_used);
                 self.detach(prev);
-                bl.unlink();
+                self.merge(bl);
                 if (!next_used) {
                     self.detach(next);
-                    next.unlink();
+                    self.merge(next);
                 }
                 // Named `shifted_prev`, not reusing `prev` (which `orisnik`'s
                 // `tree_realloc_aligned` reassigns via `let mut prev = prev;`) — Zig
@@ -671,7 +723,7 @@ pub fn Tree(comptime config: Config) type {
                 var shifted_prev = prev;
                 if (alignment_offs >= SPLIT_REMAINDER_MIN) {
                     // Same reasoning as `allocAligned`'s identical branch.
-                    splitBlock(shifted_prev, alignment_offs - @sizeOf(BlockHeader));
+                    self.split(shifted_prev, alignment_offs - @sizeOf(BlockHeader));
                     // `shifted_prev` is live and unused (unlinked from its index
                     // above, not yet re-attached).
                     self.attach(shifted_prev);
@@ -684,7 +736,7 @@ pub fn Tree(comptime config: Config) type {
                     // only needs its *own* prev/next fields to still be live, which
                     // they are, since only it itself was unlinked, not its
                     // neighbours).
-                    shifted_prev = shiftBlock(shifted_prev, alignment_offs);
+                    shifted_prev = self.shift(shifted_prev, alignment_offs);
                 }
                 // Named `merged`, not `bl` (which `orisnik`'s counterpart reassigns
                 // via `let bl = prev;`) — same identifier-shadowing reason as
@@ -703,7 +755,7 @@ pub fn Tree(comptime config: Config) type {
                 // `bl_size` bytes; the ranges may overlap (growing in place).
                 @memmove(new_ptr[0..bl_size], ptr[0..bl_size]);
                 if (merged_size_now >= sz + SPLIT_REMAINDER_MIN) {
-                    splitBlock(merged, sz);
+                    self.split(merged, sz);
                     self.attach(merged.next());
                 }
                 return new_ptr;
@@ -733,7 +785,7 @@ pub fn Tree(comptime config: Config) type {
             const bl_size = bl.size();
             if (bl_size >= sz) {
                 if (bl_size >= sz + SPLIT_REMAINDER_MIN) {
-                    splitBlock(bl, sz);
+                    self.split(bl, sz);
                     const coalesced = self.coalesceBlock(bl.next());
                     self.attach(coalesced);
                 }
@@ -744,9 +796,9 @@ pub fn Tree(comptime config: Config) type {
             const next_size = next.size();
             if (!next_used and bl_size + next_size + @sizeOf(BlockHeader) >= sz) {
                 self.detach(next);
-                next.unlink();
+                self.merge(next);
                 if (bl.size() >= sz + SPLIT_REMAINDER_MIN) {
-                    splitBlock(bl, sz);
+                    self.split(bl, sz);
                     self.attach(bl.next());
                 }
                 const bl_size_now = bl.size();

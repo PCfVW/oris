@@ -23,6 +23,8 @@ use crate::align::round_up;
 use crate::block::{self, BlockHeader, FreeNode, SmallFreeNode};
 use crate::bucket::MAX_SMALL_ALLOCATION;
 use crate::home::Home;
+#[cfg(feature = "trace")]
+use crate::letopis::{Event, MapKind, Tap};
 use crate::list::{self, IntrusiveList};
 use crate::os;
 use crate::rbtree::{self, IntrusiveMultiRbTree};
@@ -188,6 +190,10 @@ pub(crate) struct Tree {
     /// Where this value stood when it first mapped an arena; lets `Drop` refuse to walk
     /// sentinels that a later move left pointing at the old address (see [`Home`]).
     home: Home,
+    /// Where this path's transition events go (`letopis`; empty unless a replay installed
+    /// a log). Present only with the `trace` feature.
+    #[cfg(feature = "trace")]
+    tap: Tap,
 }
 
 impl Tree {
@@ -199,7 +205,72 @@ impl Tree {
             small_free_list: IntrusiveList::new(),
             allocated_bytes: Cell::new(0),
             home: Home::new(),
+            #[cfg(feature = "trace")]
+            tap: Tap::new(),
         }
+    }
+
+    /// This path's event tap, for `Orisnik::with_letopis`.
+    #[cfg(feature = "trace")]
+    pub(crate) fn tap(&self) -> &Tap {
+        &self.tap
+    }
+
+    /// [`split_block`], emitting its `split` event. Ports the `allocator::split_block`
+    /// member function, which is where HPHA performs the transition — so every split this
+    /// module makes goes through here.
+    ///
+    /// # Safety
+    /// As [`split_block`].
+    // `self` carries the event tap, which exists only with `trace`.
+    #[cfg_attr(not(feature = "trace"), allow(clippy::unused_self))]
+    unsafe fn split(&self, bl: *mut BlockHeader, size: usize) {
+        // PROVENANCE: addresses read for their value only, to name memory in the record.
+        chronicle!(
+            self.tap,
+            Event::Split {
+                block: bl.addr(),
+                size
+            }
+        );
+        // SAFETY: forwarded from this function's own contract.
+        unsafe { split_block(bl, size) };
+    }
+
+    /// [`shift_block`], emitting its `shift` event. Ports `allocator::shift_block`.
+    ///
+    /// # Safety
+    /// As [`shift_block`].
+    #[must_use]
+    // `self` carries the event tap, which exists only with `trace`.
+    #[cfg_attr(not(feature = "trace"), allow(clippy::unused_self))]
+    unsafe fn shift(&self, bl: *mut BlockHeader, offs: usize) -> *mut BlockHeader {
+        // PROVENANCE: addresses read for their value only, to name memory in the record.
+        chronicle!(
+            self.tap,
+            Event::Shift {
+                block: bl.addr(),
+                offset: offs
+            }
+        );
+        // SAFETY: forwarded from this function's own contract.
+        unsafe { shift_block(bl, offs) }
+    }
+
+    /// Absorbs `bl` into its physical predecessor ([`BlockHeader::unlink`]), emitting its
+    /// `merge` event. Every block that disappears this way — in `coalesce_block`, and in
+    /// the in-place growths of `realloc`/`realloc_aligned`/`resize` — goes through here,
+    /// matching HPHA's `block_header::unlink` call sites one for one.
+    ///
+    /// # Safety
+    /// As [`BlockHeader::unlink`].
+    // `self` carries the event tap, which exists only with `trace`.
+    #[cfg_attr(not(feature = "trace"), allow(clippy::unused_self))]
+    unsafe fn merge(&self, bl: *mut BlockHeader) {
+        // PROVENANCE: addresses read for their value only, to name memory in the record.
+        chronicle!(self.tap, Event::Merge { block: bl.addr() });
+        // SAFETY: forwarded from this function's own contract.
+        unsafe { BlockHeader::unlink(bl) };
     }
 
     /// `false` iff this value mapped an arena and has been moved since, so that its
@@ -236,7 +307,7 @@ impl Tree {
             let next = unsafe { NonNull::new_unchecked(next) };
             self.detach(next);
             // SAFETY: `next` is live.
-            unsafe { BlockHeader::unlink(next.as_ptr()) };
+            unsafe { self.merge(next.as_ptr()) };
         }
         // SAFETY: `bl` is live.
         let prev = unsafe { BlockHeader::prev(bl) };
@@ -248,7 +319,7 @@ impl Tree {
             let prev_nn = unsafe { NonNull::new_unchecked(prev) };
             self.detach(prev_nn);
             // SAFETY: `bl` is live.
-            unsafe { BlockHeader::unlink(bl) };
+            unsafe { self.merge(bl) };
             bl = prev;
         }
         bl
@@ -262,6 +333,15 @@ impl Tree {
         let ptr = os::map(size)?;
         self.home.latch(self);
         self.allocated_bytes.set(self.allocated_bytes.get() + size);
+        // PROVENANCE: addresses read for their value only, to name memory in the record.
+        chronicle!(
+            self.tap,
+            Event::Map {
+                kind: MapKind::Tree,
+                base: ptr.addr().get(),
+                bytes: size,
+            }
+        );
         Some(ptr)
     }
 
@@ -270,6 +350,14 @@ impl Tree {
     /// # Safety
     /// `ptr`/`size` must be a still-live result of [`Tree::system_alloc`] on `self`.
     unsafe fn system_free(&self, ptr: NonNull<u8>, size: usize) {
+        // PROVENANCE: addresses read for their value only, to name memory in the record.
+        chronicle!(
+            self.tap,
+            Event::Unmap {
+                base: ptr.addr().get(),
+                bytes: size,
+            }
+        );
         // SAFETY: forwarded from this function's own contract.
         unsafe { os::unmap(ptr, size) };
         self.allocated_bytes.set(self.allocated_bytes.get() - size);
@@ -478,7 +566,18 @@ impl Tree {
                 // non-null `NonNull<BlockHeader>`) by a small positive offset
                 // (`size_of::<BlockHeader>()`), which cannot wrap around to null.
                 let node = unsafe { NonNull::new_unchecked(node) };
-                self.free_tree.insert(node);
+                #[cfg_attr(not(feature = "trace"), allow(unused_variables))]
+                let (kind, rotations) = self.free_tree.insert_counted(node);
+                // PROVENANCE: addresses read for their value only, to name memory in the record.
+                chronicle!(
+                    self.tap,
+                    Event::TreeInsert {
+                        block: last.addr().get(),
+                        size,
+                        kind,
+                        rotations,
+                    }
+                );
             } else {
                 // ALIGN: same reasoning as the `FreeNode` cast above; `SmallFreeNode`
                 // is likewise align-8 (its only field is `ListLink`, align 8).
@@ -487,9 +586,24 @@ impl Tree {
                 // SAFETY: same non-null reasoning as the `FreeNode` case above.
                 let node = unsafe { NonNull::new_unchecked(node) };
                 self.small_free_list.push_back(node);
+                // PROVENANCE: addresses read for their value only, to name memory in the record.
+                chronicle!(
+                    self.tap,
+                    Event::ListPush {
+                        block: last.addr().get(),
+                        size,
+                    }
+                );
             }
         }
         self.mr_free_block.set(bl);
+        // PROVENANCE: addresses read for their value only, to name memory in the record.
+        chronicle!(
+            self.tap,
+            Event::Mr {
+                block: bl.map(|b| b.addr().get()),
+            }
+        );
     }
 
     /// Removes `bl` from wherever it is currently indexed (the MR cache, the tree, or
@@ -497,6 +611,7 @@ impl Tree {
     fn detach(&self, bl: NonNull<BlockHeader>) {
         if self.mr_free_block.get() == Some(bl) {
             self.mr_free_block.set(None);
+            chronicle!(self.tap, Event::Mr { block: None });
             return;
         }
         // SAFETY: `bl` is live (caller-supplied, currently indexed by this function's
@@ -512,7 +627,18 @@ impl Tree {
             // `NonNull<BlockHeader>`) by a small positive offset, which cannot wrap
             // around to null.
             let node = unsafe { NonNull::new_unchecked(node) };
-            self.free_tree.erase(node);
+            #[cfg_attr(not(feature = "trace"), allow(unused_variables))]
+            let (kind, rotations) = self.free_tree.erase_counted(node);
+            // PROVENANCE: addresses read for their value only, to name memory in the record.
+            chronicle!(
+                self.tap,
+                Event::TreeErase {
+                    block: bl.addr().get(),
+                    size,
+                    kind,
+                    rotations,
+                }
+            );
         } else {
             // ALIGN: see `attach`'s identical cast for why this is 8-aligned.
             #[allow(clippy::cast_ptr_alignment)]
@@ -520,6 +646,14 @@ impl Tree {
             // SAFETY: same non-null reasoning as the `FreeNode` case above.
             let node = unsafe { NonNull::new_unchecked(node) };
             list::unlink_node(node);
+            // PROVENANCE: addresses read for their value only, to name memory in the record.
+            chronicle!(
+                self.tap,
+                Event::ListErase {
+                    block: bl.addr().get(),
+                    size,
+                }
+            );
         }
     }
 
@@ -537,7 +671,7 @@ impl Tree {
         if new_bl_size >= size + SPLIT_REMAINDER_MIN {
             // SAFETY: `new_bl` is live; the size check above establishes this
             // function's own precondition.
-            unsafe { split_block(new_bl, size) };
+            unsafe { self.split(new_bl, size) };
             // SAFETY: `new_bl` is live.
             let remainder = unsafe { BlockHeader::next(new_bl) };
             // SAFETY: `remainder` is live (just split off above), unused (`split_block`
@@ -587,7 +721,7 @@ impl Tree {
             // positions, is a `size_of::<BlockHeader>()` multiple), and this branch's
             // own `>= SPLIT_REMAINDER_MIN` check is exactly `split_block`'s size
             // precondition applied to that padding block.
-            unsafe { split_block(new_bl, alignment_offs - size_of::<BlockHeader>()) };
+            unsafe { self.split(new_bl, alignment_offs - size_of::<BlockHeader>()) };
             // SAFETY: `new_bl` is live and unused (still its pre-extraction state;
             // `extract_aligned` never marks it used).
             let new_bl_nn = unsafe { NonNull::new_unchecked(new_bl) };
@@ -601,13 +735,13 @@ impl Tree {
             // real chain); `alignment_offs` is a `size_of::<BlockHeader>()` multiple
             // (same reasoning as above) and within `new_bl`'s own span (the
             // `>= size + alignment_offs` check above).
-            new_bl = unsafe { shift_block(new_bl, alignment_offs) };
+            new_bl = unsafe { self.shift(new_bl, alignment_offs) };
         }
         // SAFETY: `new_bl` is live.
         if unsafe { BlockHeader::size(new_bl) } >= size + SPLIT_REMAINDER_MIN {
             // SAFETY: `new_bl` is live; the size check above establishes
             // `split_block`'s precondition.
-            unsafe { split_block(new_bl, size) };
+            unsafe { self.split(new_bl, size) };
             // SAFETY: `new_bl` is live.
             let remainder = unsafe { BlockHeader::next(new_bl) };
             // SAFETY: `remainder` is live and unused (just split off).
@@ -642,7 +776,7 @@ impl Tree {
             if bl_size >= size + SPLIT_REMAINDER_MIN {
                 // SAFETY: `bl` is live; the size check above establishes
                 // `split_block`'s precondition.
-                unsafe { split_block(bl, size) };
+                unsafe { self.split(bl, size) };
                 // SAFETY: `bl` is live.
                 let next = unsafe { BlockHeader::next(bl) };
                 // SAFETY: `next` is live (just split off above) and unused
@@ -674,13 +808,13 @@ impl Tree {
             let next_nn = unsafe { NonNull::new_unchecked(next) };
             self.detach(next_nn);
             // SAFETY: `next` is live.
-            unsafe { BlockHeader::unlink(next) };
+            unsafe { self.merge(next) };
             // SAFETY: `bl` is live.
             let bl_size_now = unsafe { BlockHeader::size(bl) };
             debug_assert!(bl_size_now >= size);
             if bl_size_now >= size + SPLIT_REMAINDER_MIN {
                 // SAFETY: `bl` is live; size check above establishes the precondition.
-                unsafe { split_block(bl, size) };
+                unsafe { self.split(bl, size) };
                 // SAFETY: `bl` is live.
                 let remainder = unsafe { BlockHeader::next(bl) };
                 // SAFETY: `remainder` is live and unused (just split off).
@@ -706,13 +840,13 @@ impl Tree {
             let prev_nn = unsafe { NonNull::new_unchecked(prev) };
             self.detach(prev_nn);
             // SAFETY: `bl` is live.
-            unsafe { BlockHeader::unlink(bl) };
+            unsafe { self.merge(bl) };
             if !next_used {
                 // SAFETY: `next` is live and unused.
                 let next_nn = unsafe { NonNull::new_unchecked(next) };
                 self.detach(next_nn);
                 // SAFETY: `next` is live.
-                unsafe { BlockHeader::unlink(next) };
+                unsafe { self.merge(next) };
             }
             let bl = prev;
             // SAFETY: `bl` is live.
@@ -732,7 +866,7 @@ impl Tree {
             // SAFETY: `bl` is live.
             if unsafe { BlockHeader::size(bl) } >= size + SPLIT_REMAINDER_MIN {
                 // SAFETY: `bl` is live; size check above establishes the precondition.
-                unsafe { split_block(bl, size) };
+                unsafe { self.split(bl, size) };
                 // SAFETY: `bl` is live.
                 let remainder = unsafe { BlockHeader::next(bl) };
                 // SAFETY: `remainder` is live and unused.
@@ -787,7 +921,7 @@ impl Tree {
         if bl_size >= size {
             if bl_size >= size + SPLIT_REMAINDER_MIN {
                 // SAFETY: `bl` is live; size check above establishes the precondition.
-                unsafe { split_block(bl, size) };
+                unsafe { self.split(bl, size) };
                 // SAFETY: `bl` is live.
                 let next = unsafe { BlockHeader::next(bl) };
                 // SAFETY: `next` is live and unused, attached to a live chain.
@@ -815,13 +949,13 @@ impl Tree {
             let next_nn = unsafe { NonNull::new_unchecked(next) };
             self.detach(next_nn);
             // SAFETY: `next` is live.
-            unsafe { BlockHeader::unlink(next) };
+            unsafe { self.merge(next) };
             // SAFETY: `bl` is live.
             let bl_size_now = unsafe { BlockHeader::size(bl) };
             debug_assert!(bl_size_now >= size);
             if bl_size_now >= size + SPLIT_REMAINDER_MIN {
                 // SAFETY: `bl` is live; size check above establishes the precondition.
-                unsafe { split_block(bl, size) };
+                unsafe { self.split(bl, size) };
                 // SAFETY: `bl` is live.
                 let remainder = unsafe { BlockHeader::next(bl) };
                 // SAFETY: `remainder` is live and unused.
@@ -854,13 +988,13 @@ impl Tree {
             let prev_nn = unsafe { NonNull::new_unchecked(prev) };
             self.detach(prev_nn);
             // SAFETY: `bl` is live.
-            unsafe { BlockHeader::unlink(bl) };
+            unsafe { self.merge(bl) };
             if !next_used {
                 // SAFETY: `next` is live and unused.
                 let next_nn = unsafe { NonNull::new_unchecked(next) };
                 self.detach(next_nn);
                 // SAFETY: `next` is live.
-                unsafe { BlockHeader::unlink(next) };
+                unsafe { self.merge(next) };
             }
             let mut prev = prev;
             if alignment_offs >= SPLIT_REMAINDER_MIN {
@@ -868,7 +1002,7 @@ impl Tree {
                 // is a `size_of::<BlockHeader>()` multiple (same reasoning as
                 // `alloc_aligned`), and this branch's own check establishes
                 // `split_block`'s size precondition.
-                unsafe { split_block(prev, alignment_offs - size_of::<BlockHeader>()) };
+                unsafe { self.split(prev, alignment_offs - size_of::<BlockHeader>()) };
                 // SAFETY: `prev` is live and unused (unlinked from its index above,
                 // not yet re-attached).
                 let prev_nn = unsafe { NonNull::new_unchecked(prev) };
@@ -883,7 +1017,7 @@ impl Tree {
                 // the physical chain along with `bl`/`next`; `shift_block` itself
                 // only needs `prev`'s *own* prev/next fields to still be live, which
                 // they are, since only `prev` itself was unlinked, not its neighbours).
-                prev = unsafe { shift_block(prev, alignment_offs) };
+                prev = unsafe { self.shift(prev, alignment_offs) };
             }
             let bl = prev;
             // SAFETY: `bl` is live.
@@ -899,7 +1033,7 @@ impl Tree {
             unsafe { new_ptr.copy_from(ptr.as_ptr(), bl_size) };
             if bl_size_now >= size + SPLIT_REMAINDER_MIN {
                 // SAFETY: `bl` is live; size check above establishes the precondition.
-                unsafe { split_block(bl, size) };
+                unsafe { self.split(bl, size) };
                 // SAFETY: `bl` is live.
                 let remainder = unsafe { BlockHeader::next(bl) };
                 // SAFETY: `remainder` is live and unused.
@@ -948,7 +1082,7 @@ impl Tree {
         if bl_size >= size {
             if bl_size >= size + SPLIT_REMAINDER_MIN {
                 // SAFETY: `bl` is live; size check above establishes the precondition.
-                unsafe { split_block(bl, size) };
+                unsafe { self.split(bl, size) };
                 // SAFETY: `bl` is live.
                 let next = unsafe { BlockHeader::next(bl) };
                 // SAFETY: `next` is live and unused, attached to a live chain.
@@ -972,13 +1106,13 @@ impl Tree {
             let next_nn = unsafe { NonNull::new_unchecked(next) };
             self.detach(next_nn);
             // SAFETY: `next` is live.
-            unsafe { BlockHeader::unlink(next) };
+            unsafe { self.merge(next) };
             // SAFETY: `bl` is live.
             if unsafe { BlockHeader::size(bl) } >= size + SPLIT_REMAINDER_MIN {
                 // SAFETY: `bl` is live; the merged size, at least `size`, establishes
                 // `split_block`'s precondition when it's also `>= size +
                 // SPLIT_REMAINDER_MIN` (checked here).
-                unsafe { split_block(bl, size) };
+                unsafe { self.split(bl, size) };
                 // SAFETY: `bl` is live.
                 let remainder = unsafe { BlockHeader::next(bl) };
                 // SAFETY: `remainder` is live and unused.

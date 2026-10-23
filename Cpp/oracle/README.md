@@ -1,5 +1,13 @@
 # The C++ oracle harness
 
+Three tools that put the 2007 HPHA source itself next to the ports:
+
+| Tool | What it checks | Where it runs |
+|---|---|---|
+| [`oracle_trace.cpp`](oracle_trace.cpp) (below) | the red-black tree alone, against both ports' trees | manually |
+| [`main_c_abi.cpp`](main_c_abi.cpp) (below) | Lazarov's own benchmark, over either port's `oris_*` C ABI | manually |
+| [`trace_replay.cpp`](trace_replay.cpp) (last section) | the whole allocator: HPHA's transition record for every trace of the corpus | CI (`trace-ci.yml`, Windows) |
+
 `oracle_trace.cpp` is the C++ side of the three-way RB-tree cross-validation this
 project's `CHANGELOG.md` and `Rust/src/rbtree.rs`/`Zig/src/rbtree.zig` refer to: it
 links against the real, unmodified `../hpha.h`/`../hpha.cpp` and drives HPHA's own
@@ -147,3 +155,69 @@ re-run against a `-Doptimize=ReleaseFast` `orisnitsa.dll`, still exit 0 and
 `allocated after purge: 0`, and the per-case timings close to in line with the
 `Debug`-vs-`--release` gap above, consistent with that gap being a build-mode
 artifact rather than a real difference between the two allocators.
+
+---
+
+## `trace_replay.cpp`: the HPHA leg of the trace gate
+
+The third kind of tool here, and the one CI runs: HPHA itself replaying an allocation
+trace (`../../examples/traces/GRAMMAR.md`) and printing its **transition record**, the
+same record `orisnik` (`cargo run --example replay --features trace`) and `orisnitsa`
+(`zig build replay`) print. The committed `*.record` files next to every trace in
+`../../examples/traces/` are this tool's output; `.github/workflows/trace-ci.yml` checks
+that all three implementations still produce them, byte for byte. That is the cross-port
+invariant (`../../ROADMAP.md`) verified against the specification, not only between the
+two ports.
+
+HPHA has no notion of a transition record, so the events have to come from inside it.
+They do, without touching `../hpha.h`/`../hpha.cpp`:
+
+- **`letopis.patch`** adds one `#include "letopis_hooks.h"` and, at each hook site, a
+  statement that records an event, a tree branch or a rotation (40 added lines, nothing
+  removed or changed), at exactly the places
+  `../../examples/traces/EVENTS.md` lists. Every hook only *reports*: it reads a
+  pointer or a size the surrounding code already has, so the patched allocator makes
+  the same decisions as the original.
+- **`letopis_hooks.h`** declares what those calls need; **`trace_replay.cpp`** defines
+  it, and holds the trace parser, the semantic constraints, the address normalization
+  and the record writer — ports of `Rust/src/letopis/` and `Zig/src/letopis_*.zig`,
+  with the same error messages.
+- **`build_trace_oracle.ps1`** copies the two reference files to a scratch directory
+  outside the repository (normalizing their line endings to the committed LF), applies
+  the patch there with `git apply --check` first, and builds. If HPHA's sources ever
+  changed, the patch would stop applying and the build would say so.
+
+### Build and run (Windows, MSVC)
+
+From a Developer PowerShell (or after `vcvars64.bat`), from the repository root:
+
+```powershell
+$oracle = & Cpp/oracle/build_trace_oracle.ps1     # prints the executable's path
+& $oracle examples/traces/handwritten/realloc-branches.trace
+```
+
+The build is the non-debug allocator by construction (no `_DEBUG`, no debug CRT — see the
+`_DEBUG` caveat above), with HPHA's asserts left on: a trace that trips one is a finding.
+Output is written in binary mode, so records end lines with LF like the ports' do.
+
+### Regenerating the records
+
+A record changes only when the allocator's behaviour or the record format does — a
+change under the cross-port invariant, which lands in Rust, Zig and `letopis.patch`
+together. After such a change, and after adding a trace, regenerate every record from
+the oracle (never from a port) and check both ports against them:
+
+```sh
+for t in examples/traces/handwritten/*.trace examples/traces/generated/*.trace; do
+  "$ORACLE" "$t" > "${t%.trace}.record"
+done
+```
+
+### Verified
+
+The traces under `rejected/` have no record: each must be refused, and its `.expected` file
+holds the message all three replayers print (after the `replay: <path>: ` prefix).
+
+Run 2026-10-22: the 12 hand-written traces and the 7 generated ones
+(`../../benchmarks/traces.toml`, CI tier) — 54,710 record lines in all, every event
+kind, 3,344 rotations — replay byte-identically on HPHA, `orisnik` and `orisnitsa`.

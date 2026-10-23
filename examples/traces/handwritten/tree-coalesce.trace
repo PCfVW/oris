@@ -1,0 +1,14 @@
+oris-trace 1
+# Coalescing on the tree path: four neighbouring blocks freed in an order that merges
+# with the next neighbour, with the previous one, and with both.
+alloc h0 1000
+alloc h1 1000
+alloc h2 1000
+alloc h3 1000
+alloc h4 1000
+free h1
+free h3
+free h2
+free h0
+free h4
+purge

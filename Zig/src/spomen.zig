@@ -34,4 +34,11 @@ pub const Config = struct {
     /// `orisnik`'s `debug-allocator` Cargo feature and Zig's own
     /// `std.heap.DebugAllocator(comptime config: Config)`.
     debug: bool = false,
+    /// Enables the `letopis` transition hooks (*летопис*, "chronicle"): every bucket-page
+    /// spawn, split, merge, tree insertion and rotation is emitted as an event a replayer
+    /// turns into the transition record that checks the cross-port invariant
+    /// (`letopis.zig`, `examples/traces/GRAMMAR.md`). `comptime`, like `debug`: with
+    /// `false`, the `tap` fields are `void` and every emission is eliminated. Parity:
+    /// `orisnik`'s `trace` Cargo feature.
+    trace: bool = false,
 };

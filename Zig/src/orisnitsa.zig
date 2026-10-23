@@ -54,6 +54,7 @@ const spomen_store = @import("spomen_store.zig");
 const spomen_failure = @import("spomen_failure.zig");
 const rand = @import("rand.zig");
 const tree_mod = @import("tree.zig");
+const letopis_event = @import("letopis_event.zig");
 
 const Config = spomen.Config;
 const Record = spomen_record.Record;
@@ -1350,6 +1351,18 @@ pub fn Orisnitsa(comptime config: Config) type {
         pub fn allocated(self: *Self) usize {
             self.debugAssertNotMoved();
             return self.buckets.allocated() + self.tree.allocated();
+        }
+
+        /// Installs `log` as the destination of every transition event this instance
+        /// emits (`letopis`; `examples/traces/EVENTS.md`), or uninstalls it (`null`).
+        /// Exists only in an instantiation with `config.trace`. The caller keeps `log` alive
+        /// until it uninstalls it, and uninstalls it before `deinit` (teardown is outside the
+        /// record). `letopis.replay` is the one caller; it is `pub` only so that file can
+        /// reach it. The log allocates from its own allocator, never from this instance.
+        pub fn setLetopis(self: *Self, log: ?*letopis_event.EventLog) void {
+            if (!config.trace) @compileError("setLetopis needs Orisnitsa(.{ .trace = true })");
+            self.buckets.tap.log = log;
+            self.tree.tap.log = log;
         }
     };
 }

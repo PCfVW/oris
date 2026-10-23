@@ -1,0 +1,1686 @@
+
+warning: allocator 'onik' selected but it seems it is not installed (sys je lua mi sn mi-sec mi-dbg sn-sec)
+
+
+warning: allocator 'onit' selected but it seems it is not installed (sys je lua mi sn mi-sec mi-dbg sn-sec)
+
+benchmarking on 4 cores.
+use '-h' or '--help' for help on configuration options.
+
+allocators:  sys mi je sn onik onit
+tests     :  cfrac espresso barnes larson-sized mstress rptest alloc-test sh6bench sh8bench xmalloc-test cscratch cthrash glibc-simple glibc-thread malloc-large mleak
+(excluded tests:  lean lean-mathlib)
+
+---- 3: cfrac
+
+run 1: cfrac sys: SYSMALLOC=1 ./cfrac 17545186520507317056371138836327483792789528
+cfrac       sys   0:02.78 3072 3.09 0.00 0 432
+
+run 1: cfrac mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./cfrac 17545186520507317056371138836327483792789528
+cfrac       mi    0:02.51 3200 2.79 0.00 0 383
+
+run 1: cfrac je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./cfrac 17545186520507317056371138836327483792789528
+cfrac       je    0:02.63 5120 2.91 0.00 0 500
+
+run 1: cfrac sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./cfrac 17545186520507317056371138836327483792789528
+cfrac       sn    0:02.58 3200 2.74 0.00 0 426
+
+run 1: cfrac onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./cfrac 17545186520507317056371138836327483792789528
+cfrac       onik  0:03.39 3328 3.53 0.00 0 423
+
+run 1: cfrac onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./cfrac 17545186520507317056371138836327483792789528
+cfrac       onit  0:05.63 3072 3.66 0.00 0 414
+
+---- 3: espresso
+
+run 1: espresso sys: SYSMALLOC=1 ./espresso ../../bench/espresso/largest.espresso
+espresso    sys   0:03.36 2560 3.30 0.02 0 473
+
+run 1: espresso mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./espresso ../../bench/espresso/largest.espresso
+espresso    mi    0:02.90 3308 2.93 0.03 0 3667
+
+run 1: espresso je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./espresso ../../bench/espresso/largest.espresso
+espresso    je    0:02.91 6144 3.07 0.02 0 679
+
+run 1: espresso sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./espresso ../../bench/espresso/largest.espresso
+espresso    sn    0:02.74 4480 2.89 0.04 0 690
+
+run 1: espresso onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./espresso ../../bench/espresso/largest.espresso
+espresso    onik  0:03.01 3584 3.20 0.02 0 577
+
+run 1: espresso onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./espresso ../../bench/espresso/largest.espresso
+espresso    onit  0:02.97 3456 3.24 0.05 0 567
+
+---- 3: barnes
+
+run 1: barnes sys: SYSMALLOC=1 ./barnes
+barnes      sys   0:02.06 58240 2.26 0.02 0 16568
+
+run 1: barnes mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./barnes
+barnes      mi    0:02.04 58240 2.23 0.04 0 16589
+
+run 1: barnes je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./barnes
+barnes      je    0:02.10 60672 2.20 0.05 0 16739
+
+run 1: barnes sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./barnes
+barnes      sn    0:02.16 59264 2.22 0.04 0 16927
+
+run 1: barnes onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./barnes
+barnes      onik  0:02.18 58624 2.25 0.02 0 16618
+
+run 1: barnes onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./barnes
+barnes      onit  0:02.18 58240 2.24 0.04 0 16611
+
+---- 3: larsonN-sized
+
+run 1: larsonN-sized sys: SYSMALLOC=1 ./larson-sized 5 8 1000 5000 100 4141 4
+larsonN-sized,sys, relative time: 12.137s
+larsonN-sized sys   0:12.137 47104 20.11 0.13 4 11069
+
+run 1: larsonN-sized mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./larson-sized 5 8 1000 5000 100 4141 4
+larsonN-sized,mi, relative time: 5.224s
+larsonN-sized mi    0:5.224 59608 21.19 0.11 0 15533
+
+run 1: larsonN-sized je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./larson-sized 5 8 1000 5000 100 4141 4
+larsonN-sized,je, relative time: 5.229s
+larsonN-sized je    0:5.229 49124 21.51 0.19 0 28662
+
+run 1: larsonN-sized sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./larson-sized 5 8 1000 5000 100 4141 4
+larsonN-sized,sn, relative time: 5.962s
+larsonN-sized sn    0:5.962 57344 21.20 0.09 0 13582
+
+run 1: larsonN-sized onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./larson-sized 5 8 1000 5000 100 4141 4
+larsonN-sized,onik, relative time: 468.704s
+larsonN-sized onik  0:468.704 17152 6.31 9.95 0 3765
+
+run 1: larsonN-sized onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./larson-sized 5 8 1000 5000 100 4141 4
+larsonN-sized,onit, relative time: 359.595s
+larsonN-sized onit  0:359.595 17152 5.92 9.96 0 3751
+
+---- 3: mstressN
+
+run 1: mstressN sys: SYSMALLOC=1 ./mstress 4 50 25
+mstressN    sys   0:00.17 69528 0.25 0.06 0 22554
+
+run 1: mstressN mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./mstress 4 50 25
+mstressN    mi    0:00.17 128064 0.18 0.05 0 31909
+
+run 1: mstressN je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./mstress 4 50 25
+mstressN    je    0:00.47 43752 0.25 0.58 0 267865
+
+run 1: mstressN sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./mstress 4 50 25
+mstressN    sn    0:00.15 65536 0.16 0.04 0 16038
+
+run 1: mstressN onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./mstress 4 50 25
+mstressN    onik  0:00.34 43648 0.47 0.49 0 10783
+
+run 1: mstressN onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./mstress 4 50 25
+mstressN    onit  0:00.39 43648 0.55 0.53 0 10791
+
+---- 3: rptestN
+
+run 1: rptestN sys: SYSMALLOC=1 ./rptest 4 0 1 2 500 1000 100 8 16000
+rptestN,sys: ops/sec: 6304965, relative time: .317s
+rptestN     sys   0:.317 13692 0.21 0.36 0 6161
+
+run 1: rptestN mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./rptest 4 0 1 2 500 1000 100 8 16000
+rptestN,mi: ops/sec: 13589041, relative time: .147s
+rptestN     mi    0:.147 24040 0.16 0.32 0 13025
+
+run 1: rptestN je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./rptest 4 0 1 2 500 1000 100 8 16000
+rptestN,je: ops/sec: 15500172, relative time: .129s
+rptestN     je    0:.129 24016 0.17 0.28 0 8143
+
+run 1: rptestN sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./rptest 4 0 1 2 500 1000 100 8 16000
+rptestN,sn: ops/sec: 15704972, relative time: .127s
+rptestN     sn    0:.127 30080 0.24 0.22 0 7153
+
+run 1: rptestN onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./rptest 4 0 1 2 500 1000 100 8 16000
+rptestN,onik: ops/sec: 965351, relative time: 2.071s
+rptestN     onik  0:2.071 12800 0.64 1.00 0 2975
+
+run 1: rptestN onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./rptest 4 0 1 2 500 1000 100 8 16000
+rptestN,onit: ops/sec: 902799, relative time: 2.215s
+rptestN     onit  0:2.215 19712 0.60 1.07 0 4863
+
+---- 3: alloc-test1
+
+run 1: alloc-test1 sys: SYSMALLOC=1 ./alloc-test 1
+threads: 1
+alloc-test1 sys   0:02.59 14080 2.81 0.01 0 2940
+
+run 1: alloc-test1 mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./alloc-test 1
+threads: 1
+alloc-test1 mi    0:02.07 13440 2.23 0.01 0 2591
+
+run 1: alloc-test1 je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./alloc-test 1
+threads: 1
+alloc-test1 je    0:02.02 13056 2.21 0.00 0 2567
+
+run 1: alloc-test1 sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./alloc-test 1
+threads: 1
+alloc-test1 sn    0:02.01 13952 2.21 0.00 0 2741
+
+run 1: alloc-test1 onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./alloc-test 1
+threads: 1
+alloc-test1 onik  0:02.98 13440 3.20 0.01 0 2665
+
+run 1: alloc-test1 onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./alloc-test 1
+threads: 1
+alloc-test1 onit  0:05.03 13440 5.25 0.00 0 2665
+
+---- 3: alloc-testN
+
+run 1: alloc-testN sys: SYSMALLOC=1 ./alloc-test 4
+threads: 4
+alloc-testN sys   0:02.54 14848 10.55 0.02 0 3132
+
+run 1: alloc-testN mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./alloc-test 4
+threads: 4
+alloc-testN mi    0:02.12 14464 8.65 0.00 0 2941
+
+run 1: alloc-testN je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./alloc-test 4
+threads: 4
+alloc-testN je    0:03.97 14080 8.43 0.01 0 2888
+
+run 1: alloc-testN sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./alloc-test 4
+threads: 4
+alloc-testN sn    0:02.14 15104 8.55 0.00 0 3021
+
+run 1: alloc-testN onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./alloc-test 4
+threads: 4
+alloc-testN onik  0:40.57 13696 59.76 81.63 0 2738
+
+run 1: alloc-testN onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./alloc-test 4
+threads: 4
+alloc-testN onit  1:11.46 13440 82.96 131.15 0 2737
+
+---- 3: sh6benchN
+
+run 1: sh6benchN sys: SYSMALLOC=1 ./sh6bench 8
+sh6benchN   sys   0:00.96 422656 3.25 0.58 0 105465
+
+run 1: sh6benchN mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./sh6bench 8
+sh6benchN   mi    0:00.30 264576 0.97 0.18 0 66283
+
+run 1: sh6benchN je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./sh6bench 8
+sh6benchN   je    0:00.52 273392 1.89 0.22 0 69341
+
+run 1: sh6benchN sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./sh6bench 8
+sh6benchN   sn    0:00.34 320512 1.00 0.21 0 79867
+
+run 1: sh6benchN onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./sh6bench 8
+sh6benchN   onik  0:12.82 303616 17.67 31.84 0 76380
+
+run 1: sh6benchN onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./sh6bench 8
+sh6benchN   onit  1:07.16 303744 56.27 35.05 0 76455
+
+---- 3: sh8benchN
+
+run 1: sh8benchN sys: SYSMALLOC=1 ./sh8bench 8
+sh8benchN   sys   0:02.80 171728 11.18 0.29 0 96819
+
+run 1: sh8benchN mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./sh8bench 8
+sh8benchN   mi    0:00.70 129244 2.60 0.09 0 36855
+
+run 1: sh8benchN je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./sh8bench 8
+sh8benchN   je    0:02.86 206608 5.54 0.18 0 54882
+
+run 1: sh8benchN sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./sh8bench 8
+sh8benchN   sn    0:00.79 176384 2.92 0.14 0 43856
+
+run 1: sh8benchN onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./sh8bench 8
+sh8benchN   onik  0:45.96 143744 59.76 116.54 0 36284
+
+run 1: sh8benchN onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./sh8bench 8
+sh8benchN   onit  1:57.28 139776 101.59 218.36 0 35338
+
+---- 3: xmalloc-testN
+
+run 1: xmalloc-testN sys: SYSMALLOC=1 ./xmalloc-test -w 4 -t 5 -s 64
+xmalloc-testN,sys, relative time: 3.296s
+xmalloc-testN sys   0:3.296 61712 18.24 0.74 0 58502
+
+run 1: xmalloc-testN mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./xmalloc-test -w 4 -t 5 -s 64
+xmalloc-testN,mi, relative time: 0.425s
+xmalloc-testN mi    0:0.425 58952 19.55 0.73 0 195588
+
+run 1: xmalloc-testN je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./xmalloc-test -w 4 -t 5 -s 64
+xmalloc-testN,je, relative time: 0.478s
+xmalloc-testN je    0:0.478 109460 20.32 0.26 0 49179
+
+run 1: xmalloc-testN sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./xmalloc-test -w 4 -t 5 -s 64
+xmalloc-testN,sn, relative time: 0.245s
+xmalloc-testN sn    0:0.245 97664 19.89 0.36 0 24142
+
+run 1: xmalloc-testN onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./xmalloc-test -w 4 -t 5 -s 64
+xmalloc-testN,onik, relative time: 8.900s
+xmalloc-testN onik  0:8.900 4224 6.99 12.45 0 789
+
+run 1: xmalloc-testN onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./xmalloc-test -w 4 -t 5 -s 64
+xmalloc-testN,onit, relative time: 10.645s
+xmalloc-testN onit  0:10.645 14336 5.48 8.35 0 3427
+
+---- 3: cache-scratch1
+
+run 1: cache-scratch1 sys: SYSMALLOC=1 ./cache-scratch 1 1000 1 2000000 4
+cache-scratch1 sys   0:00.81 3712 0.84 0.00 0 222
+
+run 1: cache-scratch1 mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./cache-scratch 1 1000 1 2000000 4
+cache-scratch1 mi    0:00.80 4096 0.83 0.00 0 244
+
+run 1: cache-scratch1 je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./cache-scratch 1 1000 1 2000000 4
+cache-scratch1 je    0:00.80 4480 0.83 0.00 0 292
+
+run 1: cache-scratch1 sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./cache-scratch 1 1000 1 2000000 4
+cache-scratch1 sn    0:00.80 4096 0.84 0.00 0 258
+
+run 1: cache-scratch1 onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./cache-scratch 1 1000 1 2000000 4
+cache-scratch1 onik  0:00.80 3968 0.84 0.00 0 263
+
+run 1: cache-scratch1 onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./cache-scratch 1 1000 1 2000000 4
+cache-scratch1 onit  0:00.80 3840 0.84 0.00 0 261
+
+---- 3: cache-scratchN
+
+run 1: cache-scratchN sys: SYSMALLOC=1 ./cache-scratch 4 1000 1 2000000 4
+cache-scratchN sys   0:00.20 3712 0.85 0.00 0 230
+
+run 1: cache-scratchN mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./cache-scratch 4 1000 1 2000000 4
+cache-scratchN mi    0:00.20 4096 0.85 0.00 0 250
+
+run 1: cache-scratchN je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./cache-scratch 4 1000 1 2000000 4
+cache-scratchN je    0:00.20 4480 0.85 0.00 0 306
+
+run 1: cache-scratchN sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./cache-scratch 4 1000 1 2000000 4
+cache-scratchN sn    0:00.20 4096 0.85 0.00 0 291
+
+run 1: cache-scratchN onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./cache-scratch 4 1000 1 2000000 4
+cache-scratchN onik  0:00.20 4224 0.85 0.00 0 286
+
+run 1: cache-scratchN onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./cache-scratch 4 1000 1 2000000 4
+cache-scratchN onit  0:00.20 3968 0.84 0.00 0 284
+
+---- 3: cache-thrash1
+
+run 1: cache-thrash1 sys: SYSMALLOC=1 ./cache-thrash 1 1000 1 2000000 4
+cache-thrash1 sys   0:00.81 3712 0.85 0.00 0 220
+
+run 1: cache-thrash1 mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./cache-thrash 1 1000 1 2000000 4
+cache-thrash1 mi    0:02.38 4096 0.85 0.00 0 244
+
+run 1: cache-thrash1 je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./cache-thrash 1 1000 1 2000000 4
+cache-thrash1 je    0:00.81 4480 0.85 0.00 0 291
+
+run 1: cache-thrash1 sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./cache-thrash 1 1000 1 2000000 4
+cache-thrash1 sn    0:00.81 4096 0.84 0.00 0 251
+
+run 1: cache-thrash1 onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./cache-thrash 1 1000 1 2000000 4
+cache-thrash1 onik  0:00.80 4096 0.84 0.00 0 245
+
+run 1: cache-thrash1 onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./cache-thrash 1 1000 1 2000000 4
+cache-thrash1 onit  0:00.81 3840 0.84 0.00 0 247
+
+---- 3: cache-thrashN
+
+run 1: cache-thrashN sys: SYSMALLOC=1 ./cache-thrash 4 1000 1 2000000 4
+cache-thrashN sys   0:00.20 3712 0.86 0.00 0 227
+
+run 1: cache-thrashN mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./cache-thrash 4 1000 1 2000000 4
+cache-thrashN mi    0:00.20 3968 0.85 0.00 0 249
+
+run 1: cache-thrashN je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./cache-thrash 4 1000 1 2000000 4
+cache-thrashN je    0:00.20 4480 0.85 0.00 0 299
+
+run 1: cache-thrashN sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./cache-thrash 4 1000 1 2000000 4
+cache-thrashN sn    0:00.20 3968 0.85 0.00 0 256
+
+run 1: cache-thrashN onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./cache-thrash 4 1000 1 2000000 4
+cache-thrashN onik  0:00.21 3968 0.85 0.00 0 270
+
+run 1: cache-thrashN onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./cache-thrash 4 1000 1 2000000 4
+cache-thrashN onit  0:00.20 3840 0.86 0.00 0 268
+
+---- 3: glibc-simple
+
+run 1: glibc-simple sys: SYSMALLOC=1 ./glibc-simple
+glibc-simple sys   0:01.88 1664 1.96 0.00 0 220
+
+run 1: glibc-simple mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./glibc-simple
+glibc-simple mi    0:01.52 1920 1.58 0.00 0 266
+
+run 1: glibc-simple je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./glibc-simple
+glibc-simple je    0:01.82 4736 1.90 0.00 0 405
+
+run 1: glibc-simple sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./glibc-simple
+glibc-simple sn    0:01.22 2688 1.27 0.00 0 288
+
+run 1: glibc-simple onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./glibc-simple
+glibc-simple onik  0:01.96 2176 2.05 0.00 0 237
+
+run 1: glibc-simple onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./glibc-simple
+glibc-simple onit  0:02.04 1920 2.14 0.00 0 228
+
+---- 3: glibc-thread
+
+run 1: glibc-thread sys: SYSMALLOC=1 ./glibc-thread 4
+glibc-thread,sys: iterations: 404246934, relative time: 2.473s
+glibc-thread sys   0:2.473 2176 8.40 0.00 0 372
+
+run 1: glibc-thread mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./glibc-thread 4
+glibc-thread,mi: iterations: 590250829, relative time: 1.694s
+glibc-thread mi    0:1.694 2688 8.39 0.00 0 466
+
+run 1: glibc-thread je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./glibc-thread 4
+glibc-thread,je: iterations: 542160255, relative time: 1.844s
+glibc-thread je    0:1.844 6016 8.39 0.00 0 841
+
+run 1: glibc-thread sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./glibc-thread 4
+glibc-thread,sn: iterations: 600891231, relative time: 1.664s
+glibc-thread sn    0:1.664 5120 8.40 0.00 0 995
+
+run 1: glibc-thread onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./glibc-thread 4
+glibc-thread,onik: iterations: 20522528, relative time: 48.726s
+glibc-thread onik  0:48.726 3328 3.00 4.35 0 555
+
+run 1: glibc-thread onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./glibc-thread 4
+glibc-thread,onit: iterations: 19430150, relative time: 51.466s
+glibc-thread onit  0:51.466 2944 3.09 4.28 0 551
+
+---- 3: malloc-large
+
+run 1: malloc-large sys: SYSMALLOC=1 ./malloc-large
+malloc-large sys   0:02.67 534288 1.25 1.55 0 510579
+
+run 1: malloc-large mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./malloc-large
+malloc-large mi    0:01.60 572160 1.31 0.36 0 142355
+
+run 1: malloc-large je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./malloc-large
+malloc-large je    0:22.89 438848 1.79 20.54 0 7518563
+
+run 1: malloc-large sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./malloc-large
+malloc-large sn    0:02.83 673408 2.22 0.74 0 167840
+
+run 1: malloc-large onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./malloc-large
+malloc-large onik  0:02.29 1425792 1.28 1.11 0 355835
+
+run 1: malloc-large onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./malloc-large
+malloc-large onit  0:02.17 1425664 1.28 0.99 0 355832
+
+---- 3: mleak10
+
+run 1: mleak10 sys: SYSMALLOC=1 ./mleak 5
+mleak10     sys   0:00.16 2048 0.01 0.16 0 6211
+
+run 1: mleak10 mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./mleak 5
+mleak10     mi    0:00.17 2036 0.02 0.16 0 6227
+
+run 1: mleak10 je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./mleak 5
+mleak10     je    0:00.17 5044 0.03 0.15 0 9451
+
+run 1: mleak10 sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./mleak 5
+mleak10     sn    0:00.16 2884 0.01 0.16 0 6350
+
+run 1: mleak10 onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./mleak 5
+mleak10     onik  0:00.16 2296 0.01 0.17 0 6228
+
+run 1: mleak10 onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./mleak 5
+mleak10     onit  0:00.16 2296 0.00 0.17 0 6221
+
+---- 3: mleak100
+
+run 1: mleak100 sys: SYSMALLOC=1 ./mleak 50
+mleak100    sys   0:01.69 2132 0.12 1.71 0 60243
+
+run 1: mleak100 mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./mleak 50
+mleak100    mi    0:03.22 2428 0.15 1.76 0 60313
+
+run 1: mleak100 je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./mleak 50
+mleak100    je    0:01.73 5052 0.28 1.62 0 90461
+
+run 1: mleak100 sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./mleak 50
+mleak100    sn    0:01.63 3080 0.23 1.52 0 60443
+
+run 1: mleak100 onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./mleak 50
+mleak100    onik  0:01.64 2348 0.11 1.62 0 60230
+
+run 1: mleak100 onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./mleak 50
+mleak100    onit  0:01.68 2180 0.12 1.70 0 60221
+
+---- 2: cfrac
+
+run 1: cfrac sys: SYSMALLOC=1 ./cfrac 17545186520507317056371138836327483792789528
+cfrac       sys   0:02.94 3072 3.08 0.00 0 434
+
+run 1: cfrac mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./cfrac 17545186520507317056371138836327483792789528
+cfrac       mi    0:02.61 3200 2.74 0.00 0 386
+
+run 1: cfrac je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./cfrac 17545186520507317056371138836327483792789528
+cfrac       je    0:02.75 5376 2.89 0.00 0 498
+
+run 1: cfrac sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./cfrac 17545186520507317056371138836327483792789528
+cfrac       sn    0:02.64 3200 2.76 0.00 0 427
+
+run 1: cfrac onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./cfrac 17545186520507317056371138836327483792789528
+cfrac       onik  0:03.34 3328 3.50 0.00 0 422
+
+run 1: cfrac onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./cfrac 17545186520507317056371138836327483792789528
+cfrac       onit  0:03.51 3072 3.68 0.00 0 413
+
+---- 2: espresso
+
+run 1: espresso sys: SYSMALLOC=1 ./espresso ../../bench/espresso/largest.espresso
+espresso    sys   0:03.20 2560 3.32 0.04 0 472
+
+run 1: espresso mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./espresso ../../bench/espresso/largest.espresso
+espresso    mi    0:02.85 3360 2.94 0.05 0 3669
+
+run 1: espresso je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./espresso ../../bench/espresso/largest.espresso
+espresso    je    0:04.46 6016 3.01 0.02 0 666
+
+run 1: espresso sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./espresso ../../bench/espresso/largest.espresso
+espresso    sn    0:02.79 4480 2.91 0.02 0 688
+
+run 1: espresso onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./espresso ../../bench/espresso/largest.espresso
+espresso    onik  0:03.07 3712 3.16 0.06 0 576
+
+run 1: espresso onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./espresso ../../bench/espresso/largest.espresso
+espresso    onit  0:03.11 3328 3.23 0.03 0 566
+
+---- 2: barnes
+
+run 1: barnes sys: SYSMALLOC=1 ./barnes
+barnes      sys   0:02.17 58112 2.23 0.04 0 16570
+
+run 1: barnes mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./barnes
+barnes      mi    0:02.16 58240 2.22 0.04 0 16585
+
+run 1: barnes je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./barnes
+barnes      je    0:02.17 60928 2.25 0.02 0 16739
+
+run 1: barnes sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./barnes
+barnes      sn    0:02.16 59264 2.23 0.04 0 16926
+
+run 1: barnes onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./barnes
+barnes      onik  0:02.14 58496 2.20 0.04 0 16619
+
+run 1: barnes onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./barnes
+barnes      onit  0:02.14 58112 2.20 0.05 0 16608
+
+---- 2: larsonN-sized
+
+run 1: larsonN-sized sys: SYSMALLOC=1 ./larson-sized 5 8 1000 5000 100 4141 4
+larsonN-sized,sys, relative time: 8.654s
+larsonN-sized sys   0:8.654 35712 20.90 0.04 0 8256
+
+run 1: larsonN-sized mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./larson-sized 5 8 1000 5000 100 4141 4
+larsonN-sized,mi, relative time: 6.721s
+larsonN-sized mi    0:6.721 54768 20.81 0.12 0 13121
+
+run 1: larsonN-sized je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./larson-sized 5 8 1000 5000 100 4141 4
+larsonN-sized,je, relative time: 5.352s
+larsonN-sized je    0:5.352 51172 20.69 0.14 0 28889
+
+run 1: larsonN-sized sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./larson-sized 5 8 1000 5000 100 4141 4
+larsonN-sized,sn, relative time: 5.968s
+larsonN-sized sn    0:5.968 56576 20.87 0.07 0 13402
+
+run 1: larsonN-sized onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./larson-sized 5 8 1000 5000 100 4141 4
+larsonN-sized,onik, relative time: 335.742s
+larsonN-sized onik  0:335.742 17152 6.20 10.31 0 3762
+
+run 1: larsonN-sized onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./larson-sized 5 8 1000 5000 100 4141 4
+larsonN-sized,onit, relative time: 353.231s
+larsonN-sized onit  0:353.231 16896 6.35 9.94 0 3763
+
+---- 2: mstressN
+
+run 1: mstressN sys: SYSMALLOC=1 ./mstress 4 50 25
+mstressN    sys   0:00.19 69144 0.25 0.06 0 25059
+
+run 1: mstressN mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./mstress 4 50 25
+mstressN    mi    0:00.18 121260 0.18 0.05 0 30219
+
+run 1: mstressN je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./mstress 4 50 25
+mstressN    je    0:00.49 44628 0.27 0.57 0 268535
+
+run 1: mstressN sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./mstress 4 50 25
+mstressN    sn    0:00.16 68864 0.18 0.03 0 16853
+
+run 1: mstressN onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./mstress 4 50 25
+mstressN    onik  0:00.36 43648 0.49 0.49 0 10764
+
+run 1: mstressN onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./mstress 4 50 25
+mstressN    onit  0:00.40 43392 0.59 0.47 0 10768
+
+---- 2: rptestN
+
+run 1: rptestN sys: SYSMALLOC=1 ./rptest 4 0 1 2 500 1000 100 8 16000
+rptestN,sys: ops/sec: 5934858, relative time: .336s
+rptestN     sys   0:.336 13480 0.24 0.36 0 5894
+
+run 1: rptestN mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./rptest 4 0 1 2 500 1000 100 8 16000
+rptestN,mi: ops/sec: 13216784, relative time: .151s
+rptestN     mi    0:.151 23660 0.20 0.28 0 13539
+
+run 1: rptestN je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./rptest 4 0 1 2 500 1000 100 8 16000
+rptestN,je: ops/sec: 14866892, relative time: .134s
+rptestN     je    0:.134 22756 0.19 0.27 0 8666
+
+run 1: rptestN sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./rptest 4 0 1 2 500 1000 100 8 16000
+rptestN,sn: ops/sec: 16716085, relative time: .119s
+rptestN     sn    0:.119 18816 0.20 0.26 0 4351
+
+run 1: rptestN onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./rptest 4 0 1 2 500 1000 100 8 16000
+rptestN,onik: ops/sec: 943044, relative time: 2.120s
+rptestN     onik  0:2.120 13056 0.59 1.07 0 3103
+
+run 1: rptestN onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./rptest 4 0 1 2 500 1000 100 8 16000
+rptestN,onit: ops/sec: 899076, relative time: 2.224s
+rptestN     onit  0:2.224 12800 0.61 1.11 0 3060
+
+---- 2: alloc-test1
+
+run 1: alloc-test1 sys: SYSMALLOC=1 ./alloc-test 1
+threads: 1
+alloc-test1 sys   0:02.63 14080 2.73 0.00 0 2940
+
+run 1: alloc-test1 mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./alloc-test 1
+threads: 1
+alloc-test1 mi    0:02.13 13440 2.25 0.01 0 2589
+
+run 1: alloc-test1 je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./alloc-test 1
+threads: 1
+alloc-test1 je    0:01.99 13056 2.17 0.01 0 2568
+
+run 1: alloc-test1 sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./alloc-test 1
+threads: 1
+alloc-test1 sn    0:02.01 13952 2.19 0.02 0 2740
+
+run 1: alloc-test1 onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./alloc-test 1
+threads: 1
+alloc-test1 onik  0:03.00 13568 3.19 0.01 0 2667
+
+run 1: alloc-test1 onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./alloc-test 1
+threads: 1
+alloc-test1 onit  0:04.89 13440 5.16 0.01 0 2663
+
+---- 2: alloc-testN
+
+run 1: alloc-testN sys: SYSMALLOC=1 ./alloc-test 4
+threads: 4
+alloc-testN sys   0:02.52 14848 10.60 0.01 0 3131
+
+run 1: alloc-testN mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./alloc-test 4
+threads: 4
+alloc-testN mi    0:02.06 14336 8.63 0.00 0 2939
+
+run 1: alloc-testN je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./alloc-test 4
+threads: 4
+alloc-testN je    0:02.03 14208 8.45 0.01 0 2886
+
+run 1: alloc-testN sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./alloc-test 4
+threads: 4
+alloc-testN sn    0:02.08 15104 8.60 0.00 0 3018
+
+run 1: alloc-testN onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./alloc-test 4
+threads: 4
+alloc-testN onik  0:39.94 13696 59.54 78.54 0 2735
+
+run 1: alloc-testN onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./alloc-test 4
+threads: 4
+alloc-testN onit  1:12.12 13568 82.44 129.86 0 2735
+
+---- 2: sh6benchN
+
+run 1: sh6benchN sys: SYSMALLOC=1 ./sh6bench 8
+sh6benchN   sys   0:01.01 422784 3.24 0.60 0 105466
+
+run 1: sh6benchN mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./sh6bench 8
+sh6benchN   mi    0:00.31 265088 0.98 0.16 0 66417
+
+run 1: sh6benchN je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./sh6bench 8
+sh6benchN   je    0:00.56 273412 1.93 0.16 0 69329
+
+run 1: sh6benchN sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./sh6bench 8
+sh6benchN   sn    0:00.33 320256 1.00 0.19 0 79846
+
+run 1: sh6benchN onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./sh6bench 8
+sh6benchN   onik  0:14.89 303872 17.80 31.92 0 76457
+
+run 1: sh6benchN onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./sh6bench 8
+sh6benchN   onit  1:06.21 303488 55.20 35.61 0 76390
+
+---- 2: sh8benchN
+
+run 1: sh8benchN sys: SYSMALLOC=1 ./sh8bench 8
+sh8benchN   sys   0:02.71 171192 11.31 0.25 0 85655
+
+run 1: sh8benchN mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./sh8bench 8
+sh8benchN   mi    0:00.68 131036 2.62 0.11 0 37321
+
+run 1: sh8benchN je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./sh8bench 8
+sh8benchN   je    0:01.41 191392 5.60 0.12 0 50501
+
+run 1: sh8benchN sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./sh8bench 8
+sh8benchN   sn    0:00.83 176640 2.90 0.14 0 43900
+
+run 1: sh8benchN onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./sh8bench 8
+sh8benchN   onik  0:46.71 143616 59.41 117.71 0 36216
+
+run 1: sh8benchN onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./sh8bench 8
+sh8benchN   onit  2:05.06 139776 103.50 222.30 0 35336
+
+---- 2: xmalloc-testN
+
+run 1: xmalloc-testN sys: SYSMALLOC=1 ./xmalloc-test -w 4 -t 5 -s 64
+xmalloc-testN,sys, relative time: 2.138s
+xmalloc-testN sys   0:2.138 62912 18.25 0.57 0 61600
+
+run 1: xmalloc-testN mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./xmalloc-test -w 4 -t 5 -s 64
+xmalloc-testN,mi, relative time: 0.460s
+xmalloc-testN mi    0:0.460 58320 18.70 0.73 0 210971
+
+run 1: xmalloc-testN je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./xmalloc-test -w 4 -t 5 -s 64
+xmalloc-testN,je, relative time: 0.514s
+xmalloc-testN je    0:0.514 93720 19.44 0.23 0 41416
+
+run 1: xmalloc-testN sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./xmalloc-test -w 4 -t 5 -s 64
+xmalloc-testN,sn, relative time: 0.264s
+xmalloc-testN sn    0:0.264 65536 18.98 0.41 0 16071
+
+run 1: xmalloc-testN onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./xmalloc-test -w 4 -t 5 -s 64
+xmalloc-testN,onik, relative time: 9.733s
+xmalloc-testN onik  0:9.733 5248 6.49 11.93 0 1073
+
+run 1: xmalloc-testN onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./xmalloc-test -w 4 -t 5 -s 64
+xmalloc-testN,onit, relative time: 11.423s
+xmalloc-testN onit  0:11.423 8704 4.80 9.34 0 1989
+
+---- 2: cache-scratch1
+
+run 1: cache-scratch1 sys: SYSMALLOC=1 ./cache-scratch 1 1000 1 2000000 4
+cache-scratch1 sys   0:00.88 3712 0.88 0.00 0 224
+
+run 1: cache-scratch1 mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./cache-scratch 1 1000 1 2000000 4
+cache-scratch1 mi    0:00.88 4096 0.87 0.00 0 243
+
+run 1: cache-scratch1 je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./cache-scratch 1 1000 1 2000000 4
+cache-scratch1 je    0:00.88 4480 0.88 0.00 0 292
+
+run 1: cache-scratch1 sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./cache-scratch 1 1000 1 2000000 4
+cache-scratch1 sn    0:00.88 4096 0.88 0.00 0 258
+
+run 1: cache-scratch1 onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./cache-scratch 1 1000 1 2000000 4
+cache-scratch1 onik  0:00.88 3968 0.88 0.00 0 263
+
+run 1: cache-scratch1 onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./cache-scratch 1 1000 1 2000000 4
+cache-scratch1 onit  0:00.88 3968 0.88 0.00 0 263
+
+---- 2: cache-scratchN
+
+run 1: cache-scratchN sys: SYSMALLOC=1 ./cache-scratch 4 1000 1 2000000 4
+cache-scratchN sys   0:00.22 3712 0.88 0.00 0 230
+
+run 1: cache-scratchN mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./cache-scratch 4 1000 1 2000000 4
+cache-scratchN mi    0:00.22 3968 0.88 0.00 0 249
+
+run 1: cache-scratchN je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./cache-scratch 4 1000 1 2000000 4
+cache-scratchN je    0:00.22 4480 0.88 0.00 0 306
+
+run 1: cache-scratchN sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./cache-scratch 4 1000 1 2000000 4
+cache-scratchN sn    0:00.22 3968 0.88 0.00 0 293
+
+run 1: cache-scratchN onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./cache-scratch 4 1000 1 2000000 4
+cache-scratchN onik  0:00.22 4224 0.88 0.00 0 285
+
+run 1: cache-scratchN onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./cache-scratch 4 1000 1 2000000 4
+cache-scratchN onit  0:00.22 3968 0.87 0.00 0 281
+
+---- 2: cache-thrash1
+
+run 1: cache-thrash1 sys: SYSMALLOC=1 ./cache-thrash 1 1000 1 2000000 4
+cache-thrash1 sys   0:00.88 3712 0.87 0.00 0 221
+
+run 1: cache-thrash1 mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./cache-thrash 1 1000 1 2000000 4
+cache-thrash1 mi    0:00.89 4096 0.89 0.00 0 244
+
+run 1: cache-thrash1 je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./cache-thrash 1 1000 1 2000000 4
+cache-thrash1 je    0:00.89 4480 0.88 0.00 0 291
+
+run 1: cache-thrash1 sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./cache-thrash 1 1000 1 2000000 4
+cache-thrash1 sn    0:00.88 3968 0.88 0.00 0 251
+
+run 1: cache-thrash1 onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./cache-thrash 1 1000 1 2000000 4
+cache-thrash1 onik  0:00.88 4096 0.88 0.00 0 248
+
+run 1: cache-thrash1 onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./cache-thrash 1 1000 1 2000000 4
+cache-thrash1 onit  0:00.88 3840 0.88 0.00 0 248
+
+---- 2: cache-thrashN
+
+run 1: cache-thrashN sys: SYSMALLOC=1 ./cache-thrash 4 1000 1 2000000 4
+cache-thrashN sys   0:00.22 3712 0.87 0.00 0 227
+
+run 1: cache-thrashN mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./cache-thrash 4 1000 1 2000000 4
+cache-thrashN mi    0:00.22 3968 0.88 0.00 0 250
+
+run 1: cache-thrashN je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./cache-thrash 4 1000 1 2000000 4
+cache-thrashN je    0:00.22 4480 0.88 0.00 0 302
+
+run 1: cache-thrashN sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./cache-thrash 4 1000 1 2000000 4
+cache-thrashN sn    0:00.22 4096 0.88 0.00 0 256
+
+run 1: cache-thrashN onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./cache-thrash 4 1000 1 2000000 4
+cache-thrashN onik  0:00.22 3968 0.88 0.00 0 270
+
+run 1: cache-thrashN onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./cache-thrash 4 1000 1 2000000 4
+cache-thrashN onit  0:00.22 3840 0.87 0.00 0 268
+
+---- 2: glibc-simple
+
+run 1: glibc-simple sys: SYSMALLOC=1 ./glibc-simple
+glibc-simple sys   0:02.08 1664 2.06 0.00 0 219
+
+run 1: glibc-simple mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./glibc-simple
+glibc-simple mi    0:01.68 1920 1.68 0.00 0 268
+
+run 1: glibc-simple je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./glibc-simple
+glibc-simple je    0:02.00 4736 1.99 0.00 0 406
+
+run 1: glibc-simple sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./glibc-simple
+glibc-simple sn    0:01.35 2432 1.34 0.00 0 287
+
+run 1: glibc-simple onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./glibc-simple
+glibc-simple onik  0:02.12 2176 2.11 0.00 0 239
+
+run 1: glibc-simple onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./glibc-simple
+glibc-simple onit  0:02.31 1664 2.31 0.00 0 229
+
+---- 2: glibc-thread
+
+run 1: glibc-thread sys: SYSMALLOC=1 ./glibc-thread 4
+glibc-thread,sys: iterations: 376190240, relative time: 2.658s
+glibc-thread sys   0:2.658 2176 8.00 0.00 0 373
+
+run 1: glibc-thread mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./glibc-thread 4
+glibc-thread,mi: iterations: 538861612, relative time: 1.855s
+glibc-thread mi    0:1.855 2688 8.00 0.00 0 464
+
+run 1: glibc-thread je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./glibc-thread 4
+glibc-thread,je: iterations: 500884561, relative time: 1.996s
+glibc-thread je    0:1.996 6144 8.01 0.00 0 838
+
+run 1: glibc-thread sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./glibc-thread 4
+glibc-thread,sn: iterations: 556767950, relative time: 1.796s
+glibc-thread sn    0:1.796 5248 7.99 0.00 0 993
+
+run 1: glibc-thread onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./glibc-thread 4
+glibc-thread,onik: iterations: 18696728, relative time: 53.485s
+glibc-thread onik  0:53.485 3200 2.89 4.10 0 557
+
+run 1: glibc-thread onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./glibc-thread 4
+glibc-thread,onit: iterations: 17914266, relative time: 55.821s
+glibc-thread onit  0:55.821 2944 2.76 4.19 0 549
+
+---- 2: malloc-large
+
+run 1: malloc-large sys: SYSMALLOC=1 ./malloc-large
+malloc-large sys   0:02.87 534284 1.30 1.57 0 510578
+
+run 1: malloc-large mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./malloc-large
+malloc-large mi    0:01.70 572416 1.28 0.42 0 142355
+
+run 1: malloc-large je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./malloc-large
+malloc-large je    0:23.47 438984 1.75 21.71 0 7522284
+
+run 1: malloc-large sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./malloc-large
+malloc-large sn    0:03.03 680192 2.14 0.88 0 169515
+
+run 1: malloc-large onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./malloc-large
+malloc-large onik  0:02.45 1425792 1.30 1.14 0 355836
+
+run 1: malloc-large onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./malloc-large
+malloc-large onit  0:02.36 1425536 1.29 1.06 0 355834
+
+---- 2: mleak10
+
+run 1: mleak10 sys: SYSMALLOC=1 ./mleak 5
+mleak10     sys   0:00.19 1920 0.01 0.18 0 6216
+
+run 1: mleak10 mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./mleak 5
+mleak10     mi    0:00.18 2168 0.02 0.16 0 6234
+
+run 1: mleak10 je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./mleak 5
+mleak10     je    0:00.18 5112 0.03 0.15 0 9487
+
+run 1: mleak10 sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./mleak 5
+mleak10     sn    0:00.17 2924 0.01 0.17 0 6895
+
+run 1: mleak10 onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./mleak 5
+mleak10     onik  0:00.18 2304 0.01 0.16 0 6230
+
+run 1: mleak10 onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./mleak 5
+mleak10     onit  0:00.18 2172 0.02 0.16 0 6220
+
+---- 2: mleak100
+
+run 1: mleak100 sys: SYSMALLOC=1 ./mleak 50
+mleak100    sys   0:01.88 2168 0.12 1.86 0 60242
+
+run 1: mleak100 mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./mleak 50
+mleak100    mi    0:01.88 2500 0.22 1.77 0 60318
+
+run 1: mleak100 je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./mleak 50
+mleak100    je    0:01.95 5180 0.34 1.70 0 90496
+
+run 1: mleak100 sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./mleak 50
+mleak100    sn    0:01.82 3188 0.24 1.61 0 79679
+
+run 1: mleak100 onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./mleak 50
+mleak100    onik  0:01.82 2384 0.13 1.77 0 60229
+
+run 1: mleak100 onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./mleak 50
+mleak100    onit  0:01.86 2216 0.15 1.76 0 60221
+
+---- 1: cfrac
+
+run 1: cfrac sys: SYSMALLOC=1 ./cfrac 17545186520507317056371138836327483792789528
+cfrac       sys   0:03.25 3072 3.25 0.00 0 436
+
+run 1: cfrac mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./cfrac 17545186520507317056371138836327483792789528
+cfrac       mi    0:03.17 2944 3.17 0.00 0 385
+
+run 1: cfrac je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./cfrac 17545186520507317056371138836327483792789528
+cfrac       je    0:03.03 5248 3.03 0.00 0 497
+
+run 1: cfrac sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./cfrac 17545186520507317056371138836327483792789528
+cfrac       sn    0:02.89 3200 2.89 0.00 0 426
+
+run 1: cfrac onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./cfrac 17545186520507317056371138836327483792789528
+cfrac       onik  0:03.67 3200 3.67 0.00 0 424
+
+run 1: cfrac onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./cfrac 17545186520507317056371138836327483792789528
+cfrac       onit  0:03.82 3072 3.82 0.00 0 414
+
+---- 1: espresso
+
+run 1: espresso sys: SYSMALLOC=1 ./espresso ../../bench/espresso/largest.espresso
+espresso    sys   0:03.50 2560 3.47 0.02 0 473
+
+run 1: espresso mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./espresso ../../bench/espresso/largest.espresso
+espresso    mi    0:03.13 3360 3.10 0.03 0 3668
+
+run 1: espresso je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./espresso ../../bench/espresso/largest.espresso
+espresso    je    0:03.22 6144 3.19 0.03 0 670
+
+run 1: espresso sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./espresso ../../bench/espresso/largest.espresso
+espresso    sn    0:03.13 4480 3.10 0.02 0 690
+
+run 1: espresso onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./espresso ../../bench/espresso/largest.espresso
+espresso    onik  0:03.34 3712 3.28 0.06 0 576
+
+run 1: espresso onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./espresso ../../bench/espresso/largest.espresso
+espresso    onit  0:03.37 3456 3.31 0.05 0 568
+
+---- 1: barnes
+
+run 1: barnes sys: SYSMALLOC=1 ./barnes
+barnes      sys   0:02.39 58112 2.36 0.03 0 16569
+
+run 1: barnes mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./barnes
+barnes      mi    0:02.39 58112 2.34 0.04 0 16589
+
+run 1: barnes je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./barnes
+barnes      je    0:02.36 60672 2.30 0.06 0 16742
+
+run 1: barnes sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./barnes
+barnes      sn    0:02.38 59008 2.35 0.02 0 16932
+
+run 1: barnes onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./barnes
+barnes      onik  0:02.38 58624 2.35 0.03 0 16620
+
+run 1: barnes onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./barnes
+barnes      onit  0:02.38 58112 2.35 0.02 0 16612
+
+---- 1: larsonN-sized
+
+run 1: larsonN-sized sys: SYSMALLOC=1 ./larson-sized 5 8 1000 5000 100 4141 4
+larsonN-sized,sys, relative time: 9.291s
+larsonN-sized sys   0:9.291 35200 19.87 0.10 0 8097
+
+run 1: larsonN-sized mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./larson-sized 5 8 1000 5000 100 4141 4
+larsonN-sized,mi, relative time: 5.572s
+larsonN-sized mi    0:5.572 56520 19.84 0.12 0 16048
+
+run 1: larsonN-sized je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./larson-sized 5 8 1000 5000 100 4141 4
+larsonN-sized,je, relative time: 5.747s
+larsonN-sized je    0:5.747 49748 19.67 0.18 0 27397
+
+run 1: larsonN-sized sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./larson-sized 5 8 1000 5000 100 4141 4
+larsonN-sized,sn, relative time: 6.386s
+larsonN-sized sn    0:6.386 51456 19.89 0.09 0 12122
+
+run 1: larsonN-sized onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./larson-sized 5 8 1000 5000 100 4141 4
+larsonN-sized,onik, relative time: 362.593s
+larsonN-sized onik  0:362.593 17024 5.91 9.86 0 3754
+
+run 1: larsonN-sized onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./larson-sized 5 8 1000 5000 100 4141 4
+larsonN-sized,onit, relative time: 373.985s
+larsonN-sized onit  0:373.985 17024 5.84 9.83 0 3752
+
+---- 1: mstressN
+
+run 1: mstressN sys: SYSMALLOC=1 ./mstress 4 50 25
+mstressN    sys   0:00.22 68996 0.27 0.07 0 26450
+
+run 1: mstressN mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./mstress 4 50 25
+mstressN    mi    0:00.20 124156 0.19 0.06 0 31157
+
+run 1: mstressN je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./mstress 4 50 25
+mstressN    je    0:00.54 44712 0.26 0.63 0 268068
+
+run 1: mstressN sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./mstress 4 50 25
+mstressN    sn    0:00.17 70528 0.18 0.03 0 17294
+
+run 1: mstressN onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./mstress 4 50 25
+mstressN    onik  0:00.39 44032 0.53 0.48 0 10853
+
+run 1: mstressN onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./mstress 4 50 25
+mstressN    onit  0:00.44 43520 0.62 0.52 0 10743
+
+---- 1: rptestN
+
+run 1: rptestN sys: SYSMALLOC=1 ./rptest 4 0 1 2 500 1000 100 8 16000
+rptestN,sys: ops/sec: 5566165, relative time: .359s
+rptestN     sys   0:.359 13084 0.26 0.35 0 5857
+
+run 1: rptestN mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./rptest 4 0 1 2 500 1000 100 8 16000
+rptestN,mi: ops/sec: 11302450, relative time: .176s
+rptestN     mi    0:.176 37140 0.22 0.28 0 16637
+
+run 1: rptestN je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./rptest 4 0 1 2 500 1000 100 8 16000
+rptestN,je: ops/sec: 13807816, relative time: .144s
+rptestN     je    0:.144 22656 0.22 0.27 0 8455
+
+run 1: rptestN sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./rptest 4 0 1 2 500 1000 100 8 16000
+rptestN,sn: ops/sec: 15518163, relative time: .128s
+rptestN     sn    0:.128 18304 0.24 0.23 0 4193
+
+run 1: rptestN onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./rptest 4 0 1 2 500 1000 100 8 16000
+rptestN,onik: ops/sec: 834849, relative time: 2.395s
+rptestN     onik  0:2.395 13440 0.58 1.17 0 3130
+
+run 1: rptestN onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./rptest 4 0 1 2 500 1000 100 8 16000
+rptestN,onit: ops/sec: 817930, relative time: 2.445s
+rptestN     onit  0:2.445 12800 0.59 1.17 0 3002
+
+---- 1: alloc-test1
+
+run 1: alloc-test1 sys: SYSMALLOC=1 ./alloc-test 1
+threads: 1
+alloc-test1 sys   0:02.92 14080 2.91 0.00 0 2942
+
+run 1: alloc-test1 mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./alloc-test 1
+threads: 1
+alloc-test1 mi    0:02.29 13312 2.27 0.01 0 2589
+
+run 1: alloc-test1 je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./alloc-test 1
+threads: 1
+alloc-test1 je    0:02.31 13056 2.30 0.00 0 2566
+
+run 1: alloc-test1 sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./alloc-test 1
+threads: 1
+alloc-test1 sn    0:02.34 13952 2.33 0.01 0 2741
+
+run 1: alloc-test1 onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./alloc-test 1
+threads: 1
+alloc-test1 onik  0:03.40 13568 3.39 0.00 0 2666
+
+run 1: alloc-test1 onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./alloc-test 1
+threads: 1
+alloc-test1 onit  0:05.49 13440 5.47 0.01 0 2664
+
+---- 1: alloc-testN
+
+run 1: alloc-testN sys: SYSMALLOC=1 ./alloc-test 4
+threads: 4
+alloc-testN sys   0:02.76 14848 10.97 0.01 0 3132
+
+run 1: alloc-testN mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./alloc-test 4
+threads: 4
+alloc-testN mi    0:02.26 14336 8.97 0.01 0 2941
+
+run 1: alloc-testN je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./alloc-test 4
+threads: 4
+alloc-testN je    0:02.20 14208 8.77 0.01 0 2881
+
+run 1: alloc-testN sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./alloc-test 4
+threads: 4
+alloc-testN sn    0:02.28 15104 8.93 0.01 0 3019
+
+run 1: alloc-testN onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./alloc-test 4
+threads: 4
+alloc-testN onik  0:42.67 13696 58.54 88.57 0 2737
+
+run 1: alloc-testN onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./alloc-test 4
+threads: 4
+alloc-testN onit  1:15.20 13568 81.73 140.42 0 2735
+
+---- 1: sh6benchN
+
+run 1: sh6benchN sys: SYSMALLOC=1 ./sh6bench 8
+sh6benchN   sys   0:01.04 422528 3.41 0.50 0 105464
+
+run 1: sh6benchN mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./sh6bench 8
+sh6benchN   mi    0:00.33 264576 1.00 0.19 0 66279
+
+run 1: sh6benchN je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./sh6bench 8
+sh6benchN   je    0:00.58 273572 1.96 0.20 0 69336
+
+run 1: sh6benchN sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./sh6bench 8
+sh6benchN   sn    0:00.39 320512 1.03 0.27 0 79869
+
+run 1: sh6benchN onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./sh6bench 8
+sh6benchN   onik  0:14.59 303872 19.30 34.56 0 76443
+
+run 1: sh6benchN onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./sh6bench 8
+sh6benchN   onit  1:10.39 304000 58.04 39.45 0 76484
+
+---- 1: sh8benchN
+
+run 1: sh8benchN sys: SYSMALLOC=1 ./sh8bench 8
+sh8benchN   sys   0:03.02 171340 11.52 0.31 0 106411
+
+run 1: sh8benchN mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./sh8bench 8
+sh8benchN   mi    0:00.76 130012 2.66 0.09 0 38446
+
+run 1: sh8benchN je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./sh8bench 8
+sh8benchN   je    0:01.54 210392 5.74 0.16 0 54860
+
+run 1: sh8benchN sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./sh8bench 8
+sh8benchN   sn    0:00.86 183168 2.98 0.14 0 45589
+
+run 1: sh8benchN onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./sh8bench 8
+sh8benchN   onik  0:48.02 143360 59.63 123.02 0 36150
+
+run 1: sh8benchN onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./sh8bench 8
+sh8benchN   onit  2:08.04 140928 106.20 223.55 0 35604
+
+---- 1: xmalloc-testN
+
+run 1: xmalloc-testN sys: SYSMALLOC=1 ./xmalloc-test -w 4 -t 5 -s 64
+xmalloc-testN,sys, relative time: 2.128s
+xmalloc-testN sys   0:2.128 62220 18.18 0.54 0 58383
+
+run 1: xmalloc-testN mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./xmalloc-test -w 4 -t 5 -s 64
+xmalloc-testN,mi, relative time: 0.462s
+xmalloc-testN mi    0:0.462 58208 18.64 0.73 0 202760
+
+run 1: xmalloc-testN je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./xmalloc-test -w 4 -t 5 -s 64
+xmalloc-testN,je, relative time: 0.518s
+xmalloc-testN je    0:0.518 108240 19.30 0.27 0 46777
+
+run 1: xmalloc-testN sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./xmalloc-test -w 4 -t 5 -s 64
+xmalloc-testN,sn, relative time: 0.265s
+xmalloc-testN sn    0:0.265 64896 18.86 0.46 0 15950
+
+run 1: xmalloc-testN onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./xmalloc-test -w 4 -t 5 -s 64
+xmalloc-testN,onik, relative time: 9.799s
+xmalloc-testN onik  0:9.799 5888 6.52 12.01 0 1220
+
+run 1: xmalloc-testN onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./xmalloc-test -w 4 -t 5 -s 64
+xmalloc-testN,onit, relative time: 11.393s
+xmalloc-testN onit  0:11.393 8832 4.75 9.28 0 2022
+
+---- 1: cache-scratch1
+
+run 1: cache-scratch1 sys: SYSMALLOC=1 ./cache-scratch 1 1000 1 2000000 4
+cache-scratch1 sys   0:00.88 3712 0.88 0.00 0 224
+
+run 1: cache-scratch1 mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./cache-scratch 1 1000 1 2000000 4
+cache-scratch1 mi    0:00.88 4096 0.88 0.00 0 244
+
+run 1: cache-scratch1 je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./cache-scratch 1 1000 1 2000000 4
+cache-scratch1 je    0:00.89 4480 0.88 0.00 0 291
+
+run 1: cache-scratch1 sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./cache-scratch 1 1000 1 2000000 4
+cache-scratch1 sn    0:00.88 4096 0.88 0.00 0 257
+
+run 1: cache-scratch1 onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./cache-scratch 1 1000 1 2000000 4
+cache-scratch1 onik  0:00.88 4096 0.88 0.00 0 263
+
+run 1: cache-scratch1 onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./cache-scratch 1 1000 1 2000000 4
+cache-scratch1 onit  0:00.88 3968 0.88 0.00 0 262
+
+---- 1: cache-scratchN
+
+run 1: cache-scratchN sys: SYSMALLOC=1 ./cache-scratch 4 1000 1 2000000 4
+cache-scratchN sys   0:00.22 3712 0.88 0.00 0 229
+
+run 1: cache-scratchN mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./cache-scratch 4 1000 1 2000000 4
+cache-scratchN mi    0:00.22 4096 0.88 0.00 0 251
+
+run 1: cache-scratchN je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./cache-scratch 4 1000 1 2000000 4
+cache-scratchN je    0:00.22 4352 0.88 0.00 0 304
+
+run 1: cache-scratchN sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./cache-scratch 4 1000 1 2000000 4
+cache-scratchN sn    0:00.22 4096 0.87 0.00 0 293
+
+run 1: cache-scratchN onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./cache-scratch 4 1000 1 2000000 4
+cache-scratchN onik  0:00.22 4224 0.88 0.00 0 287
+
+run 1: cache-scratchN onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./cache-scratch 4 1000 1 2000000 4
+cache-scratchN onit  0:00.22 3968 0.88 0.00 0 283
+
+---- 1: cache-thrash1
+
+run 1: cache-thrash1 sys: SYSMALLOC=1 ./cache-thrash 1 1000 1 2000000 4
+cache-thrash1 sys   0:00.89 3712 0.89 0.00 0 220
+
+run 1: cache-thrash1 mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./cache-thrash 1 1000 1 2000000 4
+cache-thrash1 mi    0:00.89 4096 0.88 0.00 0 244
+
+run 1: cache-thrash1 je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./cache-thrash 1 1000 1 2000000 4
+cache-thrash1 je    0:00.89 4480 0.89 0.00 0 288
+
+run 1: cache-thrash1 sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./cache-thrash 1 1000 1 2000000 4
+cache-thrash1 sn    0:00.88 4096 0.88 0.00 0 251
+
+run 1: cache-thrash1 onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./cache-thrash 1 1000 1 2000000 4
+cache-thrash1 onik  0:00.89 4096 0.88 0.00 0 247
+
+run 1: cache-thrash1 onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./cache-thrash 1 1000 1 2000000 4
+cache-thrash1 onit  0:00.88 3968 0.88 0.00 0 246
+
+---- 1: cache-thrashN
+
+run 1: cache-thrashN sys: SYSMALLOC=1 ./cache-thrash 4 1000 1 2000000 4
+cache-thrashN sys   0:00.22 3712 0.87 0.00 0 229
+
+run 1: cache-thrashN mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./cache-thrash 4 1000 1 2000000 4
+cache-thrashN mi    0:00.22 4096 0.88 0.00 0 250
+
+run 1: cache-thrashN je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./cache-thrash 4 1000 1 2000000 4
+cache-thrashN je    0:00.22 4480 0.87 0.00 0 301
+
+run 1: cache-thrashN sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./cache-thrash 4 1000 1 2000000 4
+cache-thrashN sn    0:00.22 4096 0.88 0.00 0 257
+
+run 1: cache-thrashN onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./cache-thrash 4 1000 1 2000000 4
+cache-thrashN onik  0:00.22 4096 0.87 0.00 0 269
+
+run 1: cache-thrashN onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./cache-thrash 4 1000 1 2000000 4
+cache-thrashN onit  0:00.22 3968 0.88 0.00 0 268
+
+---- 1: glibc-simple
+
+run 1: glibc-simple sys: SYSMALLOC=1 ./glibc-simple
+glibc-simple sys   0:02.07 1664 2.06 0.00 0 219
+
+run 1: glibc-simple mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./glibc-simple
+glibc-simple mi    0:01.68 2048 1.68 0.00 0 266
+
+run 1: glibc-simple je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./glibc-simple
+glibc-simple je    0:02.04 4608 2.04 0.00 0 410
+
+run 1: glibc-simple sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./glibc-simple
+glibc-simple sn    0:01.35 2560 1.34 0.00 0 289
+
+run 1: glibc-simple onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./glibc-simple
+glibc-simple onik  0:02.18 2176 2.17 0.00 0 239
+
+run 1: glibc-simple onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./glibc-simple
+glibc-simple onit  0:02.28 1920 2.27 0.00 0 230
+
+---- 1: glibc-thread
+
+run 1: glibc-thread sys: SYSMALLOC=1 ./glibc-thread 4
+glibc-thread,sys: iterations: 373323480, relative time: 2.678s
+glibc-thread sys   0:2.678 2176 8.00 0.00 0 373
+
+run 1: glibc-thread mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./glibc-thread 4
+glibc-thread,mi: iterations: 543666031, relative time: 1.839s
+glibc-thread mi    0:1.839 2688 8.00 0.00 0 464
+
+run 1: glibc-thread je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./glibc-thread 4
+glibc-thread,je: iterations: 498504942, relative time: 2.005s
+glibc-thread je    0:2.005 6016 8.01 0.00 0 845
+
+run 1: glibc-thread sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./glibc-thread 4
+glibc-thread,sn: iterations: 553391275, relative time: 1.807s
+glibc-thread sn    0:1.807 5248 8.01 0.00 0 998
+
+run 1: glibc-thread onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./glibc-thread 4
+glibc-thread,onik: iterations: 18958747, relative time: 52.746s
+glibc-thread onik  0:52.746 3072 2.86 4.09 0 559
+
+run 1: glibc-thread onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./glibc-thread 4
+glibc-thread,onit: iterations: 17855933, relative time: 56.003s
+glibc-thread onit  0:56.003 2944 2.77 4.22 0 552
+
+---- 1: malloc-large
+
+run 1: malloc-large sys: SYSMALLOC=1 ./malloc-large
+malloc-large sys   0:02.88 534288 1.30 1.57 0 510579
+
+run 1: malloc-large mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./malloc-large
+malloc-large mi    0:01.71 572160 1.29 0.42 0 142356
+
+run 1: malloc-large je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./malloc-large
+malloc-large je    0:23.52 438812 1.78 21.73 0 7522311
+
+run 1: malloc-large sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./malloc-large
+malloc-large sn    0:03.03 676352 2.19 0.84 0 168571
+
+run 1: malloc-large onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./malloc-large
+malloc-large onik  0:02.43 1425920 1.30 1.13 0 355833
+
+run 1: malloc-large onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./malloc-large
+malloc-large onit  0:02.33 1425792 1.31 1.02 0 355832
+
+---- 1: mleak10
+
+run 1: mleak10 sys: SYSMALLOC=1 ./mleak 5
+mleak10     sys   0:00.19 2036 0.00 0.19 0 6221
+
+run 1: mleak10 mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./mleak 5
+mleak10     mi    0:00.18 2044 0.02 0.16 0 6226
+
+run 1: mleak10 je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./mleak 5
+mleak10     je    0:00.19 5140 0.02 0.17 0 9481
+
+run 1: mleak10 sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./mleak 5
+mleak10     sn    0:00.18 2904 0.01 0.17 0 6835
+
+run 1: mleak10 onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./mleak 5
+mleak10     onik  0:00.18 2416 0.01 0.17 0 6230
+
+run 1: mleak10 onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./mleak 5
+mleak10     onit  0:00.18 2172 0.01 0.17 0 6220
+
+---- 1: mleak100
+
+run 1: mleak100 sys: SYSMALLOC=1 ./mleak 50
+mleak100    sys   0:01.86 2232 0.15 1.77 0 60242
+
+run 1: mleak100 mi: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/mi/out/release/libmimalloc.so ./mleak 50
+mleak100    mi    0:01.91 2400 0.18 1.84 0 60315
+
+run 1: mleak100 je: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/je/lib/libjemalloc.so ./mleak 50
+mleak100    je    0:01.94 5104 0.25 1.78 0 90489
+
+run 1: mleak100 sn: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/sn/release/libsnmallocshim.so ./mleak 50
+mleak100    sn    0:01.83 3196 0.22 1.65 0 80125
+
+run 1: mleak100 onik: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload_rust.so ./mleak 50
+mleak100    onik  0:01.81 2316 0.11 1.70 0 60230
+
+run 1: mleak100 onit: LD_PRELOAD=/home/eric_jacopin/mimalloc-bench/extern/oris/liborispreload-zig.so ./mleak 50
+mleak100    onit  0:01.86 2208 0.10 1.82 0 60218
+
+results written to: /home/eric_jacopin/mimalloc-bench/out/bench/benchres.csv
+
+#------------------------------------------------------------------
+# test    alloc   time  rss    user  sys  page-faults page-reclaims
+cfrac       sys   02.78 3072 3.09 0.00 0 432
+cfrac       mi    02.51 3200 2.79 0.00 0 383
+cfrac       je    02.63 5120 2.91 0.00 0 500
+cfrac       sn    02.58 3200 2.74 0.00 0 426
+cfrac       onik  03.39 3328 3.53 0.00 0 423
+cfrac       onit  05.63 3072 3.66 0.00 0 414
+espresso    sys   03.36 2560 3.30 0.02 0 473
+espresso    mi    02.90 3308 2.93 0.03 0 3667
+espresso    je    02.91 6144 3.07 0.02 0 679
+espresso    sn    02.74 4480 2.89 0.04 0 690
+espresso    onik  03.01 3584 3.20 0.02 0 577
+espresso    onit  02.97 3456 3.24 0.05 0 567
+barnes      sys   02.06 58240 2.26 0.02 0 16568
+barnes      mi    02.04 58240 2.23 0.04 0 16589
+barnes      je    02.10 60672 2.20 0.05 0 16739
+barnes      sn    02.16 59264 2.22 0.04 0 16927
+barnes      onik  02.18 58624 2.25 0.02 0 16618
+barnes      onit  02.18 58240 2.24 0.04 0 16611
+larsonN-sized sys   12.137 47104 20.11 0.13 4 11069
+larsonN-sized mi    5.224 59608 21.19 0.11 0 15533
+larsonN-sized je    5.229 49124 21.51 0.19 0 28662
+larsonN-sized sn    5.962 57344 21.20 0.09 0 13582
+larsonN-sized onik  468.704 17152 6.31 9.95 0 3765
+larsonN-sized onit  359.595 17152 5.92 9.96 0 3751
+mstressN    sys   00.17 69528 0.25 0.06 0 22554
+mstressN    mi    00.17 128064 0.18 0.05 0 31909
+mstressN    je    00.47 43752 0.25 0.58 0 267865
+mstressN    sn    00.15 65536 0.16 0.04 0 16038
+mstressN    onik  00.34 43648 0.47 0.49 0 10783
+mstressN    onit  00.39 43648 0.55 0.53 0 10791
+rptestN     sys   .317 13692 0.21 0.36 0 6161
+rptestN     mi    .147 24040 0.16 0.32 0 13025
+rptestN     je    .129 24016 0.17 0.28 0 8143
+rptestN     sn    .127 30080 0.24 0.22 0 7153
+rptestN     onik  2.071 12800 0.64 1.00 0 2975
+rptestN     onit  2.215 19712 0.60 1.07 0 4863
+alloc-test1 sys   02.59 14080 2.81 0.01 0 2940
+alloc-test1 mi    02.07 13440 2.23 0.01 0 2591
+alloc-test1 je    02.02 13056 2.21 0.00 0 2567
+alloc-test1 sn    02.01 13952 2.21 0.00 0 2741
+alloc-test1 onik  02.98 13440 3.20 0.01 0 2665
+alloc-test1 onit  05.03 13440 5.25 0.00 0 2665
+alloc-testN sys   02.54 14848 10.55 0.02 0 3132
+alloc-testN mi    02.12 14464 8.65 0.00 0 2941
+alloc-testN je    03.97 14080 8.43 0.01 0 2888
+alloc-testN sn    02.14 15104 8.55 0.00 0 3021
+alloc-testN onik  40.57 13696 59.76 81.63 0 2738
+alloc-testN onit  1:11.46 13440 82.96 131.15 0 2737
+sh6benchN   sys   00.96 422656 3.25 0.58 0 105465
+sh6benchN   mi    00.30 264576 0.97 0.18 0 66283
+sh6benchN   je    00.52 273392 1.89 0.22 0 69341
+sh6benchN   sn    00.34 320512 1.00 0.21 0 79867
+sh6benchN   onik  12.82 303616 17.67 31.84 0 76380
+sh6benchN   onit  1:07.16 303744 56.27 35.05 0 76455
+sh8benchN   sys   02.80 171728 11.18 0.29 0 96819
+sh8benchN   mi    00.70 129244 2.60 0.09 0 36855
+sh8benchN   je    02.86 206608 5.54 0.18 0 54882
+sh8benchN   sn    00.79 176384 2.92 0.14 0 43856
+sh8benchN   onik  45.96 143744 59.76 116.54 0 36284
+sh8benchN   onit  1:57.28 139776 101.59 218.36 0 35338
+xmalloc-testN sys   3.296 61712 18.24 0.74 0 58502
+xmalloc-testN mi    0.425 58952 19.55 0.73 0 195588
+xmalloc-testN je    0.478 109460 20.32 0.26 0 49179
+xmalloc-testN sn    0.245 97664 19.89 0.36 0 24142
+xmalloc-testN onik  8.900 4224 6.99 12.45 0 789
+xmalloc-testN onit  10.645 14336 5.48 8.35 0 3427
+cache-scratch1 sys   00.81 3712 0.84 0.00 0 222
+cache-scratch1 mi    00.80 4096 0.83 0.00 0 244
+cache-scratch1 je    00.80 4480 0.83 0.00 0 292
+cache-scratch1 sn    00.80 4096 0.84 0.00 0 258
+cache-scratch1 onik  00.80 3968 0.84 0.00 0 263
+cache-scratch1 onit  00.80 3840 0.84 0.00 0 261
+cache-scratchN sys   00.20 3712 0.85 0.00 0 230
+cache-scratchN mi    00.20 4096 0.85 0.00 0 250
+cache-scratchN je    00.20 4480 0.85 0.00 0 306
+cache-scratchN sn    00.20 4096 0.85 0.00 0 291
+cache-scratchN onik  00.20 4224 0.85 0.00 0 286
+cache-scratchN onit  00.20 3968 0.84 0.00 0 284
+cache-thrash1 sys   00.81 3712 0.85 0.00 0 220
+cache-thrash1 mi    02.38 4096 0.85 0.00 0 244
+cache-thrash1 je    00.81 4480 0.85 0.00 0 291
+cache-thrash1 sn    00.81 4096 0.84 0.00 0 251
+cache-thrash1 onik  00.80 4096 0.84 0.00 0 245
+cache-thrash1 onit  00.81 3840 0.84 0.00 0 247
+cache-thrashN sys   00.20 3712 0.86 0.00 0 227
+cache-thrashN mi    00.20 3968 0.85 0.00 0 249
+cache-thrashN je    00.20 4480 0.85 0.00 0 299
+cache-thrashN sn    00.20 3968 0.85 0.00 0 256
+cache-thrashN onik  00.21 3968 0.85 0.00 0 270
+cache-thrashN onit  00.20 3840 0.86 0.00 0 268
+glibc-simple sys   01.88 1664 1.96 0.00 0 220
+glibc-simple mi    01.52 1920 1.58 0.00 0 266
+glibc-simple je    01.82 4736 1.90 0.00 0 405
+glibc-simple sn    01.22 2688 1.27 0.00 0 288
+glibc-simple onik  01.96 2176 2.05 0.00 0 237
+glibc-simple onit  02.04 1920 2.14 0.00 0 228
+glibc-thread sys   2.473 2176 8.40 0.00 0 372
+glibc-thread mi    1.694 2688 8.39 0.00 0 466
+glibc-thread je    1.844 6016 8.39 0.00 0 841
+glibc-thread sn    1.664 5120 8.40 0.00 0 995
+glibc-thread onik  48.726 3328 3.00 4.35 0 555
+glibc-thread onit  51.466 2944 3.09 4.28 0 551
+malloc-large sys   02.67 534288 1.25 1.55 0 510579
+malloc-large mi    01.60 572160 1.31 0.36 0 142355
+malloc-large je    22.89 438848 1.79 20.54 0 7518563
+malloc-large sn    02.83 673408 2.22 0.74 0 167840
+malloc-large onik  02.29 1425792 1.28 1.11 0 355835
+malloc-large onit  02.17 1425664 1.28 0.99 0 355832
+mleak10     sys   00.16 2048 0.01 0.16 0 6211
+mleak10     mi    00.17 2036 0.02 0.16 0 6227
+mleak10     je    00.17 5044 0.03 0.15 0 9451
+mleak10     sn    00.16 2884 0.01 0.16 0 6350
+mleak10     onik  00.16 2296 0.01 0.17 0 6228
+mleak10     onit  00.16 2296 0.00 0.17 0 6221
+mleak100    sys   01.69 2132 0.12 1.71 0 60243
+mleak100    mi    03.22 2428 0.15 1.76 0 60313
+mleak100    je    01.73 5052 0.28 1.62 0 90461
+mleak100    sn    01.63 3080 0.23 1.52 0 60443
+mleak100    onik  01.64 2348 0.11 1.62 0 60230
+mleak100    onit  01.68 2180 0.12 1.70 0 60221
+cfrac       sys   02.94 3072 3.08 0.00 0 434
+cfrac       mi    02.61 3200 2.74 0.00 0 386
+cfrac       je    02.75 5376 2.89 0.00 0 498
+cfrac       sn    02.64 3200 2.76 0.00 0 427
+cfrac       onik  03.34 3328 3.50 0.00 0 422
+cfrac       onit  03.51 3072 3.68 0.00 0 413
+espresso    sys   03.20 2560 3.32 0.04 0 472
+espresso    mi    02.85 3360 2.94 0.05 0 3669
+espresso    je    04.46 6016 3.01 0.02 0 666
+espresso    sn    02.79 4480 2.91 0.02 0 688
+espresso    onik  03.07 3712 3.16 0.06 0 576
+espresso    onit  03.11 3328 3.23 0.03 0 566
+barnes      sys   02.17 58112 2.23 0.04 0 16570
+barnes      mi    02.16 58240 2.22 0.04 0 16585
+barnes      je    02.17 60928 2.25 0.02 0 16739
+barnes      sn    02.16 59264 2.23 0.04 0 16926
+barnes      onik  02.14 58496 2.20 0.04 0 16619
+barnes      onit  02.14 58112 2.20 0.05 0 16608
+larsonN-sized sys   8.654 35712 20.90 0.04 0 8256
+larsonN-sized mi    6.721 54768 20.81 0.12 0 13121
+larsonN-sized je    5.352 51172 20.69 0.14 0 28889
+larsonN-sized sn    5.968 56576 20.87 0.07 0 13402
+larsonN-sized onik  335.742 17152 6.20 10.31 0 3762
+larsonN-sized onit  353.231 16896 6.35 9.94 0 3763
+mstressN    sys   00.19 69144 0.25 0.06 0 25059
+mstressN    mi    00.18 121260 0.18 0.05 0 30219
+mstressN    je    00.49 44628 0.27 0.57 0 268535
+mstressN    sn    00.16 68864 0.18 0.03 0 16853
+mstressN    onik  00.36 43648 0.49 0.49 0 10764
+mstressN    onit  00.40 43392 0.59 0.47 0 10768
+rptestN     sys   .336 13480 0.24 0.36 0 5894
+rptestN     mi    .151 23660 0.20 0.28 0 13539
+rptestN     je    .134 22756 0.19 0.27 0 8666
+rptestN     sn    .119 18816 0.20 0.26 0 4351
+rptestN     onik  2.120 13056 0.59 1.07 0 3103
+rptestN     onit  2.224 12800 0.61 1.11 0 3060
+alloc-test1 sys   02.63 14080 2.73 0.00 0 2940
+alloc-test1 mi    02.13 13440 2.25 0.01 0 2589
+alloc-test1 je    01.99 13056 2.17 0.01 0 2568
+alloc-test1 sn    02.01 13952 2.19 0.02 0 2740
+alloc-test1 onik  03.00 13568 3.19 0.01 0 2667
+alloc-test1 onit  04.89 13440 5.16 0.01 0 2663
+alloc-testN sys   02.52 14848 10.60 0.01 0 3131
+alloc-testN mi    02.06 14336 8.63 0.00 0 2939
+alloc-testN je    02.03 14208 8.45 0.01 0 2886
+alloc-testN sn    02.08 15104 8.60 0.00 0 3018
+alloc-testN onik  39.94 13696 59.54 78.54 0 2735
+alloc-testN onit  1:12.12 13568 82.44 129.86 0 2735
+sh6benchN   sys   01.01 422784 3.24 0.60 0 105466
+sh6benchN   mi    00.31 265088 0.98 0.16 0 66417
+sh6benchN   je    00.56 273412 1.93 0.16 0 69329
+sh6benchN   sn    00.33 320256 1.00 0.19 0 79846
+sh6benchN   onik  14.89 303872 17.80 31.92 0 76457
+sh6benchN   onit  1:06.21 303488 55.20 35.61 0 76390
+sh8benchN   sys   02.71 171192 11.31 0.25 0 85655
+sh8benchN   mi    00.68 131036 2.62 0.11 0 37321
+sh8benchN   je    01.41 191392 5.60 0.12 0 50501
+sh8benchN   sn    00.83 176640 2.90 0.14 0 43900
+sh8benchN   onik  46.71 143616 59.41 117.71 0 36216
+sh8benchN   onit  2:05.06 139776 103.50 222.30 0 35336
+xmalloc-testN sys   2.138 62912 18.25 0.57 0 61600
+xmalloc-testN mi    0.460 58320 18.70 0.73 0 210971
+xmalloc-testN je    0.514 93720 19.44 0.23 0 41416
+xmalloc-testN sn    0.264 65536 18.98 0.41 0 16071
+xmalloc-testN onik  9.733 5248 6.49 11.93 0 1073
+xmalloc-testN onit  11.423 8704 4.80 9.34 0 1989
+cache-scratch1 sys   00.88 3712 0.88 0.00 0 224
+cache-scratch1 mi    00.88 4096 0.87 0.00 0 243
+cache-scratch1 je    00.88 4480 0.88 0.00 0 292
+cache-scratch1 sn    00.88 4096 0.88 0.00 0 258
+cache-scratch1 onik  00.88 3968 0.88 0.00 0 263
+cache-scratch1 onit  00.88 3968 0.88 0.00 0 263
+cache-scratchN sys   00.22 3712 0.88 0.00 0 230
+cache-scratchN mi    00.22 3968 0.88 0.00 0 249
+cache-scratchN je    00.22 4480 0.88 0.00 0 306
+cache-scratchN sn    00.22 3968 0.88 0.00 0 293
+cache-scratchN onik  00.22 4224 0.88 0.00 0 285
+cache-scratchN onit  00.22 3968 0.87 0.00 0 281
+cache-thrash1 sys   00.88 3712 0.87 0.00 0 221
+cache-thrash1 mi    00.89 4096 0.89 0.00 0 244
+cache-thrash1 je    00.89 4480 0.88 0.00 0 291
+cache-thrash1 sn    00.88 3968 0.88 0.00 0 251
+cache-thrash1 onik  00.88 4096 0.88 0.00 0 248
+cache-thrash1 onit  00.88 3840 0.88 0.00 0 248
+cache-thrashN sys   00.22 3712 0.87 0.00 0 227
+cache-thrashN mi    00.22 3968 0.88 0.00 0 250
+cache-thrashN je    00.22 4480 0.88 0.00 0 302
+cache-thrashN sn    00.22 4096 0.88 0.00 0 256
+cache-thrashN onik  00.22 3968 0.88 0.00 0 270
+cache-thrashN onit  00.22 3840 0.87 0.00 0 268
+glibc-simple sys   02.08 1664 2.06 0.00 0 219
+glibc-simple mi    01.68 1920 1.68 0.00 0 268
+glibc-simple je    02.00 4736 1.99 0.00 0 406
+glibc-simple sn    01.35 2432 1.34 0.00 0 287
+glibc-simple onik  02.12 2176 2.11 0.00 0 239
+glibc-simple onit  02.31 1664 2.31 0.00 0 229
+glibc-thread sys   2.658 2176 8.00 0.00 0 373
+glibc-thread mi    1.855 2688 8.00 0.00 0 464
+glibc-thread je    1.996 6144 8.01 0.00 0 838
+glibc-thread sn    1.796 5248 7.99 0.00 0 993
+glibc-thread onik  53.485 3200 2.89 4.10 0 557
+glibc-thread onit  55.821 2944 2.76 4.19 0 549
+malloc-large sys   02.87 534284 1.30 1.57 0 510578
+malloc-large mi    01.70 572416 1.28 0.42 0 142355
+malloc-large je    23.47 438984 1.75 21.71 0 7522284
+malloc-large sn    03.03 680192 2.14 0.88 0 169515
+malloc-large onik  02.45 1425792 1.30 1.14 0 355836
+malloc-large onit  02.36 1425536 1.29 1.06 0 355834
+mleak10     sys   00.19 1920 0.01 0.18 0 6216
+mleak10     mi    00.18 2168 0.02 0.16 0 6234
+mleak10     je    00.18 5112 0.03 0.15 0 9487
+mleak10     sn    00.17 2924 0.01 0.17 0 6895
+mleak10     onik  00.18 2304 0.01 0.16 0 6230
+mleak10     onit  00.18 2172 0.02 0.16 0 6220
+mleak100    sys   01.88 2168 0.12 1.86 0 60242
+mleak100    mi    01.88 2500 0.22 1.77 0 60318
+mleak100    je    01.95 5180 0.34 1.70 0 90496
+mleak100    sn    01.82 3188 0.24 1.61 0 79679
+mleak100    onik  01.82 2384 0.13 1.77 0 60229
+mleak100    onit  01.86 2216 0.15 1.76 0 60221
+cfrac       sys   03.25 3072 3.25 0.00 0 436
+cfrac       mi    03.17 2944 3.17 0.00 0 385
+cfrac       je    03.03 5248 3.03 0.00 0 497
+cfrac       sn    02.89 3200 2.89 0.00 0 426
+cfrac       onik  03.67 3200 3.67 0.00 0 424
+cfrac       onit  03.82 3072 3.82 0.00 0 414
+espresso    sys   03.50 2560 3.47 0.02 0 473
+espresso    mi    03.13 3360 3.10 0.03 0 3668
+espresso    je    03.22 6144 3.19 0.03 0 670
+espresso    sn    03.13 4480 3.10 0.02 0 690
+espresso    onik  03.34 3712 3.28 0.06 0 576
+espresso    onit  03.37 3456 3.31 0.05 0 568
+barnes      sys   02.39 58112 2.36 0.03 0 16569
+barnes      mi    02.39 58112 2.34 0.04 0 16589
+barnes      je    02.36 60672 2.30 0.06 0 16742
+barnes      sn    02.38 59008 2.35 0.02 0 16932
+barnes      onik  02.38 58624 2.35 0.03 0 16620
+barnes      onit  02.38 58112 2.35 0.02 0 16612
+larsonN-sized sys   9.291 35200 19.87 0.10 0 8097
+larsonN-sized mi    5.572 56520 19.84 0.12 0 16048
+larsonN-sized je    5.747 49748 19.67 0.18 0 27397
+larsonN-sized sn    6.386 51456 19.89 0.09 0 12122
+larsonN-sized onik  362.593 17024 5.91 9.86 0 3754
+larsonN-sized onit  373.985 17024 5.84 9.83 0 3752
+mstressN    sys   00.22 68996 0.27 0.07 0 26450
+mstressN    mi    00.20 124156 0.19 0.06 0 31157
+mstressN    je    00.54 44712 0.26 0.63 0 268068
+mstressN    sn    00.17 70528 0.18 0.03 0 17294
+mstressN    onik  00.39 44032 0.53 0.48 0 10853
+mstressN    onit  00.44 43520 0.62 0.52 0 10743
+rptestN     sys   .359 13084 0.26 0.35 0 5857
+rptestN     mi    .176 37140 0.22 0.28 0 16637
+rptestN     je    .144 22656 0.22 0.27 0 8455
+rptestN     sn    .128 18304 0.24 0.23 0 4193
+rptestN     onik  2.395 13440 0.58 1.17 0 3130
+rptestN     onit  2.445 12800 0.59 1.17 0 3002
+alloc-test1 sys   02.92 14080 2.91 0.00 0 2942
+alloc-test1 mi    02.29 13312 2.27 0.01 0 2589
+alloc-test1 je    02.31 13056 2.30 0.00 0 2566
+alloc-test1 sn    02.34 13952 2.33 0.01 0 2741
+alloc-test1 onik  03.40 13568 3.39 0.00 0 2666
+alloc-test1 onit  05.49 13440 5.47 0.01 0 2664
+alloc-testN sys   02.76 14848 10.97 0.01 0 3132
+alloc-testN mi    02.26 14336 8.97 0.01 0 2941
+alloc-testN je    02.20 14208 8.77 0.01 0 2881
+alloc-testN sn    02.28 15104 8.93 0.01 0 3019
+alloc-testN onik  42.67 13696 58.54 88.57 0 2737
+alloc-testN onit  1:15.20 13568 81.73 140.42 0 2735
+sh6benchN   sys   01.04 422528 3.41 0.50 0 105464
+sh6benchN   mi    00.33 264576 1.00 0.19 0 66279
+sh6benchN   je    00.58 273572 1.96 0.20 0 69336
+sh6benchN   sn    00.39 320512 1.03 0.27 0 79869
+sh6benchN   onik  14.59 303872 19.30 34.56 0 76443
+sh6benchN   onit  1:10.39 304000 58.04 39.45 0 76484
+sh8benchN   sys   03.02 171340 11.52 0.31 0 106411
+sh8benchN   mi    00.76 130012 2.66 0.09 0 38446
+sh8benchN   je    01.54 210392 5.74 0.16 0 54860
+sh8benchN   sn    00.86 183168 2.98 0.14 0 45589
+sh8benchN   onik  48.02 143360 59.63 123.02 0 36150
+sh8benchN   onit  2:08.04 140928 106.20 223.55 0 35604
+xmalloc-testN sys   2.128 62220 18.18 0.54 0 58383
+xmalloc-testN mi    0.462 58208 18.64 0.73 0 202760
+xmalloc-testN je    0.518 108240 19.30 0.27 0 46777
+xmalloc-testN sn    0.265 64896 18.86 0.46 0 15950
+xmalloc-testN onik  9.799 5888 6.52 12.01 0 1220
+xmalloc-testN onit  11.393 8832 4.75 9.28 0 2022
+cache-scratch1 sys   00.88 3712 0.88 0.00 0 224
+cache-scratch1 mi    00.88 4096 0.88 0.00 0 244
+cache-scratch1 je    00.89 4480 0.88 0.00 0 291
+cache-scratch1 sn    00.88 4096 0.88 0.00 0 257
+cache-scratch1 onik  00.88 4096 0.88 0.00 0 263
+cache-scratch1 onit  00.88 3968 0.88 0.00 0 262
+cache-scratchN sys   00.22 3712 0.88 0.00 0 229
+cache-scratchN mi    00.22 4096 0.88 0.00 0 251
+cache-scratchN je    00.22 4352 0.88 0.00 0 304
+cache-scratchN sn    00.22 4096 0.87 0.00 0 293
+cache-scratchN onik  00.22 4224 0.88 0.00 0 287
+cache-scratchN onit  00.22 3968 0.88 0.00 0 283
+cache-thrash1 sys   00.89 3712 0.89 0.00 0 220
+cache-thrash1 mi    00.89 4096 0.88 0.00 0 244
+cache-thrash1 je    00.89 4480 0.89 0.00 0 288
+cache-thrash1 sn    00.88 4096 0.88 0.00 0 251
+cache-thrash1 onik  00.89 4096 0.88 0.00 0 247
+cache-thrash1 onit  00.88 3968 0.88 0.00 0 246
+cache-thrashN sys   00.22 3712 0.87 0.00 0 229
+cache-thrashN mi    00.22 4096 0.88 0.00 0 250
+cache-thrashN je    00.22 4480 0.87 0.00 0 301
+cache-thrashN sn    00.22 4096 0.88 0.00 0 257
+cache-thrashN onik  00.22 4096 0.87 0.00 0 269
+cache-thrashN onit  00.22 3968 0.88 0.00 0 268
+glibc-simple sys   02.07 1664 2.06 0.00 0 219
+glibc-simple mi    01.68 2048 1.68 0.00 0 266
+glibc-simple je    02.04 4608 2.04 0.00 0 410
+glibc-simple sn    01.35 2560 1.34 0.00 0 289
+glibc-simple onik  02.18 2176 2.17 0.00 0 239
+glibc-simple onit  02.28 1920 2.27 0.00 0 230
+glibc-thread sys   2.678 2176 8.00 0.00 0 373
+glibc-thread mi    1.839 2688 8.00 0.00 0 464
+glibc-thread je    2.005 6016 8.01 0.00 0 845
+glibc-thread sn    1.807 5248 8.01 0.00 0 998
+glibc-thread onik  52.746 3072 2.86 4.09 0 559
+glibc-thread onit  56.003 2944 2.77 4.22 0 552
+malloc-large sys   02.88 534288 1.30 1.57 0 510579
+malloc-large mi    01.71 572160 1.29 0.42 0 142356
+malloc-large je    23.52 438812 1.78 21.73 0 7522311
+malloc-large sn    03.03 676352 2.19 0.84 0 168571
+malloc-large onik  02.43 1425920 1.30 1.13 0 355833
+malloc-large onit  02.33 1425792 1.31 1.02 0 355832
+mleak10     sys   00.19 2036 0.00 0.19 0 6221
+mleak10     mi    00.18 2044 0.02 0.16 0 6226
+mleak10     je    00.19 5140 0.02 0.17 0 9481
+mleak10     sn    00.18 2904 0.01 0.17 0 6835
+mleak10     onik  00.18 2416 0.01 0.17 0 6230
+mleak10     onit  00.18 2172 0.01 0.17 0 6220
+mleak100    sys   01.86 2232 0.15 1.77 0 60242
+mleak100    mi    01.91 2400 0.18 1.84 0 60315
+mleak100    je    01.94 5104 0.25 1.78 0 90489
+mleak100    sn    01.83 3196 0.22 1.65 0 80125
+mleak100    onik  01.81 2316 0.11 1.70 0 60230
+mleak100    onit  01.86 2208 0.10 1.82 0 60218
+

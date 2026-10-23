@@ -1,0 +1,25 @@
+diff --git a/bench.sh b/bench.sh
+index 744505e..fc888ab 100755
+--- a/bench.sh
++++ b/bench.sh
+@@ -6,7 +6,7 @@
+ # Allocators and tests
+ # --------------------------------------------------------------------
+ 
+-readonly alloc_all="sys kp dh ff fg gd hd hm hml iso je lf lp lt mi mi-sec mi2 mi2-sec mi3 mi3-sec mng mesh nomesh pa rp sc scudo sg sm sn sn-sec s tbb tc tcg mi-dbg mi2-dbg mi3-dbg xmi xsmi xmi-dbg yal rmalloc"
++readonly alloc_all="sys onik onit kp dh ff fg gd hd hm hml iso je lf lp lt mi mi-sec mi2 mi2-sec mi3 mi3-sec mng mesh nomesh pa rp sc scudo sg sm sn sn-sec s tbb tc tcg mi-dbg mi2-dbg mi3-dbg xmi xsmi xmi-dbg yal rmalloc"
+ readonly alloc_secure="dh ff gd hm hml iso mi-sec mi2-sec mi3-sec mng pa scudo sg sn-sec sg"
+ alloc_run=""           # allocators to run (expanded by command line options)
+ alloc_installed="sys"  # later expanded to include all installed allocators
+@@ -129,6 +129,11 @@ alloc_lib_add "tcg"    "$localdevdir/tcg/bazel-bin/tcmalloc/libtcmalloc$extso"
+ alloc_lib_add "yal"    "$localdevdir/yal/yalloc$extso"
+ alloc_lib_add "rmalloc" "$localdevdir/rmalloc/build/lib/release/librmalloc$extso"
+ 
++# Oris (https://github.com/PCfVW/oris): LD_PRELOAD shims over orisnik (Rust) and orisnitsa
++# (Zig), installed into extern/oris by Oris's benchmarks/mimalloc-bench/setup.sh.
++alloc_lib_add "onik"   "$localdevdir/oris/liborispreload_rust$extso"
++alloc_lib_add "onit"   "$localdevdir/oris/liborispreload-zig$extso"
++
+ alloc_lib_add "mi"     "$localdevdir/mi/out/release/libmimalloc$extso"
+ alloc_lib_add "mi-sec" "$localdevdir/mi/out/secure/libmimalloc-secure$extso"
+ alloc_lib_add "mi-dbg" "$localdevdir/mi/out/debug/libmimalloc-debug$extso"

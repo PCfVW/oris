@@ -1,0 +1,9 @@
+oris-trace 1
+# The annotated example of GRAMMAR.md section 1.6: a small allocation, a large one,
+# a realloc that grows in place, a sized free, a free, and a purge.
+alloc h0 24
+alloc h1 1000
+realloc h1 2000
+free_sized h0 24
+free h1
+purge

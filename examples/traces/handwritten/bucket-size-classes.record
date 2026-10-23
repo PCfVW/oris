@@ -1,0 +1,52 @@
+oris-record 1
+#0 alloc h0 1 -> m0+0x0 a=65536
+  map b m0 65536
+  page+ b0 m0
+#1 alloc h1 8 -> m0+0x8 a=65536
+#2 alloc h2 9 -> m1+0x0 a=131072
+  map b m1 65536
+  page+ b1 m1
+#3 alloc h3 16 -> m1+0x10 a=131072
+#4 alloc h4 17 -> m2+0x0 a=196608
+  map b m2 65536
+  page+ b2 m2
+#5 alloc h5 248 -> m3+0x0 a=262144
+  map b m3 65536
+  page+ b30 m3
+#6 alloc h6 249 -> m4+0x0 a=327680
+  map b m4 65536
+  page+ b31 m4
+#7 alloc h7 256 -> m4+0x100 a=327680
+#8 alloc h8 257 -> m5+0x20 a=393216
+  map t m5 65536
+  split m5+0x10 272
+  mr m5+0x130
+#9 free_sized h0 1 -> - a=393216
+#10 free h1 -> - a=393216
+#11 free_sized h2 9 -> - a=393216
+#12 free h3 -> - a=393216
+#13 free_sized h4 17 -> - a=393216
+#14 free h5 -> - a=393216
+#15 free_sized h6 249 -> - a=393216
+#16 free h7 -> - a=393216
+#17 free_sized h8 257 -> - a=393216
+  mr -
+  merge m5+0x130
+  mr m5+0x10
+#18 purge -> - a=0
+  tree+ m5+0x10 65488 node rot=0
+  mr -
+  tree- m5+0x10 65488 node rot=0
+  unmap m5 65536
+  mr -
+  page- b0 m0
+  unmap m0 65536
+  page- b1 m1
+  unmap m1 65536
+  page- b2 m2
+  unmap m2 65536
+  page- b30 m3
+  unmap m3 65536
+  page- b31 m4
+  unmap m4 65536
+end ops=19 maps=6 unmaps=6 rotations=0 allocated=0

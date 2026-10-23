@@ -4,6 +4,17 @@
 # Cargo.lock is intentionally tracked (Rust/Cargo.lock) — pins the Miri/nightly CI
 # lanes and local builds against dependency drift; see Rust/CLAUDE.md.
 
+# Benchmarks: bench-tier traces (generated on demand; only their checksums are committed)
+# and the helper crates' build output
+/benchmarks/traces/
+/benchmarks/scripts/*/target/
+/benchmarks/scripts/target-*/
+/benchmarks/scripts/bench-zig/.zig-cache/
+/benchmarks/scripts/bench-zig/zig-out/
+/benchmarks/mimalloc-bench/preload-rust/target/
+/benchmarks/mimalloc-bench/preload-zig/.zig-cache/
+/benchmarks/mimalloc-bench/preload-zig/zig-out/
+
 # Zig
 /Zig/zig-cache/
 /Zig/zig-out/

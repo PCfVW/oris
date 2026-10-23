@@ -11,6 +11,17 @@
 *.yaml text eol=lf
 *.h    text eol=lf
 *.c    text eol=lf
+*.cpp  text eol=lf
+*.ps1  text eol=lf
+*.sh   text eol=lf
+*.py   text eol=lf
+*.patch -text
+
+# Trace corpus: the transition records are compared byte for byte across three
+# implementations and three OSes, so a CRLF checkout must never touch them.
+*.trace  text eol=lf
+*.record text eol=lf
+*.expected text eol=lf
 
 # Preserve the verbatim 2007 HPHA reference source exactly as vendored — no
 # line-ending normalization.

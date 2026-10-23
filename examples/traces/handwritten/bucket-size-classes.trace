@@ -1,0 +1,23 @@
+oris-trace 1
+# One allocation per bucket boundary: sizes 1..8 share bucket 0, 9..16 bucket 1, and so
+# on up to 249..256 in bucket 31; 257 is the first tree-path size. A sized free names the
+# bucket directly (bucket_free_direct), a plain free recovers it from the page.
+alloc h0 1
+alloc h1 8
+alloc h2 9
+alloc h3 16
+alloc h4 17
+alloc h5 248
+alloc h6 249
+alloc h7 256
+alloc h8 257
+free_sized h0 1
+free h1
+free_sized h2 9
+free h3
+free_sized h4 17
+free h5
+free_sized h6 249
+free h7
+free_sized h8 257
+purge

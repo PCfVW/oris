@@ -357,8 +357,16 @@ This constrains how Zig code is written, not just what it computes:
    physical-neighbor coalescing preserves operation *order*, not just final shape — the
    invariant counts transitions.
 
-From v0.3.0 a CI gate replays the shared trace corpus through both ports and asserts a
-byte-identical transition record. Treat any change under this section as touching that gate.
+5. **Every state transition emits its `letopis` event, where HPHA performs it.** A split, shift,
+   merge, page spawn/release/move, tree or small-list insertion or removal, map or unmap goes
+   through the hook (`if (config.trace) self.tap.emit(.{ ... })`) at the point `examples/traces/EVENTS.md` names —
+   in this port, in the Rust port, and in `Cpp/oracle/letopis.patch`. The record is
+   ordered, so an event one call too early is a divergence even when the final state agrees.
+
+The gate is real since v0.3.0: `trace-ci.yml` replays the trace corpus (`examples/traces/`)
+through both ports on three OSes and through the HPHA oracle on Windows, and every transition
+record must equal the committed one, which HPHA wrote. Treat any change under this section as
+touching that gate; `docs/traces.md` describes what to do when a record changes.
 
 ---
 
@@ -423,6 +431,13 @@ Rust port's Cargo feature gate is exact: `orisnitsa.Orisnitsa` (`root.zig`'s pub
 > that stores no debug-only state of its own in a given phase (`Page`, `Bucket`, `BlockHeader`)
 > stays a plain, non-generic type until a later phase actually needs it to carry `config`-gated
 > fields.
+
+`Config.trace` (v0.3.0) is the second toggle and follows the same pattern: `Buckets(config)` and
+`Tree(config)` carry a `tap: if (config.trace) letopis_event.Tap else void` field, and every
+transition hook is written `if (config.trace) self.tap.emit(.{ ... })`, so `Orisnitsa(.{})`
+contains none of it — the analog of the Rust port's `chronicle!` macro under the `trace`
+feature. A test that exercises the hooks must instantiate `Orisnitsa(.{ .trace = true })`
+(Zig compiles generics lazily; `letopis.replay` does).
 
 ### The `spomen` Debug Subsystem
 

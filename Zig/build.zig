@@ -104,6 +104,24 @@ pub fn build(b: *std.Build) void {
     check_example.expectStdErrMatch("size=24");
     test_step.dependOn(&check_example.step);
 
+    // `zig build replay -- <trace-file>` replays a trace (`examples/traces/GRAMMAR.md`) on
+    // `Orisnitsa(.{ .trace = true })` and prints its transition record: the Zig leg of the
+    // cross-port trace gate (`.github/workflows/trace-ci.yml`, `docs/traces.md`). Built by
+    // `zig build test` too, so it cannot rot; it is run against the corpus by CI.
+    const replay = b.addExecutable(.{
+        .name = "replay",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/replay.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "orisnitsa", .module = mod }},
+        }),
+    });
+    const run_replay = b.addRunArtifact(replay);
+    if (b.args) |args| run_replay.addArgs(args);
+    b.step("replay", "Replay a trace file and print its transition record").dependOn(&run_replay.step);
+    test_step.dependOn(&replay.step);
+
     // Static and shared C-linkable libraries, built from a *separate* module
     // rooted directly at `capi.zig`, not `mod` (rooted at `root.zig`). Zig only
     // auto-exports `export fn`s that live in a module's own root file — an

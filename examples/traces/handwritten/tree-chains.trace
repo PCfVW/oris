@@ -1,0 +1,41 @@
+oris-trace 1
+# Equal-size free blocks share one red-black tree node as a chain. Four 400-byte blocks,
+# kept apart by live 300-byte blocks so they cannot coalesce, are freed in turn: the first
+# to reach the tree becomes a node, the next two join its chain (tree+ chain). Five
+# distinct larger sizes then build a tree deep enough to rotate. Freeing the separator
+# between the chain head and a chain member coalesces all three: the member leaves the
+# chain (tree- link) and the head's successor is promoted in its place (tree- promote).
+# A 1100-byte request then takes the merged block (the most-recently-freed one), so the
+# next 400-byte request searches the tree: it takes a chain member, not the head,
+# because unlinking a chain member needs no rebalancing (tree- link).
+alloc h0 400
+alloc h1 300
+alloc h2 400
+alloc h3 300
+alloc h4 400
+alloc h5 300
+alloc h6 400
+alloc h7 300
+alloc h8 600
+alloc h9 300
+alloc h10 800
+alloc h11 300
+alloc h12 1000
+alloc h13 300
+alloc h14 1200
+alloc h15 300
+alloc h16 1400
+alloc h17 300
+free h0
+free h2
+free h4
+free h6
+free h8
+free h10
+free h12
+free h14
+free h16
+free h1
+alloc h18 1100
+alloc h19 400
+purge

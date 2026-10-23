@@ -6,7 +6,7 @@
 
 ## Versioning policy
 
-Oris ports ship in lockstep. **The same version number on `orisnik` (crates.io) and `orisnitsa` (Zig package registry) carries the same feature set and the same internal-state-transition behavior** — that is the project's defining invariant. Semantic versioning applies, with the understanding that any change to the public API or to the algorithm's externally-visible state transitions is at minimum a minor version bump.
+Oris ports ship in lockstep. **The same version number on `orisnik` (crates.io) and `orisnitsa` (GitHub Release) carries the same feature set and the same internal-state-transition behavior** — that is the project's defining invariant. Semantic versioning applies, with the understanding that any change to the public API or to the algorithm's externally-visible state transitions is at minimum a minor version bump.
 
 ### Fidelity fixes are patches
 
@@ -19,7 +19,7 @@ Two conditions make a change eligible, and both must hold:
 1. **The reference decides.** The fix is justified by pointing at `Cpp/hpha.h`/`hpha.cpp` and showing the port disagreeing with it, or by showing that the affected inputs reach arithmetic with no defined result. A change that makes a port *better* than HPHA by some other standard is a feature, not a fidelity fix, and takes a minor bump.
 2. **No input that previously behaved correctly changes.** The set of affected inputs must be exactly those that were already broken. If a working call changes its result, it is a minor bump regardless of how the change is motivated.
 
-Both ports must land the fix in the same release, as with any change under the cross-port invariant. The release notes name each fixed divergence and the reference behavior it restores; `v0.1.1` is the first release cut under this rule.
+Both ports must land the fix in the same release, as with any change under the cross-language invariant. The release notes name each fixed divergence and the reference behavior it restores; `v0.1.1` is the first release cut under this rule.
 
 This does not weaken the invariant — it protects it. Under the strict reading, correcting a divergence from HPHA would cost a minor version, which makes fidelity repairs compete with feature milestones for version numbers and creates a standing incentive to defer them. Cheap, prompt fidelity fixes are exactly what a project defined by a cross-port invariant needs most.
 
@@ -29,9 +29,9 @@ From v0.1.0 onward, both Oris ports satisfy the following property:
 
 > *Given an identical allocation/deallocation sequence at the public API level, both ports produce identical internal state transitions — same bucket-page spawns, same tree-rotation count, same coalescing operations, same final RSS.*
 
-This is a stricter property than "the API behaves the same"; it is "the algorithm executes the same." Verified in CI from v0.3.0 onward against a corpus of reproducible traces.
+This is a stricter property than "the API behaves the same"; it is "the algorithm executes the same." Verified in CI from v0.3.0 onward against a corpus of reproducible traces — and against the 2007 HPHA reference itself, which wrote the corpus's committed transition records ([`docs/traces.md`](docs/traces.md)).
 
-**Scope.** The invariant covers the allocator's own state — in the default build, and in the debug configuration for everything the guard reservation changes (size classes, block sizes, bucket/tree routing), which is identical in both ports. Debug-only *diagnostic storage* is outside it: the allocation-record book's pages differ in size between the ports (`orisnitsa` inlines an 8-frame callstack in each record; `orisnik` holds an owning `Backtrace`), so record-page capacity — and with it debug-mode RSS — differs, and a Rust instance used as a `#[global_allocator]` records no callstack at all. The v0.3.0 trace gate therefore runs the non-debug build, or excludes record pages. It also compares allocator state *before* teardown: `Drop`/`deinit` returns idle memory by different means in the two ports (`orisnik` reads its structures and unmaps; `orisnitsa` calls `purge`, which erases and rotates tree nodes), so rotation counts across teardown are not comparable, though the final result — every idle page released — is.
+**Scope.** The invariant covers the allocator's own state — in the default build, and in the debug configuration for everything the guard reservation changes (size classes, block sizes, bucket/tree routing), which is identical in both ports. Debug-only *diagnostic storage* is outside it: the allocation-record book's pages differ in size between the ports (`orisnitsa` inlines an 8-frame callstack in each record; `orisnik` holds an owning `Backtrace`), so record-page capacity — and with it debug-mode RSS — differs, and a Rust instance used as a `#[global_allocator]` records no callstack at all. The v0.3.0 trace gate therefore runs the non-debug build. It checks "same final RSS" as the bytes the allocator holds mapped (`allocated()`, on every line of the record and in its summary), which is what the allocator controls; how much of that is resident is the OS's business. It also compares allocator state *before* teardown: `Drop`/`deinit` returns idle memory by different means in the two ports (`orisnik` reads its structures and unmaps; `orisnitsa` calls `purge`, which erases and rotates tree nodes), so rotation counts across teardown are not comparable, though the final result — every idle page released — is.
 
 This invariant is the property that justifies maintaining two ports rather than one. Without it, the ports are merely two implementations; with it, they are two views of the same machine.
 
@@ -69,17 +69,19 @@ This invariant is the property that justifies maintaining two ports rather than 
 - **Known gap, deferred:** the Zig port prints callstacks as raw return addresses (`symbols not resolved`); the Rust port resolves them through `std::backtrace`. Symbol resolution for Zig (via `std.debug`) is not part of v0.2.0.
 - Cross-port parity: same allocation sequence produces same debug-record contents (address, requested size, source, guard seed), modulo callstack contents (platform-specific symbols; no callstack for a Rust instance used as a `#[global_allocator]`) and record-page capacity — see the invariant's scope note above
 
-### v0.3.0 — Invariant verification and benchmarks
+### v0.3.0 — Invariant verification and benchmarks ✅ *Released 2026-10-23*
 
 **Theme:** Reproducibility and credibility.
 
-- **Trace format:** a small, language-agnostic allocation-sequence format. ISO/IEC 14977 EBNF grammar in `examples/traces/GRAMMAR.md` — mirroring the priority queue project's grammar discipline.
-- **Trace recorder and replayer** in both ports
-- **State-transition harness:** same trace → byte-identical transition record across both ports; CI gate enforces equality
-- **Standalone trace generator** as a `benchmarks/scripts/tracegen/` crate (mirroring `graphgen/` from the priority queue project) producing seeded, reproducible traces from planner, parser, and synthetic workloads
-- **mimalloc-bench integration:** Oris runs in the standard allocator benchmark harness against `mimalloc`, `jemalloc`, `snmalloc`, system malloc, plus Zig's `SmpAllocator` and Rust's allocator landscape where applicable
-- **`benchmarks/methodology.md`** documenting the reproducibility protocol: 3-pass, warmup + median-of-N with IQR — same shape as the priority queue project's protocol
-- **Initial published results:** wall-time, peak RSS, fragmentation, worst-case latency on each workload class, with the trace corpus shipped alongside
+**Shipped:** every bullet below is implemented, in both ports where it applies. The trace gate holds against the 2007 reference itself: the 19 traces of the corpus replay byte-identically on HPHA, `orisnik` and `orisnitsa`, enforced by `trace-ci.yml` on all three OSes (see `RELEASING.md` § 0). First results measured 2026-10-22 on Windows and Linux (WSL2), mimalloc-bench included — [what they say](benchmarks/results/v0.3.0/README.md), and [where the time goes](benchmarks/results/v0.3.0/README.md#without-purge-the-ablation) (2026-10-23): mostly the OS round trips that `purge` causes, then the best-fit tree on large blocks. See [`docs/traces.md`](docs/traces.md) and [`benchmarks/`](benchmarks/README.md).
+
+- **Trace format:** a small, language-agnostic allocation-sequence format, and the *transition record* every replayer writes. ISO/IEC 14977 EBNF grammars in `examples/traces/GRAMMAR.md` — mirroring the priority queue project's grammar discipline — with the semantic constraints that keep a replay clear of undefined behaviour and of the inputs `Cpp/ERRATA.md` records as broken upstream.
+- **Trace recorder and replayer** in both ports: `letopis`, behind the `trace` Cargo feature / `Config.trace`, with every state transition emitted by compiled-out-when-off hooks (`examples/traces/EVENTS.md`)
+- **State-transition harness:** same trace → byte-identical transition record across both ports *and the HPHA reference* (a scratch copy patched with the same hooks, `Cpp/oracle/`); CI gate (`trace-ci.yml`) enforces equality with the records HPHA wrote
+- **Standalone trace generator** as a `benchmarks/scripts/tracegen/` crate (mirroring `graphgen/` from the priority queue project) producing seeded, reproducible traces from planner, parser, and synthetic workloads — identical on every OS, CI tier committed with its records, bench tier pinned by checksum
+- **mimalloc-bench integration:** Oris runs in the standard allocator benchmark harness (pinned commit, `LD_PRELOAD` shims for both ports, a global lock since Oris is single-threaded) against `mimalloc`, `jemalloc`, `snmalloc` and glibc, on its self-contained programs; plus trace-replay harnesses for Zig's `SmpAllocator` and `c_allocator` and Rust's allocator landscape (system, mimalloc, jemalloc, snmalloc), which mimalloc-bench cannot reach
+- **`benchmarks/methodology.md`** documenting the reproducibility protocol: 3 passes per cell, each in its own process (wall time: 2 warm-ups + median of 10 with IQR; per-operation latency; memory), the same shape as the priority queue project's protocol
+- **Initial published results:** wall-time, peak RSS, fragmentation, worst-case latency on each workload class (`benchmarks/results/v0.3.0/`), with the trace corpus shipped alongside (the generator, its seeds and the bench traces' checksums)
 
 ### v0.4.0 — Examples and the planner
 
@@ -87,20 +89,41 @@ This invariant is the property that justifies maintaining two ports rather than 
 
 - **`examples/planner/`** — a small GOAP-style planner in both languages, demonstrating the target workload of the brief. Uses both `orisnik` / `orisnitsa` *and* `d-ary-heap` / `d-ary-heap.zig` — the priority-queue-inside-the-allocator connection becomes literal.
 - **`examples/parser/`** — an AST-building parser demonstrating small-allocation churn
-- **`examples/replay/`** — replays a recorded trace and plots RSS over time
-- **Per-language documentation polish:** "Why this crate?" differentiator sections, instrumentation examples, absolute GitHub URLs verified for external rendering on crates.io and the Zig package registry
-- **README polish across all surfaces** (top-level, per-port, registries)
+- Both purge at the cadence the v0.3.0 diagnosis recommends — between levels or sessions, not between plans or files — and say why
+- **`examples/replay/`** — builds on the v0.3.0 replayers (`letopis`) to plot a trace's mapped bytes and RSS over time
+- **Per-language documentation polish:** "Why this crate?" differentiator sections, instrumentation examples, absolute GitHub URLs verified for external rendering on crates.io and in the `orisnitsa` release tarball (Zig has no central package registry; a Zig project fetches the tarball by URL)
+- **README polish across all surfaces** (top-level, per-port, crates.io, the GitHub Release)
+
+### v0.5.0 — Faithful performance
+
+**Theme:** As fast as HPHA can be.
+
+The v0.3.0 diagnosis ([`benchmarks/results/v0.3.0/`](benchmarks/results/v0.3.0/README.md#without-purge-the-ablation)) says where Oris's time goes: the OS round trips that `purge` causes — unmapping idle pages, then mapping and faulting them in again — and, on large blocks, the red-black tree and the block-header cache misses of best-fit with immediate coalescing. This milestone makes both ports as fast as they can be **without changing a single state transition**: every trace still replays to the record HPHA writes, byte for byte, and no committed record is regenerated. The trace gate is what makes that safe — an optimization that changes behaviour fails CI, so the code can be pushed hard and fidelity still proven.
+
+- **Measure first:** a deterministic cost benchmark — instruction and cache-miss counts (cachegrind) on the bench traces, both ports — so a 3% gain is visible and a regression is caught in CI; the wall-time protocol of `benchmarks/methodology.md` is unchanged
+- **Cheaper OS round trips:**
+  - the Unix `os::map` makes one `mmap` and up to two trimming `munmap`s to get a 64 KiB-aligned mapping; ask for an aligned address first, so the common case is one syscall, and keep the trim as the fallback
+  - **lazy bucket-page threading:** a fresh page threads its free list through every slot at once, touching each of its 4 KiB pages; instead, mark the untouched remainder in the low bit of the page's free-list pointer (slots are 8-aligned) and write each slot's link only when first handed out. The slot order, and so every record, is unchanged, and the page header keeps its size (so every size class keeps its slot count). The page faults are only saved on pages a purge returns before they fill, so this one is kept only if the counts show it pays
+- **A tighter large-block path:**
+  - read each block header once per operation (raw-pointer writes keep the compiler from proving a header unchanged, so it reads the same field again)
+  - prefetch both neighbours' headers when a free begins, so their cache misses overlap instead of running in series
+  - mark the cold paths cold — page growth, OS mapping, error returns (`#[cold]`, `@branchHint(.cold)`)
+  - review the generated code of the red-black tree's insert and erase fixups, and of the pointer-tag operations, which run on almost every large free
+- **Zig on a par with Rust:** explain the Zig shim's mimalloc-bench gap (`alloc-test1`, `cfrac`, and the threaded `alloc-testN`, `sh6bench`, `sh8bench`) and close it; every optimization lands in both ports in the same release
+- **Purge, documented rather than changed:** what one purge costs, and the cadence that makes it pay (between levels or sessions, not between plans), in the user documentation of both ports; a trace's purge rate becomes an explicit, documented knob of `benchmarks/traces.toml`
+- **The rule for every change:** a stated hypothesis, both ports, the trace gate byte-identical against the unchanged HPHA records, and a measured gain — or it is reverted. The results are published in `benchmarks/results/v0.5.0/` next to v0.3.0's
 
 ### v1.0.0 — Stable API
 
 **Theme:** Commitment.
 
 - **Public API freeze.** Any post-1.0 change to the surface is a 2.0.
-- **Test coverage targets:** 80+ tests per port; cross-port API parity verified
-- **Full mimalloc-bench results** published in `benchmarks/results/v1.0.0/` against the major allocators
+- **The faithful baseline:** v1.0 is HPHA exactly, as fast as v0.5.0 made it — the reference every later departure (below) is measured against
+- **Measured test coverage:** line and branch coverage of each port's suite, measured in CI and published per release, with a target set from the first measurement; cross-port API parity verified
+- **Full mimalloc-bench results** published in `benchmarks/results/v1.0.0/` against the major allocators — the whole suite, including the programs that build a large external project (lean, redis, rocksdb, …), which v0.3.0 left out
 - **Migration guide:** replacing system allocator with Oris in real codebases
 - **Long-term support commitment** for the v1.x line: bug fixes, security patches, no breaking changes
-- **Cross-language invariant verified** on the full trace corpus, CI-enforced
+- **Cross-language invariant** still verified against HPHA on the full trace corpus as it stands at v1.0, CI-enforced as since v0.3.0
 
 ---
 
@@ -108,9 +131,9 @@ This invariant is the property that justifies maintaining two ports rather than 
 
 These are candidate themes, not commitments. Order and scope subject to feedback from real use.
 
+- **v1.x — Beyond HPHA: a faster, opt-in mode.** The changes the v0.3.0 diagnosis points to but HPHA's transitions rule out, behind an explicit configuration in both ports, with the faithful mode staying the default and gated against HPHA as before. Candidates: a purge that keeps a few idle pages per size class or tree instead of returning them all (hysteresis); a most-recently-freed cache of more than HPHA's one block; deferred coalescing; and, once the multithreaded mode exists (v2.x below), thread-local bucket caches. Each is measured against the v1.0 baseline, and the new mode gets its own records, which Rust and Zig must reproduce byte for byte — the cross-language invariant without the oracle. A new configuration is a minor version; the default's behaviour never changes.
 - **v1.x — Trace visualizer.** Web-based replay of allocation traces: block-layout animation, RSS curves, bucket activity heatmaps, fragmentation visualizations. The demo equivalent of the priority queue project's Dijkstra visualization. Substantial work; deliberately deferred past v1.0.
 - **v2.x — Multithreaded mode.** Port HPHA's `MULTITHREADED` mode with per-bucket and per-tree locks. Modest scaling; not competitive with mimalloc on many-core. Offered as a convenience for users who want a single allocator across both single- and multi-threaded paths in their codebase, not as a serious bid for the server-allocator niche.
-- **v2.x — Per-thread caches.** Optional thread-local bucket caching, opt-in. Changes the design's character; flagged as a deliberate divergence from HPHA rather than a faithful port.
 - **Additional language ports** if and only if there's a sustained user base asking. The Bulgarian-folklore naming family can extend with native-speaker review, but the cross-language invariant cost grows linearly with the number of ports.
 - **Experiment sidebar.** A small research piece, mirroring the priority queue project's AI code generation study. Candidate topic: *how well do AI models handle intrusive data structures and pointer tagging?* — the kind of code allocators rely on and AI models are notoriously uneven at.
 
@@ -123,7 +146,7 @@ To make the project's scope legible, here is what Oris is **not** trying to be:
 - **A general-purpose server allocator.** For high-concurrency server workloads, use `mimalloc`, `jemalloc`, or `snmalloc`. Oris is not their competitor; see the brief's "Why this architecture" section.
 - **A security-hardened allocator.** HPHA's inline metadata is a classic exploit class. Oris offers guard bytes in debug mode but does not target adversarial environments.
 - **A NUMA-aware allocator.** No NUMA bookkeeping, no remote-thread free protocol.
-- **A drop-in libc malloc replacement.** Oris is an allocator *crate / module*, not a global-allocator shim. Users can opt in to it as a global allocator per port, explicitly.
+- **A drop-in libc malloc replacement.** Oris is an allocator *crate / module*, not a global-allocator shim. Users can opt in to it as a global allocator per port, explicitly. (The `LD_PRELOAD` shims under `benchmarks/mimalloc-bench/` exist to run the benchmark suite, and are not shipped.)
 - **A teaching tool that prioritizes pedagogical clarity over performance.** The code aims to be auditable, but the implementation follows HPHA's performance-first choices — intrusive metadata, pointer tagging, hand-tuned size classes.
 
 ---

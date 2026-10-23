@@ -1,0 +1,114 @@
+oris-record 1
+#0 alloc_aligned h0 3000 4096 -> m0+0x1000 a=65536
+  map t m0 65536
+  split m0+0x10 4048
+  mr m0+0x10
+  split m0+0xff0 3008
+  tree+ m0+0x10 4048 node rot=0
+  mr m0+0x1bc0
+#1 realloc_aligned h0 1000 4096 -> m0+0x1000 a=65536
+  split m0+0xff0 1008
+  mr -
+  merge m0+0x1bc0
+  mr m0+0x13f0
+#2 realloc_aligned h0 2000 4096 -> m0+0x1000 a=65536
+  mr -
+  merge m0+0x13f0
+  split m0+0xff0 2000
+  mr m0+0x17d0
+#3 alloc h1 5000 -> m0+0x17e0 a=65536
+  mr -
+  split m0+0x17d0 5008
+  mr m0+0x2b70
+#4 realloc_aligned h1 6000 64 -> m0+0x2b80 a=65536
+  mr -
+  split m0+0x2b70 6000
+  mr m0+0x42f0
+  tree+ m0+0x42f0 48368 node rot=0
+  mr m0+0x17d0
+#5 alloc h2 600 -> m0+0x17e0 a=65536
+  mr -
+  split m0+0x17d0 608
+  mr m0+0x1a40
+#6 alloc_aligned h3 1000 64 -> m0+0x1a80 a=65536
+  mr -
+  shift m0+0x1a40 48
+  split m0+0x1a70 1008
+  mr m0+0x1e70
+#7 alloc h6 3000 -> m0+0x1e80 a=65536
+  mr -
+  split m0+0x1e70 3008
+  mr m0+0x2a40
+#8 free h2 -> - a=65536
+  tree+ m0+0x2a40 288 node rot=0
+  mr m0+0x17d0
+#9 realloc_aligned h3 1500 64 -> m0+0x1800 a=65536
+  mr -
+  merge m0+0x1a70
+  shift m0+0x17d0 32
+  split m0+0x17f0 1504
+  mr m0+0x1de0
+#10 alloc h4 400 -> m0+0x20 a=65536
+  tree- m0+0x10 4048 node rot=0
+  split m0+0x10 400
+  list+ m0+0x1de0 128
+  mr m0+0x1b0
+#11 alloc_aligned h5 700 16 -> m0+0x1c0 a=65536
+  mr -
+  split m0+0x1b0 704
+  mr m0+0x480
+#12 free h4 -> - a=65536
+  tree+ m0+0x480 2912 node rot=2
+  mr m0+0x10
+#13 realloc_aligned h5 1200 512 -> m0+0x600 a=65536
+  tree- m0+0x480 2912 node rot=0
+  split m0+0x480 352
+  tree+ m0+0x10 400 node rot=2
+  mr m0+0x480
+  split m0+0x5f0 1200
+  tree+ m0+0x480 352 node rot=0
+  mr m0+0xab0
+  tree- m0+0x480 352 node rot=0
+  merge m0+0x480
+  tree- m0+0x10 400 node rot=0
+  merge m0+0x1b0
+  tree+ m0+0xab0 1328 node rot=2
+  mr m0+0x10
+#14 free h0 -> - a=65536
+  tree- m0+0xab0 1328 node rot=0
+  merge m0+0xff0
+  tree+ m0+0x10 1488 node rot=2
+  mr m0+0xab0
+#15 free h1 -> - a=65536
+  tree- m0+0x42f0 48368 node rot=0
+  merge m0+0x42f0
+  tree- m0+0x2a40 288 node rot=0
+  merge m0+0x2b70
+  tree+ m0+0xab0 3376 node rot=0
+  mr m0+0x2a40
+#16 free h3 -> - a=65536
+  list- m0+0x1de0 128
+  merge m0+0x1de0
+  tree- m0+0xab0 3376 node rot=0
+  merge m0+0x17f0
+  tree+ m0+0x2a40 54688 node rot=0
+  mr m0+0xab0
+#17 free h5 -> - a=65536
+  mr -
+  merge m0+0xab0
+  tree- m0+0x10 1488 node rot=0
+  merge m0+0x5f0
+  mr m0+0x10
+#18 free h6 -> - a=65536
+  tree- m0+0x2a40 54688 node rot=0
+  merge m0+0x2a40
+  mr -
+  merge m0+0x1e70
+  mr m0+0x10
+#19 purge -> - a=0
+  tree+ m0+0x10 65488 node rot=0
+  mr -
+  tree- m0+0x10 65488 node rot=0
+  unmap m0 65536
+  mr -
+end ops=20 maps=1 unmaps=1 rotations=8 allocated=0

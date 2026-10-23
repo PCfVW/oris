@@ -1,0 +1,17 @@
+oris-trace 1
+# tree_resize never moves a block: it shrinks in place (split, coalesce), grows into a
+# free next block, and otherwise reports the size it already has. On a bucket pointer it
+# reports the slot size.
+alloc h0 3000
+alloc h1 3000
+resize h0 1000
+resize h0 2000
+resize h0 9000
+size h0
+alloc h2 40
+resize h2 10
+size h2
+free h0
+free h1
+free h2
+purge

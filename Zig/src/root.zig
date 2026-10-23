@@ -21,6 +21,12 @@
 //! module; Zig's `export fn` already gives them global C linkage independent of
 //! any `pub`/import visibility within this package).
 //!
+//! `letopis` (*летопис*, "chronicle") checks the cross-port invariant: `letopis.replay` runs
+//! an allocation trace on `OrisnitsaWith(.{ .trace = true })` and writes its transition
+//! record, byte-identical to what `orisnik` and the HPHA reference write for the same trace;
+//! `letopis.Recorder` captures a program's calls as a trace. The hooks exist only in a
+//! `.trace = true` instantiation. See `docs/traces.md` in the repository.
+//!
 //! ```zig
 //! const std = @import("std");
 //! const orisnitsa = @import("orisnitsa");
@@ -68,6 +74,9 @@ pub const OrisError = @import("spomen_failure.zig").OrisError;
 /// The out-parameter `Orisnitsa.check` fills with a human-readable description of the first
 /// problem it finds. See `spomen_failure.zig`.
 pub const Diagnostic = @import("spomen_failure.zig").Diagnostic;
+/// Traces and transition records (`letopis`, "chronicle"): `replay`, `Recorder`. See
+/// `letopis.zig` and `docs/traces.md`.
+pub const letopis = @import("letopis.zig");
 
 // Imported only so their `test` blocks are reachable from this root module via
 // this file's own `test { refAllDecls(...) }` block below — not re-exported as
@@ -96,6 +105,11 @@ const spomen_store = @import("spomen_store.zig");
 const spomen_failure = @import("spomen_failure.zig");
 const rand = @import("rand.zig");
 const capi = @import("capi.zig");
+const letopis_event = @import("letopis_event.zig");
+const letopis_trace = @import("letopis_trace.zig");
+const letopis_record = @import("letopis_record.zig");
+const letopis_replay = @import("letopis_replay.zig");
+const letopis_recorder = @import("letopis_recorder.zig");
 
 test "a consumer can instantiate the debug allocator and hand it out as a std.mem.Allocator" {
     // Only what this file exports: the way an importing package reaches the debug allocator.
@@ -139,4 +153,10 @@ test {
     std.testing.refAllDecls(orisnitsa_mod);
     std.testing.refAllDecls(allocator_mod);
     std.testing.refAllDecls(capi);
+    std.testing.refAllDecls(letopis);
+    std.testing.refAllDecls(letopis_event);
+    std.testing.refAllDecls(letopis_trace);
+    std.testing.refAllDecls(letopis_record);
+    std.testing.refAllDecls(letopis_replay);
+    std.testing.refAllDecls(letopis_recorder);
 }

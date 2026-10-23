@@ -22,13 +22,19 @@ behaviour.
 
 Two concrete reasons, beyond tidiness.
 
-**The v0.3.0 trace-corpus gate needs it.** That gate replays one trace through the C++
-oracle and both ports and asserts the transition records match. Every entry in section A
-is a *potential* expected difference. Each entry below therefore carries a
-**Trace-visible** verdict: whether the gate should expect the oracle and the ports to
-disagree on a trace the C++ can execute without invoking undefined behaviour. Without
-this list the gate either fires spuriously or gets weakened until it stops catching
-anything.
+**The v0.3.0 trace-corpus gate needs it.** That gate replays every trace of the corpus
+(`../examples/traces/`) through the C++ oracle ([`oracle/trace_replay.cpp`](oracle/README.md))
+and both ports, and asserts the transition records match. Every entry in section A is a
+*potential* expected difference. Each entry below therefore carries a **Trace-visible**
+verdict: whether the gate should expect the oracle and the ports to disagree on a trace the
+C++ can execute without invoking undefined behaviour. Without this list the gate either
+fires spuriously or gets weakened until it stops catching anything.
+
+In practice no entry needs an exception: the trace grammar's semantic constraints
+([`../examples/traces/GRAMMAR.md`](../examples/traces/GRAMMAR.md) §1.3) refuse every input on
+which this source is undefined — E1/E2 (C4), E3 (C6), E4 (C7), E5 (C8), E7 (C5) — so on any
+trace a replayer accepts, the oracle and the ports must agree exactly, and the corpus's 19
+traces do.
 
 **The versioning policy depends on it.** [`ROADMAP.md`](../ROADMAP.md#fidelity-fixes-are-patches)
 lets a fidelity fix ship as a patch when two conditions hold — the reference decides, and
@@ -162,7 +168,10 @@ overruns the new block.
 **Trace-visible:** **No** for state transitions — it changes only which stale bytes past
 the caller's requested size get copied, never a split, coalesce, or page spawn. It *is* a
 memory-content difference, so a trace format that hashes payload bytes (rather than
-transitions) would see it.
+transitions) would see it. The trace grammar excludes the input all the same (constraint
+C8: a `realloc_aligned` above alignment 256 needs a size above 256): on the reference the
+overrun can land on the next block's header, after which the oracle's own state — and so
+its record — would be undefined.
 
 **Fixed in:** v0.1.0.
 

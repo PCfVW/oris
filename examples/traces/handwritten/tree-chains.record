@@ -1,0 +1,115 @@
+oris-record 1
+#0 alloc h0 400 -> m0+0x20 a=65536
+  map t m0 65536
+  split m0+0x10 400
+  mr m0+0x1b0
+#1 alloc h1 300 -> m0+0x1c0 a=65536
+  mr -
+  split m0+0x1b0 304
+  mr m0+0x2f0
+#2 alloc h2 400 -> m0+0x300 a=65536
+  mr -
+  split m0+0x2f0 400
+  mr m0+0x490
+#3 alloc h3 300 -> m0+0x4a0 a=65536
+  mr -
+  split m0+0x490 304
+  mr m0+0x5d0
+#4 alloc h4 400 -> m0+0x5e0 a=65536
+  mr -
+  split m0+0x5d0 400
+  mr m0+0x770
+#5 alloc h5 300 -> m0+0x780 a=65536
+  mr -
+  split m0+0x770 304
+  mr m0+0x8b0
+#6 alloc h6 400 -> m0+0x8c0 a=65536
+  mr -
+  split m0+0x8b0 400
+  mr m0+0xa50
+#7 alloc h7 300 -> m0+0xa60 a=65536
+  mr -
+  split m0+0xa50 304
+  mr m0+0xb90
+#8 alloc h8 600 -> m0+0xba0 a=65536
+  mr -
+  split m0+0xb90 608
+  mr m0+0xe00
+#9 alloc h9 300 -> m0+0xe10 a=65536
+  mr -
+  split m0+0xe00 304
+  mr m0+0xf40
+#10 alloc h10 800 -> m0+0xf50 a=65536
+  mr -
+  split m0+0xf40 800
+  mr m0+0x1270
+#11 alloc h11 300 -> m0+0x1280 a=65536
+  mr -
+  split m0+0x1270 304
+  mr m0+0x13b0
+#12 alloc h12 1000 -> m0+0x13c0 a=65536
+  mr -
+  split m0+0x13b0 1008
+  mr m0+0x17b0
+#13 alloc h13 300 -> m0+0x17c0 a=65536
+  mr -
+  split m0+0x17b0 304
+  mr m0+0x18f0
+#14 alloc h14 1200 -> m0+0x1900 a=65536
+  mr -
+  split m0+0x18f0 1200
+  mr m0+0x1db0
+#15 alloc h15 300 -> m0+0x1dc0 a=65536
+  mr -
+  split m0+0x1db0 304
+  mr m0+0x1ef0
+#16 alloc h16 1400 -> m0+0x1f00 a=65536
+  mr -
+  split m0+0x1ef0 1408
+  mr m0+0x2480
+#17 alloc h17 300 -> m0+0x2490 a=65536
+  mr -
+  split m0+0x2480 304
+  mr m0+0x25c0
+#18 free h0 -> - a=65536
+  tree+ m0+0x25c0 55840 node rot=0
+  mr m0+0x10
+#19 free h2 -> - a=65536
+  tree+ m0+0x10 400 node rot=0
+  mr m0+0x2f0
+#20 free h4 -> - a=65536
+  tree+ m0+0x2f0 400 chain rot=0
+  mr m0+0x5d0
+#21 free h6 -> - a=65536
+  tree+ m0+0x5d0 400 chain rot=0
+  mr m0+0x8b0
+#22 free h8 -> - a=65536
+  tree+ m0+0x8b0 400 chain rot=0
+  mr m0+0xb90
+#23 free h10 -> - a=65536
+  tree+ m0+0xb90 608 node rot=2
+  mr m0+0xf40
+#24 free h12 -> - a=65536
+  tree+ m0+0xf40 800 node rot=0
+  mr m0+0x13b0
+#25 free h14 -> - a=65536
+  tree+ m0+0x13b0 1008 node rot=2
+  mr m0+0x18f0
+#26 free h16 -> - a=65536
+  tree+ m0+0x18f0 1200 node rot=0
+  mr m0+0x1ef0
+#27 free h1 -> - a=65536
+  tree- m0+0x2f0 400 link rot=0
+  merge m0+0x2f0
+  tree- m0+0x10 400 promote rot=0
+  merge m0+0x1b0
+  tree+ m0+0x1ef0 1408 node rot=2
+  mr m0+0x10
+#28 alloc h18 1100 -> m0+0x20 a=65536
+  mr -
+#29 alloc h19 400 -> m0+0x8c0 a=65536
+  tree- m0+0x8b0 400 link rot=0
+#30 purge -> - a=65536
+  mr -
+  mr -
+end ops=31 maps=1 unmaps=0 rotations=6 allocated=65536

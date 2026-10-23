@@ -1,0 +1,26 @@
+oris-trace 1
+# tree_realloc_aligned and the dispatcher around it: an aligned pointer shrinks in place
+# and grows into a free next block; a pointer that is not aligned to the new alignment
+# takes the alloc-copy-free path; and, with the next block live, a block grows backwards
+# into a free previous one whose start must be padded to the alignment: shifted when the
+# pad is too small to hold a free block, split off when it is not.
+alloc_aligned h0 3000 4096
+realloc_aligned h0 1000 4096
+realloc_aligned h0 2000 4096
+alloc h1 5000
+realloc_aligned h1 6000 64
+alloc h2 600
+alloc_aligned h3 1000 64
+alloc h6 3000
+free h2
+realloc_aligned h3 1500 64
+alloc h4 400
+alloc_aligned h5 700 16
+free h4
+realloc_aligned h5 1200 512
+free h0
+free h1
+free h3
+free h5
+free h6
+purge

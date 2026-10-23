@@ -20,6 +20,14 @@
 //! what it catches and how to read its messages; run the example with
 //! `cargo run --example catch_an_overrun --features debug-allocator`.
 //!
+//! The opt-in **`trace`** feature adds the `letopis` module (*летопис*, "chronicle"): a replayer that
+//! runs a language-agnostic allocation trace and writes the allocator's transition record —
+//! every page spawn, split, merge, tree insertion and rotation, with addresses normalized —
+//! and a `Recorder` that captures a program's calls as such a trace.
+//! The same trace replayed by `orisnitsa` (the Zig port) and by the HPHA reference must give
+//! a byte-identical record: that is how the two ports' shared invariant is checked. Without
+//! the feature every event emission is compiled out.
+//!
 //! ```no_run
 //! use orisnik::Orisnik;
 //!
@@ -44,7 +52,7 @@
 //! so in a genuinely multithreaded program — including the default `cargo test`
 //! harness — is undefined behaviour, not merely unsupported.
 
-#![doc(html_root_url = "https://docs.rs/orisnik/0.2.0")]
+#![doc(html_root_url = "https://docs.rs/orisnik/0.3.0")]
 #![deny(unsafe_op_in_unsafe_fn)]
 // `feature(allocator_api)` is itself nightly-gated syntax — stable rustc hard-errors
 // on any `#![feature(...)]` attribute, so this must stay behind `cfg_attr` even
@@ -65,6 +73,16 @@
 #![allow(stable_features)]
 #![cfg_attr(feature = "nightly", feature(allocator_api))]
 
+/// Emits a transition-record event (`letopis`) into a sub-allocator's tap. With the `trace`
+/// feature off the whole statement is compiled out — the event expression is never even
+/// type-checked — so the hooks cost nothing in the shipped allocator.
+macro_rules! chronicle {
+    ($tap:expr, $event:expr) => {
+        #[cfg(feature = "trace")]
+        $tap.emit($event);
+    };
+}
+
 mod align;
 // `core::alloc::Allocator`/`AllocError` are themselves unstable items — this module
 // only parses on a nightly toolchain with `feature(allocator_api)` enabled above,
@@ -81,6 +99,9 @@ mod global_alloc;
 // the build entirely. See `Rust/CONVENTIONS.md`'s `debug_assert!` Invariants section.
 mod guard;
 mod home;
+// The trace replayer and recorder (`letopis`): see its module doc and `docs/traces.md`.
+#[cfg(feature = "trace")]
+pub mod letopis;
 mod list;
 mod orisnik;
 mod os;

@@ -1,0 +1,33 @@
+[package]
+name = "tracegen"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Seeded, reproducible allocation-trace generator for Oris's trace corpus and benchmarks"
+
+[[bin]]
+name = "tracegen"
+path = "src/main.rs"
+
+[dependencies]
+# Determinism-critical: a version bump in either may change every generated trace.
+# Exact pins prevent accidental drift (`tracegen verify` would catch it, but late).
+rand = "=0.8.5"
+rand_chacha = "=0.3.1"
+
+# Every generated trace is replayed through the Rust port before it is written, so a
+# workload can never emit a trace the replayers would reject.
+orisnik = { path = "../../../Rust", features = ["trace"] }
+
+# Tooling: caret semver, locked via Cargo.lock.
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+sha2 = "0.10"
+
+[profile.release]
+opt-level = 3
+lto = "thin"

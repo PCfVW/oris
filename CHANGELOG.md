@@ -10,6 +10,62 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-23
+
+### Added
+
+- **The cross-port invariant is now checked, not argued (v0.3.0).** An identical allocation
+  sequence must drive both ports through identical internal state transitions; v0.3.0 makes
+  that a CI gate, against the 2007 HPHA reference itself.
+  - **`letopis`** (*летопис*, "chronicle") — behind the new `trace` Cargo feature
+    (`orisnik::letopis`) and `Config.trace` (`orisnitsa.letopis`). Every state transition
+    HPHA performs emits an event at the same point in both ports: OS maps and unmaps,
+    bucket-page spawns, releases and list moves, splits, shifts, every block merge,
+    red-black tree inserts and erases (with which branch ran and how many rotations it cost),
+    small-free-list pushes and erases, and the most-recently-freed cache.
+    [`examples/traces/EVENTS.md`](examples/traces/EVENTS.md) lists each site in HPHA, Rust
+    and Zig. With the feature or flag off no emission exists in the compiled code (only the
+    tree fixups' rotation counting remains, a local count nothing reads).
+  - **`replay`** runs a trace on a fresh instance and writes its **transition record**, every
+    address normalized to (mapping id, offset), so records compare byte for byte across
+    ports and OSes. A trace is checked in full first: malformed lines and calls with no
+    defined result (constraints C1–C8) are refused with their line, nothing executed.
+    `cargo run --example replay --features trace -- <file>`, `zig build replay -- <file>`.
+  - **`Recorder`** wraps an instance — in Zig also as a `std.mem.Allocator` — and writes the
+    calls made through it as a trace.
+  - **The trace and record formats**, ISO/IEC 14977 EBNF, with the semantic constraints that
+    keep every replay clear of undefined behaviour and of the inputs `Cpp/ERRATA.md` records
+    as broken upstream: [`examples/traces/GRAMMAR.md`](examples/traces/GRAMMAR.md). User
+    guide: [`docs/traces.md`](docs/traces.md).
+  - **The HPHA oracle**: [`Cpp/oracle/trace_replay.cpp`](Cpp/oracle/trace_replay.cpp) replays
+    a trace on the 2007 allocator, its hooks added by `letopis.patch` to a scratch copy (40
+    added lines; `Cpp/hpha.*` untouched).
+  - **The corpus**: twelve hand-written traces, one per allocator path, and seven generated
+    ones (`examples/traces/`), each with the record HPHA writes; both ports reproduce all
+    nineteen byte for byte. **`tracegen`** (`benchmarks/scripts/tracegen`) generates traces
+    from seeded planner, parser and synthetic workloads, identically on every OS.
+  - **Trace CI** (`.github/workflows/trace-ci.yml`): `tracegen verify`, and both ports
+    replaying the corpus on Linux, Windows and macOS, and HPHA on Windows, every record
+    compared with the committed one; every trace of `examples/traces/rejected/` refused by all
+    three with the same message; and the benchmark tools built.
+- **Benchmarks (v0.3.0).** [`benchmarks/`](benchmarks/README.md): a trace-replay harness per
+  port (Rust: `orisnik` against the system allocator, mimalloc, jemalloc and snmalloc;
+  Zig: `orisnitsa` against `smp_allocator` and `c_allocator`) measuring wall time,
+  per-operation latency and memory on million-operation traces; mimalloc-bench with Oris
+  added as two `LD_PRELOAD` shims; the protocol in
+  [`benchmarks/methodology.md`](benchmarks/methodology.md); the first results in
+  [`benchmarks/results/v0.3.0/`](benchmarks/results/v0.3.0/SUMMARY.md).
+  - **Where Oris's time goes.** `bench-rust --no-purge` skips a trace's purges and
+    `--pass breakdown` times each operation kind and path separately;
+    `benchmarks/scripts/purge-ablation.py` runs both. Most of Oris's gap to mimalloc on these
+    traces is the OS round trip that purge causes — without it Oris beats glibc on every trace
+    and matches mimalloc on three of five — and on large blocks the best-fit tree: [the
+    diagnosis](benchmarks/results/v0.3.0/README.md#without-purge-the-ablation).
+- `rbtree`: `insert_counted`/`erase_counted` (Zig `insertCounted`/`eraseCounted`) report
+  which branch of HPHA's `do_insert`/`do_erase` ran and how many rotations rebalancing cost.
+  Internal; the algorithm is unchanged, and the counts are checked in tests against a
+  counter inside `rotate` itself.
+
 ## [0.2.0] - 2026-09-30
 
 ### Added
@@ -660,7 +716,8 @@ requires; findings are numbered as in
     cross-validation, reconstructed and re-verified live: all 3000 steps match
     byte-for-byte across every C++/Rust/Zig pairing.
 
-[Unreleased]: https://github.com/PCfVW/oris/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/PCfVW/oris/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/PCfVW/oris/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/PCfVW/oris/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/PCfVW/oris/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/PCfVW/oris/releases/tag/v0.1.0

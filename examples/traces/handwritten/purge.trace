@@ -1,0 +1,15 @@
+oris-trace 1
+# purge returns only what is entirely idle: a tree arena whose only block is free, an
+# empty bucket page. A page with a live slot and an arena with a live block stay mapped,
+# and a second purge finds nothing more to return.
+alloc h0 100000
+alloc h1 1000
+alloc h2 64
+alloc h3 64
+free h0
+free h2
+purge
+purge
+free h1
+free h3
+purge

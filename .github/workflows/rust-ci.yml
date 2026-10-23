@@ -59,6 +59,13 @@ jobs:
       # The user guide's example: must build *and* exit 0 (it catches its own leak panic).
       - name: Example (debug-allocator)
         run: cargo run --example catch_an_overrun --features debug-allocator
+      # `letopis`, the trace replayer and recorder behind the `trace` feature: its hooks are
+      # `cfg`-gated out of every step above, so they get their own lint and test pass. The
+      # corpus gate itself (Rust vs Zig vs the HPHA oracle) is trace-ci.yml.
+      - name: Clippy (trace)
+        run: cargo clippy --all-targets --features trace -- -D warnings
+      - name: Tests (trace)
+        run: cargo test --features trace
 
   miri:
     # The allocator's soundness gate: Miri models provenance and aliasing, the
@@ -75,8 +82,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: Rust
-      - name: Miri test (strict provenance + tree borrows, default + nightly features)
-        run: cargo miri test --features nightly
+      # `trace` too: its event tap is a raw pointer the hooks dereference on every emission.
+      - name: Miri test (strict provenance + tree borrows, default + nightly + trace features)
+        run: cargo miri test --features nightly,trace
         env:
           MIRIFLAGS: "-Zmiri-strict-provenance -Zmiri-tree-borrows"
 
@@ -142,8 +150,8 @@ jobs:
           RUSTDOCFLAGS: "-D warnings"
       # Feature-gated items only exist in this build, so an intra-doc link that resolves
       # only with the feature (or only without it) is caught here.
-      - name: Doc (deny warnings, debug-allocator, private items)
-        run: cargo doc --no-deps --features debug-allocator --document-private-items
+      - name: Doc (deny warnings, debug-allocator + trace, private items)
+        run: cargo doc --no-deps --features debug-allocator,trace --document-private-items
         env:
           RUSTDOCFLAGS: "-D warnings"
 
