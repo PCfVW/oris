@@ -53,6 +53,12 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
   added as two `LD_PRELOAD` shims; the protocol in
   [`benchmarks/methodology.md`](benchmarks/methodology.md); the first results in
   [`benchmarks/results/v0.3.0/`](benchmarks/results/v0.3.0/SUMMARY.md).
+  - **Where Oris's time goes.** `bench-rust --no-purge` skips a trace's purges and
+    `--pass breakdown` times each operation kind and path separately;
+    `benchmarks/scripts/purge-ablation.py` runs both. Most of Oris's gap to mimalloc on these
+    traces is the OS round trip that purge causes — without it Oris beats glibc on every trace
+    and matches mimalloc on three of five — and on large blocks the best-fit tree: [the
+    diagnosis](benchmarks/results/v0.3.0/README.md#without-purge-the-ablation).
 - `rbtree`: `insert_counted`/`erase_counted` (Zig `insertCounted`/`eraseCounted`) report
   which branch of HPHA's `do_insert`/`do_erase` ran and how many rotations rebalancing cost.
   Internal; the algorithm is unchanged, and the counts are checked in tests against a

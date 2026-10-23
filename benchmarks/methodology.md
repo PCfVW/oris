@@ -76,6 +76,14 @@ resident and the memory pass would measure nothing.
 upper halves, the overall median excluded when the count is odd. The **mean is not
 reported**: a single preemption can move it while the median stays put.
 
+**Diagnosis, outside the protocol.** `bench-rust` has two switches the published tables do not
+use. `--no-purge` skips the trace's `purge` operations, the ablation that isolates what Oris
+pays for returning memory. `--pass breakdown` runs like the latency pass but files every
+operation's time under its kind and path (`alloc small`, `realloc small->large`, `free large`,
+`purge`…; *small* is the bucket path, up to 256 bytes), and reports count, total and
+percentiles per category. [`scripts/purge-ablation.py`](scripts/purge-ablation.py) runs both
+over the bench traces; its results are in `results/v0.3.0/purge-ablation/`.
+
 ### The memory pass, precisely
 
 - *Resident set* is `VmRSS` on Linux and the working set on Windows, sampled every 256

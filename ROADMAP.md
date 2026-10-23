@@ -73,7 +73,7 @@ This invariant is the property that justifies maintaining two ports rather than 
 
 **Theme:** Reproducibility and credibility.
 
-**Progress (unreleased):** every bullet below is implemented, in both ports where it applies. The trace gate holds against the 2007 reference itself: the 19 traces of the corpus replay byte-identically on HPHA, `orisnik` and `orisnitsa` locally (Windows; `orisnik` also on Linux), and `trace-ci.yml` enforces it on all three OSes once pushed. First results measured 2026-10-22 on Windows and Linux (WSL2), mimalloc-bench included — [what they say](benchmarks/results/v0.3.0/README.md). See [`docs/traces.md`](docs/traces.md) and [`benchmarks/`](benchmarks/README.md).
+**Progress (unreleased):** every bullet below is implemented, in both ports where it applies. The trace gate holds against the 2007 reference itself: the 19 traces of the corpus replay byte-identically on HPHA, `orisnik` and `orisnitsa` locally (Windows; `orisnik` also on Linux), and `trace-ci.yml` enforces it on all three OSes once pushed. First results measured 2026-10-22 on Windows and Linux (WSL2), mimalloc-bench included — [what they say](benchmarks/results/v0.3.0/README.md), and [where the time goes](benchmarks/results/v0.3.0/README.md#without-purge-the-ablation) (2026-10-23): mostly the OS round trips that `purge` causes, then the best-fit tree on large blocks. See [`docs/traces.md`](docs/traces.md) and [`benchmarks/`](benchmarks/README.md).
 
 - **Trace format:** a small, language-agnostic allocation-sequence format, and the *transition record* every replayer writes. ISO/IEC 14977 EBNF grammars in `examples/traces/GRAMMAR.md` — mirroring the priority queue project's grammar discipline — with the semantic constraints that keep a replay clear of undefined behaviour and of the inputs `Cpp/ERRATA.md` records as broken upstream.
 - **Trace recorder and replayer** in both ports: `letopis`, behind the `trace` Cargo feature / `Config.trace`, with every state transition emitted by compiled-out-when-off hooks (`examples/traces/EVENTS.md`)
@@ -93,11 +93,31 @@ This invariant is the property that justifies maintaining two ports rather than 
 - **Per-language documentation polish:** "Why this crate?" differentiator sections, instrumentation examples, absolute GitHub URLs verified for external rendering on crates.io and the Zig package registry
 - **README polish across all surfaces** (top-level, per-port, registries)
 
+### v0.5.0 — Faithful performance
+
+**Theme:** As fast as HPHA can be.
+
+The v0.3.0 diagnosis ([`benchmarks/results/v0.3.0/`](benchmarks/results/v0.3.0/README.md#without-purge-the-ablation)) says where Oris's time goes: the OS round trips that `purge` causes — unmapping idle pages, then mapping and faulting them in again — and, on large blocks, the red-black tree and the block-header cache misses of best-fit with immediate coalescing. This milestone makes both ports as fast as they can be **without changing a single state transition**: every trace still replays to the record HPHA writes, byte for byte, and `Cpp/` stays untouched. The trace gate is what makes that safe — an optimization that changes behaviour fails CI, so the code can be pushed hard and fidelity still proven.
+
+- **Measure first:** a deterministic cost benchmark — instruction and cache-miss counts (cachegrind) on the bench traces, both ports — so a 3% gain is visible and a regression is caught in CI; the wall-time protocol of `benchmarks/methodology.md` is unchanged
+- **Cheaper OS round trips:**
+  - the Unix `os::map` makes one `mmap` and up to two trimming `munmap`s to get a 64 KiB-aligned mapping; ask for an aligned address first, so the common case is one syscall, and keep the trim as the fallback
+  - **lazy bucket-page threading:** a fresh page threads its free list through every slot at once, touching each of its 4 KiB pages; instead, mark the untouched remainder in the low bit of the page's free-list pointer (slots are 8-aligned) and write each slot's link only when first handed out. The slot order, and so every record, is unchanged, and the page header keeps its size (so every size class keeps its slot count). The page faults are only saved on pages a purge returns before they fill, so this one is kept only if the counts show it pays
+- **A tighter large-block path:**
+  - read each block header once per operation (raw-pointer writes keep the compiler from proving a header unchanged, so it reads the same field again)
+  - prefetch both neighbours' headers when a free begins, so their cache misses overlap instead of running in series
+  - mark the cold paths cold — page growth, OS mapping, error returns (`#[cold]`, `@branchHint(.cold)`)
+  - review the generated code of the red-black tree's insert and erase fixups, and of the pointer-tag operations, which run on almost every large free
+- **Zig on a par with Rust:** explain the Zig shim's mimalloc-bench gap (`alloc-test1`, `sh6bench`, `sh8bench`) and close it; every optimization lands in both ports in the same release
+- **Purge, documented rather than changed:** what one purge costs, and the cadence that makes it pay (between levels or sessions, not between plans); the v0.4.0 examples purge at that cadence, and a trace's purge rate is an explicit, documented knob of `benchmarks/traces.toml`
+- **The rule for every change:** a stated hypothesis, both ports, the trace gate byte-identical against the unchanged HPHA records, and a measured gain — or it is reverted. The results are published in `benchmarks/results/v0.5.0/` next to v0.3.0's
+
 ### v1.0.0 — Stable API
 
 **Theme:** Commitment.
 
 - **Public API freeze.** Any post-1.0 change to the surface is a 2.0.
+- **The faithful baseline:** v1.0 is HPHA exactly, as fast as v0.5.0 made it — the reference every later departure (below) is measured against
 - **Test coverage targets:** 80+ tests per port; cross-port API parity verified
 - **Full mimalloc-bench results** published in `benchmarks/results/v1.0.0/` against the major allocators
 - **Migration guide:** replacing system allocator with Oris in real codebases
@@ -110,6 +130,7 @@ This invariant is the property that justifies maintaining two ports rather than 
 
 These are candidate themes, not commitments. Order and scope subject to feedback from real use.
 
+- **v1.x — Beyond HPHA: a faster, opt-in mode.** The changes the v0.3.0 diagnosis points to but HPHA's transitions rule out, behind an explicit configuration in both ports, with the faithful mode staying the default and gated against HPHA as before. Candidates: a purge that keeps a few idle pages per size class or tree instead of returning them all (hysteresis); a most-recently-freed cache of more than HPHA's one block; deferred coalescing. Each is measured against the v1.0 baseline, and the new mode gets its own records, which Rust and Zig must reproduce byte for byte — the cross-port invariant without the oracle. A new configuration is a minor version; the default's behaviour never changes.
 - **v1.x — Trace visualizer.** Web-based replay of allocation traces: block-layout animation, RSS curves, bucket activity heatmaps, fragmentation visualizations. The demo equivalent of the priority queue project's Dijkstra visualization. Substantial work; deliberately deferred past v1.0.
 - **v2.x — Multithreaded mode.** Port HPHA's `MULTITHREADED` mode with per-bucket and per-tree locks. Modest scaling; not competitive with mimalloc on many-core. Offered as a convenience for users who want a single allocator across both single- and multi-threaded paths in their codebase, not as a serious bid for the server-allocator niche.
 - **v2.x — Per-thread caches.** Optional thread-local bucket caching, opt-in. Changes the design's character; flagged as a deliberate divergence from HPHA rather than a faithful port.
