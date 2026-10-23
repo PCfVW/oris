@@ -29,18 +29,31 @@ State as of PR #4 (the v0.2.0 branch), CI run on the hosted runners — all 25 c
 | ReleaseSmall (Zig), local WSL/Windows only — not in the CI matrix | local | local | never run |
 | `zig-release.yml` / `rust-publish.yml` themselves | never run: a `workflow_dispatch` of `zig-release.yml` would *create a real GitHub Release* for the tag typed, and `rust-publish.yml` publishes — so their steps are reproduced by hand (below) instead |
 
-v0.3.0 additions, verified locally only so far (the v0.3.0 branch has not been pushed):
+v0.3.0 additions, as of PR #8 (the v0.3.0 branch), CI run on the hosted runners:
 
-| Surface | Windows | Linux | macOS |
+| Surface | Windows | Linux | macOS (Apple silicon runner) |
 |---|---|---|---|
-| Rust `--features trace`: clippy, tests (MSRV 1.85 and stable); Miri on the `letopis` tests | local | — | — |
-| Zig `zig build test` incl. the `.trace = true` instantiation (Debug / ReleaseSafe / ReleaseFast) | local | — | — |
-| Trace corpus (19 traces): `orisnik` and `orisnitsa` reproduce every record | local | `orisnik` local (WSL2) | — |
-| Trace corpus: HPHA oracle (patched scratch copy, MSVC) writes every record | local | n/a (Win32-only) | n/a |
-| `tracegen verify` (corpus + bench checksums) | local | local (WSL2) | — |
-| `trace-ci.yml` itself | never run on hosted runners — its first run is the v0.3.0 PR's | | |
+| Rust `--features trace`: clippy, tests (MSRV 1.85 and stable) | CI | CI | CI |
+| Miri, `nightly` + `trace` features, doc tests included | — | CI — after a fix, see below | — (host-agnostic) |
+| Zig `zig build test` incl. the `.trace = true` instantiation (Debug / ReleaseSafe / ReleaseFast) | CI | CI | CI |
+| Trace corpus (19 traces): `orisnik` and `orisnitsa` reproduce every record; the 12 rejected traces are refused with their message | CI | CI | CI |
+| Trace corpus: HPHA oracle (patched scratch copy, MSVC) writes every record and refuses every rejected trace | CI | n/a (Win32-only) | n/a |
+| `tracegen verify` (corpus + bench checksums) | CI | CI | CI |
+| Benchmark tools build (`bench-rust`, `aggregate`, the two shims, `bench-zig`) | — | CI | — |
+| The benchmarks themselves | local | local (WSL2) | never run |
 
-What the first CI run found, so it is not forgotten:
+What the first CI runs found, so it is not forgotten:
+
+- **v0.3.0 — every replay step of `trace-ci.yml` failed silently**: GitHub runs `shell: bash`
+  as `bash -e -o pipefail`, so the first rejected trace's *expected* non-zero exit ended the step
+  at `cmd; code=$?`, before any check ran or any message was printed. Fixed with `set +e` in
+  those steps; the local reproduction had run the loops without `-e`. Lesson: reproduce a
+  workflow step under the shell GitHub actually uses, `bash --noprofile --norc -e -o pipefail`.
+- **v0.3.0 — Miri failed on `Recorder`'s doc example**, the first doc test to allocate: a doc
+  test is built without `cfg(test)`, so it reached the real `mmap`, whose trimming Miri cannot
+  model. The local Miri runs had been filtered to the unit tests. Fixed by compiling the example
+  out under Miri (its calls stay Miri-covered by a unit test); the rule is now in
+  `Rust/CONVENTIONS.md`. Lesson: run the Miri gate unfiltered before a tag.
 
 - **`debug_global_allocator` failed on macOS only**: the first measured pass left 160 bytes
   behind — lazily-initialized platform state (backtrace / hashing), not a leak. Fixed by a whole
