@@ -10,6 +10,12 @@ version matches the tag — a mismatch fails the job immediately rather than pub
 a silently-inconsistent release. That check is a safety net, not a substitute for
 doing step 1 correctly.
 
+The release work goes through a pull request (the `main protection` ruleset requires one), on a
+branch **not named like the tag**: `release/vX.Y.Z` (as v0.1.1's was) or a descriptive name
+(`v0.3.0-invariant-verification`), never plain `vX.Y.Z`. A branch and a tag sharing a name make
+`git push origin vX.Y.Z` fail with "src refspec vX.Y.Z matches more than one", and
+`git checkout vX.Y.Z` ambiguous — v0.3.1's branch was `v0.3.1`, and its tag push hit exactly that.
+
 ## 0. Verification status — read before trusting a green tick
 
 What each platform has actually been shown to do. Update this section when something changes.
@@ -151,7 +157,7 @@ place, empty, for the next cycle.
 
 ```sh
 git tag -a vX.Y.Z -F <message-file>   # annotated, as every Oris tag is: title line + summary
-git push origin vX.Y.Z
+git push origin refs/tags/vX.Y.Z      # the full ref: unambiguous even if a branch shares the name
 ```
 
 This fires both `rust-publish.yml` and `zig-release.yml`. Watch both runs; either
