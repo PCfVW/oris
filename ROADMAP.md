@@ -93,6 +93,7 @@ This invariant is the property that justifies maintaining two ports rather than 
 - **`examples/replay/`** — builds on the v0.3.0 replayers (`letopis`) to plot a trace's mapped bytes and RSS over time
 - **Per-language documentation polish:** "Why this crate?" differentiator sections, instrumentation examples, absolute GitHub URLs verified for external rendering on crates.io and in the `orisnitsa` release tarball (Zig has no central package registry; a Zig project fetches the tarball by URL)
 - **README polish across all surfaces** (top-level, per-port, crates.io, the GitHub Release)
+- **The top-level README reorganized** on the model of [hypomnesis](https://github.com/mi-for-the-rust-of-us/hypomnesis)'s: a table of contents under the badges; a **"New to Oris?"** box that sends each common question (use it as a global allocator, catch an overrun, check a port against HPHA, see how it compares) to its section or guide; a documentation table; and the three closing sections **Used by**, **License** and **Development** — the last absorbing today's "Coding conventions" section, with how Oris is developed
 
 ### v0.5.0 — Faithful performance
 

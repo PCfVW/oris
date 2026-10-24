@@ -134,6 +134,17 @@ jobs:
         run: cargo clippy --all-targets --features nightly -- -D warnings
       - name: Tests (nightly feature)
         run: cargo test --features nightly
+      # The docs exactly as docs.rs builds them: nightly, `--cfg docsrs`, and the features
+      # read from Cargo.toml's `[package.metadata.docs.rs]` rather than repeated here.
+      # v0.3.0's docs.rs pages lacked every feature-gated item, and no build here showed it.
+      - name: Doc (as docs.rs builds it)
+        run: |
+          features="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "orisnik") | .metadata.docs.rs.features | join(",")')"
+          echo "docs.rs features: $features"
+          test -n "$features"
+          cargo doc --no-deps --features "$features"
+        env:
+          RUSTDOCFLAGS: "--cfg docsrs -D warnings"
 
   docs:
     name: Doc (stable)

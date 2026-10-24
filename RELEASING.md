@@ -109,7 +109,10 @@ place, empty, for the next cycle.
 - `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`
 - `cargo +nightly test --features nightly`
 - `cargo +nightly miri test --features nightly` with
-  `MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows"`
+  `MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows"` — every Miri run here
+  **unfiltered**, doc tests included (v0.3.0's first hosted run caught a doc example the
+  filtered local runs had skipped); on a Windows host, also with
+  `--target x86_64-unknown-linux-gnu`, the target CI's Miri jobs run on
 - `cargo clippy --all-targets --features debug-allocator -- -D warnings`,
   `cargo test --features debug-allocator` and
   `cargo +nightly miri test --features debug-allocator` (same `MIRIFLAGS`) — the opt-in debug
@@ -124,6 +127,9 @@ place, empty, for the next cycle.
 - The trace subsystem: `cargo clippy --all-targets --features trace -- -D warnings`,
   `cargo test --features trace` (also `--release`, and on 1.85), and
   `cargo +nightly miri test --features nightly,trace` (same `MIRIFLAGS`)
+- The docs as docs.rs builds them: `RUSTDOCFLAGS="--cfg docsrs -D warnings" cargo +nightly doc
+  --no-deps --features <the list in Cargo.toml's [package.metadata.docs.rs]>` (rust-ci.yml's
+  nightly-feature job does the same)
 - The trace gate by hand: every trace under `examples/traces/handwritten/` and `generated/`
   through `cargo run --example replay --features trace`, `zig build replay` and, on Windows, the
   HPHA oracle (`Cpp/oracle/build_trace_oracle.ps1`) must equal its `.record`, and every trace
@@ -135,8 +141,8 @@ place, empty, for the next cycle.
 - `zig build test` and `zig build test -Doptimize=ReleaseSafe`, then
   `zig build -Doptimize=ReleaseFast`
 - Confirm the last push of this commit to `main` shows green on **Rust CI**,
-  **Zig CI**, **C-ABI CI** and **Trace CI** (the first three are required checks; make
-  Trace CI's aggregator, *Trace CI success*, one too once it has run green. The
+  **Zig CI**, **C-ABI CI** and **Trace CI** (all four aggregators are required checks of the
+  `main protection` ruleset, since v0.3.0. The
   publish/release workflows themselves independently re-run the Rust gauntlet and the Zig
   Debug/ReleaseSafe/ReleaseFast + packaged-tarball build-test, but neither the C-ABI
   smoke test nor the trace gate, so check those here).
@@ -144,7 +150,7 @@ place, empty, for the next cycle.
 ## 6. Tag and push
 
 ```sh
-git tag vX.Y.Z
+git tag -a vX.Y.Z -F <message-file>   # annotated, as every Oris tag is: title line + summary
 git push origin vX.Y.Z
 ```
 
@@ -155,7 +161,9 @@ fix and re-tag rather than trying to patch a partially-published state.
 ## 7. Post-release verification
 
 - `https://crates.io/crates/orisnik` shows the new version.
-- `https://docs.rs/orisnik/X.Y.Z` built successfully.
+- `https://docs.rs/orisnik/X.Y.Z` built successfully, **with the feature-gated API**: a page
+  such as `https://docs.rs/orisnik/X.Y.Z/orisnik/letopis/` exists and is labelled "Available on
+  crate feature `trace` only" (v0.3.0's pages lacked every feature-gated item).
 - `https://github.com/PCfVW/oris/releases` has the new `orisnitsa-vX.Y.Z.tar.gz`
   asset, with the release notes' `zig fetch` hash matching what `zig-release.yml`
   computed.

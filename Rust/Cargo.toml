@@ -1,6 +1,6 @@
 [package]
 name = "orisnik"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Eric Jacopin"]
@@ -88,6 +88,14 @@ name = "debug_global_allocator"
 path = "tests/debug_global_allocator.rs"
 harness = false
 required-features = ["debug-allocator"]
+
+# docs.rs builds with default features unless told otherwise, which left v0.3.0's pages
+# without `letopis` (`trace`), the debug allocator, or the `Allocator` impl (`nightly`;
+# docs.rs builds with a nightly toolchain). docs.rs also passes `--cfg docsrs`, which
+# lib.rs turns into "Available on crate feature ... only" labels. rust-ci.yml's nightly-feature job
+# builds this exact configuration.
+[package.metadata.docs.rs]
+features = ["debug-allocator", "trace", "nightly"]
 
 # The Grit-ORIS lint floor (see Rust/CONVENTIONS.md). CI runs
 # `cargo clippy --all-targets -- -D warnings`, so every `warn` below is a hard

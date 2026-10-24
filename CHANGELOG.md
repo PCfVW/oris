@@ -10,6 +10,28 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-24
+
+A documentation patch: no change to either port's API or behaviour, so every state transition,
+and every transition record, is the same as in 0.3.0. `orisnitsa` 0.3.1 ships in lockstep with
+no Zig change.
+
+### Fixed
+
+- **docs.rs now documents the whole crate.** It builds with default features unless told
+  otherwise, so the 0.3.0 pages lacked every feature-gated item: `letopis` (`trace`), the debug
+  allocator (`debug-allocator`) and the `Allocator` impl (`nightly`). `Cargo.toml` now asks for
+  all three (`[package.metadata.docs.rs]`), and each gated item is labelled "Available on crate
+  feature … only".
+
+### Changed
+
+- CI builds the docs exactly as docs.rs does (nightly, `--cfg docsrs`, the features read from
+  `Cargo.toml`), so the gap cannot come back unnoticed. `RELEASING.md` records v0.3.0's lessons:
+  Miri runs unfiltered, doc tests included; a feature-gated docs.rs page is checked after each
+  release; tags are annotated.
+- `ROADMAP.md`: v0.4.0 plans a reorganized top-level README.
+
 ## [0.3.0] - 2026-10-23
 
 ### Added
@@ -716,7 +738,8 @@ requires; findings are numbered as in
     cross-validation, reconstructed and re-verified live: all 3000 steps match
     byte-for-byte across every C++/Rust/Zig pairing.
 
-[Unreleased]: https://github.com/PCfVW/oris/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/PCfVW/oris/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/PCfVW/oris/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/PCfVW/oris/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/PCfVW/oris/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/PCfVW/oris/compare/v0.1.0...v0.1.1

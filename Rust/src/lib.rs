@@ -52,7 +52,7 @@
 //! so in a genuinely multithreaded program — including the default `cargo test`
 //! harness — is undefined behaviour, not merely unsupported.
 
-#![doc(html_root_url = "https://docs.rs/orisnik/0.3.0")]
+#![doc(html_root_url = "https://docs.rs/orisnik/0.3.1")]
 #![deny(unsafe_op_in_unsafe_fn)]
 // `feature(allocator_api)` is itself nightly-gated syntax — stable rustc hard-errors
 // on any `#![feature(...)]` attribute, so this must stay behind `cfg_attr` even
@@ -72,6 +72,10 @@
 // trait, `reallocate()` — rust-lang/rust#163177), none of which this crate uses.
 #![allow(stable_features)]
 #![cfg_attr(feature = "nightly", feature(allocator_api))]
+// docs.rs passes `--cfg docsrs` (and builds every feature, see Cargo.toml's
+// `[package.metadata.docs.rs]`): label each feature-gated item "Available on crate
+// feature ... only". Nightly rustdoc only, like the line above; no effect on any build.
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 /// Emits a transition-record event (`letopis`) into a sub-allocator's tap. With the `trace`
 /// feature off the whole statement is compiled out — the event expression is never even
