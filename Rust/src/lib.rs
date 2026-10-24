@@ -72,6 +72,10 @@
 // trait, `reallocate()` — rust-lang/rust#163177), none of which this crate uses.
 #![allow(stable_features)]
 #![cfg_attr(feature = "nightly", feature(allocator_api))]
+// docs.rs passes `--cfg docsrs` (and builds every feature, see Cargo.toml's
+// `[package.metadata.docs.rs]`): label each feature-gated item "Available on crate
+// feature ... only". Nightly rustdoc only, like the line above; no effect on any build.
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 /// Emits a transition-record event (`letopis`) into a sub-allocator's tap. With the `trace`
 /// feature off the whole statement is compiled out — the event expression is never even
