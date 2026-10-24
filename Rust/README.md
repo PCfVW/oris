@@ -9,7 +9,7 @@ A Rust port of [Oris](https://github.com/PCfVW/oris) — a Rust and Zig port of 
 [![License](https://img.shields.io/crates/l/orisnik)](https://github.com/PCfVW/oris/blob/main/LICENSE-MIT)
 [![Zig sibling: orisnitsa](https://img.shields.io/badge/zig%20sibling-orisnitsa-f7a41d?logo=zig)](https://github.com/PCfVW/oris/releases)
 
-**v0.3.0 is released on crates.io.** See the [project repo](https://github.com/PCfVW/oris) for the Zig sibling and full history.
+**v0.3.1 is released on crates.io.** See the [project repo](https://github.com/PCfVW/oris) for the Zig sibling and full history.
 
 ## What's here
 

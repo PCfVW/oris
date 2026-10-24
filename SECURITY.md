@@ -67,7 +67,8 @@ allocator:
 
 | Version | Supported |
 |---|---|
-| 0.3.0 | ✅ |
+| 0.3.1 | ✅ |
+| 0.3.0 | ⚠️ — superseded; upgrade to 0.3.1 (documentation only: docs.rs now shows the feature-gated API; no security fix was needed) |
 | 0.2.0 | ⚠️ — superseded; upgrade to 0.3.0 (adds the opt-in `trace` feature, `letopis`; no security fix was needed) |
 | 0.1.1 | ⚠️ — superseded; upgrade to 0.2.0 (adds the opt-in debug allocator; no security fix was needed) |
 | 0.1.0 | ⚠️ — superseded; upgrade to 0.1.1, which fixes an integer-overflow path that under-allocates on very large requests (F1) and a `calloc` overflow that memsets past the block. See [`CHANGELOG.md`](CHANGELOG.md) |
