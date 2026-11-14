@@ -41,7 +41,14 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
     `switch_with`, the chain operations, both fix-ups, `insert_counted`, `erase_counted`).
     `lake exe xcheck` replays the cross-check trace through it too: it matches the Rust on all
     20,000 operations, and `erase_fixup` reading the root once (as both ports do) or re-reading
-    it (as HPHA does) yields the same heap on all 9,927 erases. The theorems are to come.
+    it (as HPHA does) yields the same heap on all 9,927 erases.
+  - **The pointer layer, its first theorems** (`Oris/RB/Heap.lean`): the abstraction relation
+    saying when a heap *is* a zipper state (`Rep`, `RepPath`, `Located`); in a represented tree
+    no address occurs twice (`Rep.nodup`, from the relation alone, with no separate distinctness
+    hypothesis), and writes outside it preserve it (`Rep.frame`, `RepPath.frame`); and
+    `NodeBase::rotate`, write by write, performs the zipper rotation the red-black proofs use
+    (`rotate_refines_left`, `rotate_refines_right`), changing only the four records its frame
+    theorems name. The other pointer functions are still to come.
   - A verified red-black tree library, vendored verbatim from
     `leanprover-community/batteries-recycling` ([`Lean/RBTree/NOTICE.md`](Lean/RBTree/NOTICE.md)),
     and [`Lean/CONVENTIONS.md`](Lean/CONVENTIONS.md).
