@@ -1833,4 +1833,106 @@ mod tests {
             }
         }
     }
+
+    /// Appends the shape of the subtree at `n` to `out`, preorder, in the notation
+    /// `Lean/Tools/XCheck.lean` reads: `(<R|B> <key> <left> <right>)`, `.` for the sentinel.
+    fn write_shape(head: *mut NodeBase, n: *mut NodeBase, out: &mut String) {
+        if n == head {
+            out.push('.');
+            return;
+        }
+        // SAFETY: `n != head`, so it is a live node of the tree being printed.
+        let colour = if unsafe { NodeBase::red(n) } {
+            "(R "
+        } else {
+            "(B "
+        };
+        out.push_str(colour);
+        // SAFETY: `n` is a live, non-null node (above).
+        let node = unsafe { NonNull::new_unchecked(n) };
+        out.push_str(&key_of(TestNode::from_node(node)).to_string());
+        out.push(' ');
+        // SAFETY: `n` is live; reads one child link.
+        let left = unsafe { NodeBase::child(n, Side::Left) };
+        write_shape(head, left, out);
+        out.push(' ');
+        // SAFETY: `n` is live; reads one child link.
+        let right = unsafe { NodeBase::child(n, Side::Right) };
+        write_shape(head, right, out);
+        out.push(')');
+    }
+
+    /// The trace the Lean model is checked against (`Lean/Tools/XCheck.lean`, run by the
+    /// `xcheck` job of `.github/workflows/lean-ci.yml`).
+    ///
+    /// Runs a PRNG-driven sequence of inserts and erases of **distinct** keys (the Lean
+    /// model is the tree of keys; equal-key chains belong to its heap layer, still to come)
+    /// and prints one line per operation: `XC <I|E> <key> <rotations> <shape>`, the
+    /// rotation count `insert_counted`/`erase_counted` reported and the whole tree's shape
+    /// with every node's colour. The Lean side replays the same operations through its
+    /// model and requires every line to match, so the rotation counts *and* the shapes of
+    /// this code and of the proven model agree after every step.
+    ///
+    /// `#[ignore]`d because it is a producer, not an assertion: the check is made by the
+    /// Lean consumer. `Lean/CLAUDE.md` gives the exact pipeline (run from `Lean/`, this test
+    /// selected through `--manifest-path ../Rust/Cargo.toml`, its `XC ` lines piped into
+    /// `lake exe xcheck`).
+    ///
+    /// Under Miri it runs 1,000 steps instead of 20,000: they reach every rotation count
+    /// (0 to 2 for inserts, 0 to 3 for erases; the first three-rotation erase is step
+    /// 509), so the pointer code of every fix-up case runs under the soundness gate, where
+    /// the full run (each step printing a tree of up to 150 nodes) takes hours. The
+    /// cross-check itself always runs natively, at full length.
+    #[test]
+    #[ignore = "trace producer for the Lean model cross-check (Lean/Tools/XCheck.lean)"]
+    fn print_lean_model_cross_check_trace() {
+        // See this function's doc for why Miri runs fewer steps.
+        const STEPS: u32 = if cfg!(miri) { 1_000 } else { 20_000 };
+        const MAX_LIVE: usize = 150;
+        let mut state: u32 = 0x2545_f491;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state
+        };
+        let tree: IntrusiveMultiRbTree<TestNode> = IntrusiveMultiRbTree::new();
+        let mut live: Vec<NonNull<TestNode>> = Vec::new();
+        for step in 0..STEPS {
+            let insert = live.len() < 3 || (live.len() < MAX_LIVE && next() % 5 < 3);
+            let (op, key, rotations) = if insert {
+                // EXPLICIT: draw until the key is absent; the state is the PRNG's.
+                let key = loop {
+                    // CAST: u32 -> i32, bounded to [0, 1000) by the modulo.
+                    #[allow(clippy::as_conversions, clippy::cast_possible_wrap)]
+                    let candidate = (next() % 1000) as i32;
+                    if !live.iter().any(|&n| key_of(n) == candidate) {
+                        break candidate;
+                    }
+                };
+                let n = boxed(key, step);
+                let (_, rotations) = tree.insert_counted(n);
+                live.push(n);
+                ('I', key, rotations)
+            } else {
+                // CAST: u32 -> usize, bounded by `live.len()` via the modulo.
+                #[allow(clippy::as_conversions)]
+                let idx = (next() as usize) % live.len();
+                let n = live.swap_remove(idx);
+                let key = key_of(n);
+                let (_, rotations) = tree.erase_counted(n);
+                // SAFETY: `n` was just erased from `tree` above.
+                unsafe { drop_boxed(n) };
+                ('E', key, rotations)
+            };
+            let mut trace_line = format!("XC {op} {key} {rotations} ");
+            write_shape(tree.head_ptr(), tree.root(), &mut trace_line);
+            println!("{trace_line}");
+        }
+        for n in live {
+            tree.erase(n);
+            // SAFETY: `n` was just erased from `tree` above.
+            unsafe { drop_boxed(n) };
+        }
+    }
 }

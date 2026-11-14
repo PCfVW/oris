@@ -1,0 +1,70 @@
+name: Lean CI
+
+# The Lean proofs about orisnik (Lean/, see Lean/README.md), checked in two ways:
+#
+# - proofs: every theorem compiles with no warnings, and the axiom gate (Lean/Oris/Gate.lean)
+#   confirms that every proof, the vendored RBTree library's included, rests on Lean's kernel and
+#   its three standard axioms alone (no sorry, no native_decide or bv_decide, no axiom).
+# - xcheck: the proven model agrees with the running Rust code. rbtree.rs's ignored test
+#   print_lean_model_cross_check_trace prints the rotation count and the whole tree's shape and
+#   colours after each of 20,000 operations; lake exe xcheck replays them through the Lean model
+#   and fails on any difference.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: lean-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  proofs:
+    name: Proofs and axiom gate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Lean
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install elan (it fetches the toolchain pinned in Lean/lean-toolchain)
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Every proof module is imported by Oris.lean (so the gate audits it)
+        run: ./scripts/check-imports.sh
+      - name: Build every proof, warnings as errors, and run the axiom gate
+        run: lake build --wfail
+
+  xcheck:
+    name: Lean model against the Rust code
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: Rust
+      - name: Install elan
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Build the cross-check consumer
+        working-directory: Lean
+        run: lake build xcheck
+      - name: Replay rbtree.rs's trace through the Lean model
+        working-directory: Lean
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path ../Rust/Cargo.toml --lib \
+            rbtree::tests::print_lean_model_cross_check_trace -- --ignored --nocapture \
+            | grep '^XC ' | lake exe xcheck

@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Lean 4 proofs about orisnik (the Rust port). See README.md and CONVENTIONS.md.
+name = "oris-proofs"
+defaultTargets = ["RBTree", "Oris"]
+
+# Vendored verbatim from leanprover-community/batteries-recycling (see RBTree/NOTICE.md).
+[[lean_lib]]
+name = "RBTree"
+
+# Oris's own proofs: every module under Oris/, the gate (Oris/Gate.lean) included.
+[[lean_lib]]
+name = "Oris"
+globs = ["Oris.*"]
+
+# Replays `rbtree.rs`'s cross-check trace through the Lean model (see Tools/XCheck.lean).
+[[lean_exe]]
+name = "xcheck"
+root = "Tools.XCheck"
+
+# Pinned to the release tag matching lean-toolchain (upstream tracked the `cell-network` branch).
+[[require]]
+name = "batteries"
+git = "https://github.com/leanprover-community/batteries"
+rev = "v4.36.0-rc2"
