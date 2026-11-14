@@ -13,7 +13,7 @@ writes `insert_fixup` and `erase_fixup`, and the `Node` branches of `insert_coun
 and proves them correct against the vendored library's red-black invariants.
 
 What this file establishes is about the *algorithm* `rbtree.rs` runs. That the pointer code
-implements this algorithm is the next layer (`Oris/RB/Heap.lean`, to come); this file's
+implements this algorithm is the next layer (`Oris/RB/Heap.lean`: definitions so far); this file's
 definitions are written so that each case can be checked against the Rust line by line, and each
 case's doc names the lines it transcribes.
 

@@ -35,6 +35,13 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
     through the Lean model; the two agree on every line. New workflow `lean-ci.yml` runs the
     proofs (warnings as errors) and this cross-check on every pull request, and the Miri job of
     `rust-ci.yml` runs the test too (1,000 steps under Miri).
+  - **The pointer layer, its definitions** (`Oris/RB/Heap.lean`, planned in
+    [`Lean/docs/heap-layer.md`](Lean/docs/heap-layer.md)): `rbtree.rs`'s pointer code on a model
+    heap, one write per Rust write in the Rust's order (`rotate`, `attach_to`, `substitute_with`,
+    `switch_with`, the chain operations, both fix-ups, `insert_counted`, `erase_counted`).
+    `lake exe xcheck` replays the cross-check trace through it too: it matches the Rust on all
+    20,000 operations, and `erase_fixup` reading the root once (as both ports do) or re-reading
+    it (as HPHA does) yields the same heap on all 9,927 erases. The theorems are to come.
   - A verified red-black tree library, vendored verbatim from
     `leanprover-community/batteries-recycling` ([`Lean/RBTree/NOTICE.md`](Lean/RBTree/NOTICE.md)),
     and [`Lean/CONVENTIONS.md`](Lean/CONVENTIONS.md).

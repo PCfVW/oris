@@ -1,7 +1,7 @@
 # Design note — the heap layer (`Oris/RB/Heap.lean`)
 
-*Status: agreed in part, 2026-11-14. Nothing here is built yet. Decisions taken are recorded in
-§7; the rest of the note is the proposal they were taken on.*
+*Status: agreed, 2026-11-14. Steps 1 and 1b are done (§5); the theorems, steps 2 to 4, are
+not yet written. Decisions taken are recorded in §7.*
 
 `Oris/RB/Fixup.lean` proves `rbtree.rs`'s red-black algorithm correct **on zippers**: a node
 together with its chain of parents is a `(subtree, path)` pair, and the fix-ups are functions on
@@ -132,8 +132,8 @@ Each step uses the ones before it.
 | Step | Content | Checkpoint |
 |---|---|---|
 | 0 | This note, agreed | Decisions in §2 accepted or changed |
-| 1 | `Heap.lean`: `NodeRec`, the primitives, executable transcriptions of `rotate`, `attach_to`, `substitute_with`, `switch_with`, both fix-ups (in two variants: cached root and re-read root), and both counted operations | Each definition's doc names its Rust function, and its writes follow the Rust's order |
-| 1b | Extend `lake exe xcheck` to replay the trace through the heap model too, comparing with the Rust's shapes and with the zipper model, and running both root variants. Time the replay | 20,000 operations, 0 mismatches, before any proof is attempted. This also tests the cached-root expectation at heap level, for free |
+| 1 ✅ | `Heap.lean`: `NodeRec`, the primitives, executable transcriptions of `rotate`, `attach_to`, `substitute_with`, `switch_with`, both fix-ups (in two variants: cached root and re-read root), and both counted operations | Each definition's doc names its Rust function, and its writes follow the Rust's order |
+| 1b ✅ | Extend `lake exe xcheck` to replay the trace through the heap model too, comparing with the Rust's shapes and with the zipper model, and running both root variants. Time the replay | 20,000 operations, 0 mismatches, before any proof is attempted. This also tests the cached-root expectation at heap level, for free |
 | 2 | `Repr`, `ReprPath`, `Repr.nodup`, the frame lemma, `rotate_refines` | The first refinement theorem; if the encoding is clumsy, it shows here, cheaply |
 | 3 | Steps 2–5 of §4 | `insert_fixup` and `erase_fixup` performing `insFix` and `delFix`; the cached-root theorem |
 | 4 | Steps 6–7 of §4, chains included | `insert_spec` and `erase_spec` hold for the pointer code |
@@ -191,9 +191,12 @@ both ports. It would then be fixed as a patch, with an entry in `Cpp/ERRATA.md`
    Addr` would mostly guard places where null cannot occur: `Repr` already requires every tree
    node to be non-null (`a ≠ 0`). Null appears in earnest only in the chain code, where a few
    explicit checks cost less than wrapping every `parent` read.
-2. **Step 1b as a permanent CI check: to be decided once step 1b is measured.** If the heap
-   replay adds seconds, as expected, it joins the existing check in `lean-ci.yml`. If it is slow,
-   the replay is fixed first.
+2. **Step 1b as a permanent CI check: measured, decision pending.** The heap replay is part of
+   `lake exe xcheck`, so `lean-ci.yml` already runs it. The whole replay of 20,000 operations,
+   both models and both root readings, takes about 95 seconds on the development machine
+   (2026-11-14), against a few seconds for the zipper model alone. Per operation, the replay
+   copies the heap into a table, and per erase it runs `erase_counted` twice and compares the two
+   heaps: a few thousand reads, each through that operation's writes. (Not profiled further.)
 3. **The chains' proofs go in `Heap.lean`** (decided 2026-11-14).
 
 ## 8. What stays outside the heap layer

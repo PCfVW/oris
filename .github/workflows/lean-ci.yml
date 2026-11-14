@@ -5,10 +5,12 @@ name: Lean CI
 # - proofs: every theorem compiles with no warnings, and the axiom gate (Lean/Oris/Gate.lean)
 #   confirms that every proof, the vendored RBTree library's included, rests on Lean's kernel and
 #   its three standard axioms alone (no sorry, no native_decide or bv_decide, no axiom).
-# - xcheck: the proven model agrees with the running Rust code. rbtree.rs's ignored test
+# - xcheck: the Lean models agree with the running Rust code. rbtree.rs's ignored test
 #   print_lean_model_cross_check_trace prints the rotation count and the whole tree's shape and
-#   colours after each of 20,000 operations; lake exe xcheck replays them through the Lean model
-#   and fails on any difference.
+#   colours after each of 20,000 operations; lake exe xcheck replays them through the proven
+#   zipper model and through the heap model (Lean/Oris/RB/Heap.lean, the pointer code write by
+#   write), checks that erase_fixup's two root readings (once, as the ports do; re-read, as HPHA
+#   does) give the same heap, and fails on any difference.
 
 on:
   push:
