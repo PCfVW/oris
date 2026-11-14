@@ -3,3 +3,4 @@
 -- `scripts/check-imports.sh` fails if a module under `Oris/` is missing from this list.
 import Oris.Arith
 import Oris.RB.Fixup
+import Oris.RB.Heap

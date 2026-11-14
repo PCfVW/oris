@@ -30,7 +30,9 @@ Run from `Lean/`, in bash (on Windows, Git Bash; elan installs the pinned toolch
      | grep '^XC ' | lake exe xcheck
    ```
 
-   It must report `20000 operations compared, 0 mismatches` and exit 0.
+   It must report `20000 operations compared, 0 mismatches`, `heap model: 0 mismatches` and
+   `0 of 9927 erases differ` for `erase_fixup`'s two root readings, and exit 0 (about a minute
+   and a half).
 4. Update `../CHANGELOG.md` — a bullet under `[Unreleased]` for any new or changed theorem a
    reader would cite.
 

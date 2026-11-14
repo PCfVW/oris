@@ -173,7 +173,7 @@ bound), `_balanced` (red-black invariant), `_spec` (the operation's full contrac
 | Path | Contents |
 |---|---|
 | `Oris/Arith.lean` | Size arithmetic |
-| `Oris/RB/*.lean` | The red-black tree (`Fixup.lean`: the zipper level; `Heap.lean`: the pointer level, to come) |
+| `Oris/RB/*.lean` | The red-black tree (`Fixup.lean`: the zipper level; `Heap.lean`: the pointer level, definitions so far) |
 | `Oris/Audit.lean`, `Oris/Gate.lean` | The axiom audit and the gate that runs it |
 | `Tools/` | Executables (`XCheck.lean`, the cross-check consumer) |
 | `docs/` | Design notes (`heap-layer.md`), agreed before the proofs they plan |
@@ -201,6 +201,9 @@ fails on any difference (the `xcheck` job of `lean-ci.yml`).
 - A change to `rbtree.rs`'s tree logic that changes shapes or rotation counts changes the
   cross-port transition records too (see the root `CLAUDE.md`), and must update
   `Oris/RB/Fixup.lean` in the same commit so the cross-check passes.
+- A change to `rbtree.rs`'s pointer code (any read or write of a `NodeBase` field, or their
+  order) must update `Oris/RB/Heap.lean` in the same commit: the heap model transcribes it write
+  by write, and the cross-check runs it.
 - A change to `tree.rs`'s, `bucket.rs`'s or `align.rs`'s size arithmetic must update
   `Oris/Arith.lean` in the same commit.
 - A change to the trace format must change both the Rust producer and `Tools/XCheck.lean`.

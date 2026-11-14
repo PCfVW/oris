@@ -36,10 +36,11 @@ CI runs all three (`../.github/workflows/lean-ci.yml`).
 | `RBTree/`, `RBTree.lean` | A verified functional red-black tree library, vendored verbatim (`RBTree/NOTICE.md`) |
 | `Oris/Arith.lean` | Size arithmetic: `round_up`, `normalize_size`, `MAX_ALLOCATION`, `Tree::grow`, `alloc_aligned`'s guard, the bucket size classes |
 | `Oris/RB/Fixup.lean` | `rbtree.rs`'s `insert_fixup`, `insert_counted`, `erase_fixup` and `erase_counted` (its `Node` branch), on zippers |
+| `Oris/RB/Heap.lean` | The same functions as pointer code on a model heap, one write per Rust write (definitions; the proofs are the next steps of `docs/heap-layer.md`) |
 | `Oris/Audit.lean`, `Oris/Gate.lean` | The `#audit_axioms` command, and the gate that runs it over everything |
 | `Oris.lean` | Imports every proof module (what the gate audits) |
-| `Tools/XCheck.lean` | `lake exe xcheck`: replays `rbtree.rs`'s cross-check trace through the model |
-| `docs/heap-layer.md` | The design note for the next stage, the pointer layer (proposal) |
+| `Tools/XCheck.lean` | `lake exe xcheck`: replays `rbtree.rs`'s cross-check trace through both models |
+| `docs/heap-layer.md` | The design note for the pointer layer: the model, the theorems to come, the plan |
 | `scripts/check-imports.sh` | Fails if a module under `Oris/` escapes `Oris.lean`, hence the gate |
 | `CONVENTIONS.md`, `CLAUDE.md` | How proofs here are written, and the pre-commit checks |
 
@@ -97,20 +98,31 @@ neither check nor prove; each site is a theorem (each with a `_left` and a `_rig
 `print_lean_model_cross_check_trace` runs 20,000 operations (inserts and erases of distinct keys;
 every rotation count from 0 to 3 occurs, including 71 erases with three) and prints, after each,
 the rotation count and the whole tree's shape with every node's colour. `lake exe xcheck`
-replays the same operations through the Lean model and fails on any difference: they agree on
-all 20,000 lines. `xcheck` was checked to detect an injected one-rotation and one-colour
-difference, malformed input, and empty input.
+replays the same operations through two Lean models and fails on any difference:
+
+- the zipper model the theorems are about (`Oris/RB/Fixup.lean`);
+- the heap model (`Oris/RB/Heap.lean`), which runs the Rust's pointer code write by write on a
+  model heap. On every erase it also runs `erase_fixup` with HPHA's reading of the root
+  (re-read at each use, where the Rust reads it once) and requires the same rotation count and
+  the same whole heap.
+
+Both models agree with the Rust on all 20,000 lines, and the two root readings give identical
+heaps on all 9,927 erases. `xcheck` was checked to detect an injected one-rotation and
+one-colour difference, malformed input and empty input; and, in the heap model, a wrong side bit
+in `rotate`, a black new node in `attach_to`, and a root reading that skips its final
+`make_black`. The run takes about a minute and a half.
 
 ## What is not (yet) proven, and the trust base
 
 - **The pointer layer.** The theorems are about the algorithm on zippers. That the pointer code
-  in `rbtree.rs` implements it is the next layer (`Oris/RB/Heap.lean`; design note:
-  [`docs/heap-layer.md`](docs/heap-layer.md)): each node with its chain
-  of parents is a `(subtree, path)` pair, and each pointer write must be shown to perform the
-  corresponding zipper step. Until then, the correspondence rests on the line-by-line
-  transcription documented on each definition and on the cross-check above. The duplicate-key
-  chains, the sentinel's scratch `parent` field, and `erase_fixup`'s cached `root` (the Rust
-  reads it once; HPHA, and the model, re-read it) belong to that layer.
+  in `rbtree.rs` implements it is the next layer (design note:
+  [`docs/heap-layer.md`](docs/heap-layer.md)). Its definitions are written
+  (`Oris/RB/Heap.lean`, run against the Rust by the cross-check above); the theorems are not yet:
+  that each node with its chain of parents is a `(subtree, path)` pair, and that each pointer
+  write performs the corresponding zipper step. Until then, the correspondence rests on the
+  write-by-write transcription and on the cross-check. The duplicate-key chains, the sentinel's
+  scratch `parent` field, and `erase_fixup`'s cached `root` (the Rust reads it once; HPHA, and
+  the zipper model, re-read it; the cross-check finds no difference) belong to that layer.
 - **The `Link` and `Promote` branches** of `erase_counted` and the `Chain` branch of
   `insert_counted` change the equal-key chains, not the tree of keys: they belong to the heap
   layer, where a tree node carries its chain.
