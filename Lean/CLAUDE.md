@@ -13,17 +13,18 @@ Every `.lean` file begins with `-- SPDX-License-Identifier: MIT OR Apache-2.0` a
 
 ## Pre-commit checks
 
-Run from `Lean/` (elan installs the pinned toolchain by itself):
+Run from `Lean/`, in bash (on Windows, Git Bash; elan installs the pinned toolchain by itself):
 
-1. `lake build` — compiles every proof and runs the axiom gate (`Oris/Gate.lean`). It must
-   finish with no errors **and no warnings** (unused `simp` arguments and unused variables
-   included), and print `standard axioms only` for both `Oris` and `RBTree`.
+1. `lake build --wfail` — compiles every proof and runs the axiom gate (`Oris/Gate.lean`);
+   `--wfail` makes any warning (unused `simp` arguments and unused variables included) an error,
+   as in CI. It must succeed and print `standard axioms only` for both `Oris` and `RBTree`.
 2. `./scripts/check-imports.sh` — every module under `Oris/` is imported by `Oris.lean`, so the
    gate audits it.
 3. When `Oris/RB/`, `Tools/XCheck.lean` or `../Rust/src/rbtree.rs` changes, the cross-check
    (with `pipefail` on, so a failure anywhere in the pipe fails the command):
 
    ```
+   set -o pipefail
    cargo test --manifest-path ../Rust/Cargo.toml --lib \
      rbtree::tests::print_lean_model_cross_check_trace -- --ignored --nocapture \
      | grep '^XC ' | lake exe xcheck

@@ -1879,10 +1879,11 @@ mod tests {
     /// `lake exe xcheck`).
     ///
     /// Under Miri it runs 1,000 steps instead of 20,000: they reach every rotation count
-    /// (0 to 2 for inserts, 0 to 3 for erases; the first three-rotation erase is step
-    /// 509), so the pointer code of every fix-up case runs under the soundness gate, where
-    /// the full run (each step printing a tree of up to 150 nodes) takes hours. The
-    /// cross-check itself always runs natively, at full length.
+    /// (0 to 2 for inserts, 0 to 3 for erases; the first three-rotation erase is the 509th
+    /// step), so the pointer code of every fix-up case runs under the soundness gate (the
+    /// `miri` job of `.github/workflows/rust-ci.yml` runs it, with `--ignored`), where the
+    /// full run (each step printing a tree of up to 150 nodes) takes hours. The cross-check
+    /// itself always runs natively, at full length.
     #[test]
     #[ignore = "trace producer for the Lean model cross-check (Lean/Tools/XCheck.lean)"]
     fn print_lean_model_cross_check_trace() {

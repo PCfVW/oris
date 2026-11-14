@@ -3,26 +3,34 @@
 # Tier 0 — the size arithmetic of `orisnik`
 
 Models, on 64-bit machine words (`BitVec 64`, i.e. Rust's `usize` on the 64-bit targets the
-crate is restricted to by `block.rs`'s compile-time assertion), every piece of size arithmetic
-that decides *which* block or bucket serves a request:
+crate is restricted to by `block.rs`'s compile-time assertion `usize::BITS == 64`), the size
+arithmetic of the tree path's normalization and growth and of the bucket size classes:
 
 | Lean | Rust |
 |---|---|
 | `roundUp` | `align.rs` `round_up` |
 | `normalizeSize`, `MAX_ALLOCATION` | `tree.rs` `normalize_size`, `MAX_ALLOCATION` |
 | `growSize` | `tree.rs` `Tree::grow` (its two size lines) |
-| `bucketSpacing`, `bucketSpacingAligned`, `bucketSpacingInverse`, `clampSmall`, `isSmall` | `bucket.rs` functions of the same names |
-| `hphaMask` | `Cpp/hpha.h` `round_up`'s mask `-(int)a` |
+| `bucketSpacing`, `bucketSpacingAligned`, `bucketSpacingInverse` | `bucket.rs` `bucket_spacing_function`, `_aligned`, `_inverse` |
+| `clampSmall`, `isSmall` | `bucket.rs` `clamp_small_allocation`, `is_small_allocation` |
+| `hphaMask`, `hphaRoundUp` | `Cpp/hpha.h` `round_up` and its mask `-(int)a` |
+
+`alloc_aligned`'s guard is stated directly on its expression (`alloc_aligned_guard`). Not
+modelled yet: `extract_aligned`'s alignment offsets and the split threshold
+(`SPLIT_REMAINDER_MIN`), which belong with the memory-management tier.
 
 Each definition transcribes the Rust expression operator for operator. Rust's `+`/`-` on `usize`
-panic on overflow in debug builds and wrap in release builds; `BitVec` wraps. The theorems
-therefore always come in two halves: *the operation does not overflow* (so debug builds never
-panic and the wrapped value is the mathematical one), and *the mathematical value is what the
-caller needs*.
+panic on overflow in debug builds and wrap in release builds; `BitVec` wraps. So every theorem
+about a transcribed computation that adds or subtracts comes in two halves: *the operation does
+not overflow* (so debug builds never panic and the wrapped value is the mathematical one), and
+*the mathematical value is what the caller needs*. (The rest, such as `hphaMask_eq` or
+`bucketSpacing_inverse`, are plain equations.)
 
-Layout constants are the values the Rust asserts at compile time:
-`size_of::<BlockHeader>() == 16` (`block.rs`), `size_of::<NodeBase>() == 40` (`rbtree.rs`, and
-`FreeNode` is `#[repr(C)]` with `NodeBase` as its only field), `os::PAGE_SIZE == 65536`.
+Layout constants: `BLOCK_HEADER = 16` and `FREE_NODE = 40` are the values of the Rust's
+compile-time assertions `size_of::<BlockHeader>() == 2 * size_of::<usize>()` (`block.rs`) and
+`size_of::<NodeBase>() == 5 * size_of::<usize>()` (`rbtree.rs`; `FreeNode` is `#[repr(C)]` with
+`NodeBase` as its only field) on 64-bit `usize`; `PAGE_SIZE = 65536` is `os.rs`'s constant
+`PAGE_SIZE`, fixed at 64 KiB on every platform.
 -/
 
 namespace Oris.Arith
@@ -113,6 +121,9 @@ theorem hphaMask_eq : ∀ k : Fin 31,
     hphaMask (BitVec.ofNat 64 (2^k.val)) = ~~~(BitVec.ofNat 64 (2^k.val) - 1) := by
   decide
 
+/-- `Cpp/hpha.h` `round_up`, with its own mask: `(x + (a-1)) & -(int)a`. -/
+def hphaRoundUp (x a : Usize) : Usize := (x + (a - 1)) &&& hphaMask a
+
 /-! ## `normalize_size` and `MAX_ALLOCATION` -/
 
 /-- `tree.rs` `MAX_ALLOCATION`:
@@ -164,10 +175,10 @@ theorem normalizeSize_spec (size : Usize) :
     simp [normalizeSize, this]
 
 /-- **ERRATA E1, HPHA side.** HPHA's unchecked normalization of `SIZE_MAX`
-(`if (size < sizeof(free_node)) ...; size = round_up(size, sizeof(block_header))`) wraps to a
-block size of **zero**, exactly as the register says. -/
+(`if (size < sizeof(free_node)) ...; size = round_up(size, sizeof(block_header))`), computed with
+HPHA's own `round_up` and mask, wraps to a block size of **zero**, exactly as the register says. -/
 theorem hpha_normalize_SIZE_MAX :
-    roundUp (BitVec.allOnes 64) BLOCK_HEADER = 0 := by decide
+    hphaRoundUp (BitVec.allOnes 64) BLOCK_HEADER = 0 := by decide
 
 /-! ## `Tree::grow` -/
 

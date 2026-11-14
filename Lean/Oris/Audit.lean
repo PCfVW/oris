@@ -23,13 +23,18 @@ open Lean Elab Command
 def Oris.Audit.allowedAxioms : List Name := [``propext, ``Classical.choice, ``Quot.sound]
 
 /-- Fails unless every declaration under the given namespace prefix depends only on
-`Oris.Audit.allowedAxioms`; on success, logs how many declarations it checked. -/
+`Oris.Audit.allowedAxioms`; on success, logs how many declarations it checked.
+
+"Every" includes `private` declarations (Lean files them under `_private.<module>.0.`, so they
+are matched by their user-facing name) and the auxiliary declarations Lean generates (`match_1`,
+`_proof_1`, equation lemmas, ...): nothing under the prefix is skipped, so an unused private lemma
+cannot hide a `native_decide`. -/
 elab "#audit_axioms " ns:ident : command => do
   let env ← getEnv
   let pre := ns.getId
   let mut count : Nat := 0
   for (n, _) in env.constants.toList do
-    if pre.isPrefixOf n && !n.isInternal then
+    if pre.isPrefixOf ((privateToUserName? n).getD n) then
       let axs ← liftCoreM <| collectAxioms n
       let bad := axs.filter (fun a => !Oris.Audit.allowedAxioms.contains a)
       unless bad.isEmpty do

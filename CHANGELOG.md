@@ -13,25 +13,28 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 ### Added
 
 - **Machine-checked proofs in Lean 4** ([`Lean/`](Lean/README.md)), about the algorithms
-  `orisnik` runs, every one checked by Lean's kernel alone (an axiom gate fails the build on any
-  `sorry`, `native_decide`, `bv_decide` or hand-written axiom):
+  `orisnik` runs, every one checked by Lean's kernel alone (an axiom gate, covering every
+  declaration, private ones included, fails the build on any `sorry`, `native_decide`,
+  `bv_decide` or hand-written axiom):
   - **Size arithmetic** (`Oris/Arith.lean`), on 64-bit words with the Rust's own operators:
     `round_up` is exact whenever it does not overflow and agrees with HPHA's mask for every
-    alignment up to 2^30; below `MAX_ALLOCATION`, `normalize_size` and `Tree::grow` cannot
-    overflow (ERRATA E1, port side) while HPHA's unchecked normalization of `SIZE_MAX` is zero
-    (E1, HPHA side); `alloc_aligned`'s guard cannot underflow; every small request lands in the
+    alignment up to 2^30; at or below `MAX_ALLOCATION`, `normalize_size` and `Tree::grow` cannot
+    overflow (ERRATA E1, port side) while HPHA's unchecked normalization of `SIZE_MAX`, with
+    HPHA's own `round_up`, is zero (E1, HPHA side); `alloc_aligned`'s guard cannot underflow; every small request lands in the
     smallest bucket that fits it.
   - **The red-black tree** (`Oris/RB/Fixup.lean`): `insert_fixup`/`insert_counted` and
     `erase_fixup`/`erase_counted` (`Node` branch), transcribed case for case on zippers, keep
     the tree a valid, ordered red-black tree with a black root, with at most two rotations per
     insert and three per erase; an insert yields exactly the elements of the vendored library's
-    verified insert, and an erase removes exactly the erased element. HPHA's three
-    `erase_fixup` assertions, which the ports do not check, are theorems.
+    verified insert, and an erase of a key present in the tree finds the element equal to it and
+    removes exactly that element. HPHA's `insert_fixup` and `erase_fixup` assertions (four
+    facts, six sites), which the ports neither check nor prove, are theorems.
   - **The model agrees with the code**: the new ignored test
     `rbtree::tests::print_lean_model_cross_check_trace` prints the rotation count and the whole
     tree's shape and colours after each of 20,000 operations, and `lake exe xcheck` replays them
     through the Lean model; the two agree on every line. New workflow `lean-ci.yml` runs the
-    proofs (warnings as errors) and this cross-check on every pull request.
+    proofs (warnings as errors) and this cross-check on every pull request, and the Miri job of
+    `rust-ci.yml` runs the test too (1,000 steps under Miri).
   - A verified red-black tree library, vendored verbatim from
     `leanprover-community/batteries-recycling` ([`Lean/RBTree/NOTICE.md`](Lean/RBTree/NOTICE.md)),
     and [`Lean/CONVENTIONS.md`](Lean/CONVENTIONS.md).

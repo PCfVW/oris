@@ -8,7 +8,7 @@ the proven model behaves exactly like the running Rust code.
 ## Build
 
 Install [elan](https://github.com/leanprover/elan) (it fetches the pinned Lean toolchain by
-itself), then from this directory:
+itself), then from this directory, in bash (on Windows, Git Bash):
 
 ```
 lake build --wfail
@@ -17,10 +17,11 @@ lake build --wfail
 
 A successful build means every theorem below compiled without warnings and passed the axiom
 gate. The first build downloads and compiles the Batteries modules the vendored library needs
-(about a minute). The cross-check against the Rust code (needs a Rust toolchain; use `pipefail`
-so a failure anywhere fails the command):
+(about a minute). The cross-check against the Rust code (needs a Rust toolchain; `pipefail` makes
+a failure anywhere in the pipe fail the command):
 
 ```
+set -o pipefail
 cargo test --manifest-path ../Rust/Cargo.toml --lib \
   rbtree::tests::print_lean_model_cross_check_trace -- --ignored --nocapture \
   | grep '^XC ' | lake exe xcheck
@@ -51,8 +52,8 @@ CI runs all three (`../.github/workflows/lean-ci.yml`).
 - ERRATA E1, both sides: every request up to `MAX_ALLOCATION` normalizes without overflow to a
   block size that is a multiple of 16, at least the request and at least `MIN_BLOCK_SIZE`
   (`normalizeSize_spec`), and `Tree::grow` cannot overflow on it (`growSize_spec`; composed in
-  `alloc_sizes_no_overflow`); HPHA's unchecked normalization of `SIZE_MAX` really is zero
-  (`hpha_normalize_SIZE_MAX`).
+  `alloc_sizes_no_overflow`); HPHA's unchecked normalization of `SIZE_MAX`, computed with HPHA's
+  own `round_up` and mask, really is zero (`hpha_normalize_SIZE_MAX`).
 - `alloc_aligned`'s guard cannot underflow and leaves enough headroom (`alloc_aligned_guard`).
 - The bucket size classes: every small request maps to one of 32 buckets whose element size is
   the smallest class that fits; the inverse is an inverse; the aligned shortcut agrees; and
@@ -63,9 +64,10 @@ CI runs all three (`../.github/workflows/lean-ci.yml`).
 - `insFix_toList`: the insert fix-up only rearranges (in-order sequence unchanged).
 - `insFix_rotations`: at most two rotations.
 - `insFix_balanced`: it restores the red-black invariant.
-- `insert_spec`: `insert_counted` on a valid tree with a black root either chains (tree
-  unchanged, no rotation) or returns a valid, ordered tree with a black root holding exactly the
-  elements, in order, of the library's verified `RBNode.insert`, after at most two rotations.
+- `insert_spec`: `insert_counted` on a valid tree with a black root either finds an element
+  equal to the key and chains (tree unchanged, no rotation) or returns a valid, ordered tree
+  with a black root holding exactly the elements, in order, of the library's verified
+  `RBNode.insert`, after at most two rotations.
 
 **The red-black tree erase** (`Oris/RB/Fixup.lean`):
 
@@ -74,16 +76,21 @@ CI runs all three (`../.github/workflows/lean-ci.yml`).
 - `delFix_balanced`: it restores the red-black invariant, starting from the "double black" a
   spliced-out black node leaves.
 - `eraseAt_spec`, `erase_spec`: `erase_counted`'s `Node` branch (splice out the node or its
-  in-order successor, `switch_with`, fix-up) on a valid tree with a black root removes exactly
-  the erased element, keeps all others in order, and leaves a valid tree with a black root, after
-  at most three rotations.
+  in-order successor, `switch_with`, fix-up) on a valid tree with a black root, erasing a key
+  that some element compares equal to, finds that element and removes exactly it, keeps all
+  others in order, and leaves a valid tree with a black root, after at most three rotations;
+  the lookup fails only when no element compares equal to the key.
 
-**HPHA's assertions, as theorems.** HPHA asserts four facts that the ports neither check nor
-state; each is a theorem: under a red parent there is a grandparent (`insert_fixup`'s
-`pp != &mHead`: `hpha_grandparent_not_sentinel_left`/`_right`), and in `erase_fixup` the sibling
-is never the sentinel (`hpha_sibling_not_sentinel_*`), a red sibling has black children
-(`hpha_red_sibling_children_black_*`), and before the fourth case the far child is red
-(`hpha_far_child_red_*`).
+**HPHA's assertions, as theorems.** HPHA asserts four facts, at six sites, that the ports
+neither check nor prove; each site is a theorem (each with a `_left` and a `_right` form):
+
+- `insert_fixup`, `pp != &mHead`: under a red parent there is a grandparent
+  (`hpha_grandparent_not_sentinel`);
+- `erase_fixup`, `w != &mHead`, at all three sites: the sibling is never the sentinel at the loop
+  top (`hpha_sibling_not_sentinel`), after the first case (`hpha_sibling_after_case1_not_sentinel`)
+  and after the third (`hpha_sibling_after_case3_not_sentinel`);
+- `erase_fixup`: a red sibling has black children (`hpha_red_sibling_children_black`), and before
+  the fourth case the far child is red (`hpha_far_child_red`).
 
 **The model agrees with the Rust code.** `rbtree.rs`'s ignored test
 `print_lean_model_cross_check_trace` runs 20,000 operations (inserts and erases of distinct keys;
@@ -118,7 +125,8 @@ to be mechanized by the heap layer.
 In brief (the full rules, with the reasons, are in [`CONVENTIONS.md`](CONVENTIONS.md)):
 
 1. **Kernel-checked only.** No `sorry`, `native_decide`, `bv_decide` or `axiom`; the gate
-   enforces it on every build, for the vendored library too, and was checked to reject all three.
+   enforces it on every build, on every declaration (private ones included), for the vendored
+   library too, and was checked to reject each of the four, and a private `native_decide`.
 2. **Transcribe, don't re-derive.** Each definition names the Rust it models, follows its
    operations in order and sets every colour the Rust sets; every deliberate departure is listed.
 3. **Statements say what the docs say.** A fact a doc claims is proven is a theorem.

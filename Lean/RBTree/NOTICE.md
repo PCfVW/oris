@@ -35,8 +35,8 @@ compatible with Oris's `MIT OR Apache-2.0`.
 **None to the Lean sources.** The one deviation is in how the library is built: upstream's
 `lakefile.toml` required Batteries from its `cell-network` branch; `../lakefile.toml` here pins
 Batteries to the release tag `v4.36.0-rc2`, the tag matching the library's own toolchain. The
-library builds unchanged against it, and `../Oris/Gate.lean` audits all of its declarations
-(standard axioms only, no `sorry`).
+library builds unchanged against it, and `../Oris/Gate.lean` audits all of its declarations,
+private and auxiliary ones included (standard axioms only, no `sorry`).
 
 Any future change to a file here must be recorded in this section, file by file, with its
 reason, as `../../Cpp/ERRATA.md` does for the HPHA reference.
@@ -46,4 +46,4 @@ reason, as `../../Cpp/ERRATA.md` does for the HPHA reference.
 The library is no longer actively maintained upstream, and every package in a Lean build must
 share one Lean toolchain: depending on it directly would tie Oris's proofs to whatever toolchain
 upstream last used. Vendoring lets Oris move toolchains on its own schedule while keeping the
-provenance auditable. See `../README.md`.
+provenance auditable.

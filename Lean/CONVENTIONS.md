@@ -53,10 +53,13 @@ axioms (`propext`, `Classical.choice`, `Quot.sound`). Concretely, never commit:
 is too slow for the kernel is a sign to restate the lemma (prove it for a symbolic `k`, as
 `and_not_two_pow_sub_one` does), not to switch to `native_decide`.
 
-**Enforced by** `Oris/Gate.lean`, which runs `#audit_axioms` (`Oris/Audit.lean`) over the whole
-`Oris` namespace and the vendored `RBTree` library on every `lake build`. The gate was checked
-to reject a `sorry`, a `native_decide` and a hand-written axiom; if you change `Oris/Audit.lean`,
-re-run that check (a scratch file with each of the three, then `#audit_axioms`).
+**Enforced by** `Oris/Gate.lean`, which runs `#audit_axioms` (`Oris/Audit.lean`) over every
+declaration of the `Oris` namespace and of the vendored `RBTree` library on every `lake build`,
+`private` declarations and Lean's auxiliary ones included. The gate was checked to reject a
+`sorry`, a `native_decide` (public and `private`), a `bv_decide` that reaches its SAT checker, and
+a hand-written axiom. (A `bv_decide` whose preprocessing closes the goal leaves an ordinary kernel
+proof, which the gate rightly accepts.) If you change `Oris/Audit.lean`, re-run that check: a
+scratch file with each of them, then `#audit_axioms`.
 
 ### The gate covers every module
 
@@ -73,8 +76,9 @@ A `def` that models Rust code is a **transcription**, not a re-derivation:
 1. **Name the Rust.** Its doc comment opens with the Rust item it models, in backticks
    (`` `rbtree.rs` `insert_fixup` ``, `` `NodeBase::rotate` ``, `` `tree.rs` `normalize_size` ``).
 2. **Follow the operations in order**, case for case, rotation for rotation. Each case of a
-   pattern match carries a comment saying which Rust case it is (which side, which branch of the
-   Rust's `if`), and the doc quotes the Rust statements it performs.
+   pattern match says which Rust case it is (which side, which branch of the Rust's `if`), in a
+   comment on the arm or in the definition's doc, and the doc quotes the Rust statements it
+   performs.
 3. **Set every colour (or field) the Rust sets**, even where it changes nothing (the final
    `make_black(root)` on a root already black), and without looking at what it overwrites when
    the Rust does not look (`insFix` matches the grandparent's colour as `_` and paints it red).
@@ -108,7 +112,7 @@ module doc's complete list of departures. A departure that is *not* about an unr
   (`insert_spec`: the same `toList` as the library's verified `RBNode.insert`) over a property
   checked in isolation.
 - Specification theorems (`*_spec`) take only hypotheses the Rust's callers guarantee (a valid
-  tree with a black root, a request below `MAX_ALLOCATION`); their docs say what those are.
+  tree with a black root, a request at or below `MAX_ALLOCATION`); their docs say what those are.
 
 ---
 
@@ -116,10 +120,11 @@ module doc's complete list of departures. A departure that is *not* about an unr
 
 Rust's `usize` is `BitVec 64` (the crate is 64-bit only), and expressions are transcribed with
 the Rust's operators (`&&& ~~~(a - 1)` for `& !(a - 1)`, `>>>` for `>>`). Rust's `+`/`-` panic
-on overflow in debug builds and wrap in release builds, while `BitVec` wraps, so arithmetic
-theorems come in two halves: **the operation does not overflow** (stated on `toNat`), and **the
-mathematical value is what the caller needs**. Layout constants (`size_of::<BlockHeader>()`, ...)
-are the values the Rust asserts at compile time; the module doc names those assertions.
+on overflow in debug builds and wrap in release builds, while `BitVec` wraps, so theorems about
+a computation that adds or subtracts come in two halves: **the operation does not overflow**
+(stated on `toNat`), and **the mathematical value is what the caller needs**. Layout constants
+(`size_of::<BlockHeader>()`, ...) are the values of the Rust's compile-time assertions or
+constants; the module doc names them.
 
 ---
 
