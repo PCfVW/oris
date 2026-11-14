@@ -176,6 +176,7 @@ bound), `_balanced` (red-black invariant), `_spec` (the operation's full contrac
 | `Oris/RB/*.lean` | The red-black tree (`Fixup.lean`: the zipper level; `Heap.lean`: the pointer level, to come) |
 | `Oris/Audit.lean`, `Oris/Gate.lean` | The axiom audit and the gate that runs it |
 | `Tools/` | Executables (`XCheck.lean`, the cross-check consumer) |
+| `docs/` | Design notes (`heap-layer.md`), agreed before the proofs they plan |
 | `scripts/` | Shell checks run by CI |
 | `RBTree/` | Vendored, verbatim |
 

@@ -39,6 +39,7 @@ CI runs all three (`../.github/workflows/lean-ci.yml`).
 | `Oris/Audit.lean`, `Oris/Gate.lean` | The `#audit_axioms` command, and the gate that runs it over everything |
 | `Oris.lean` | Imports every proof module (what the gate audits) |
 | `Tools/XCheck.lean` | `lake exe xcheck`: replays `rbtree.rs`'s cross-check trace through the model |
+| `docs/heap-layer.md` | The design note for the next stage, the pointer layer (proposal) |
 | `scripts/check-imports.sh` | Fails if a module under `Oris/` escapes `Oris.lean`, hence the gate |
 | `CONVENTIONS.md`, `CLAUDE.md` | How proofs here are written, and the pre-commit checks |
 
@@ -103,7 +104,8 @@ difference, malformed input, and empty input.
 ## What is not (yet) proven, and the trust base
 
 - **The pointer layer.** The theorems are about the algorithm on zippers. That the pointer code
-  in `rbtree.rs` implements it is the next layer (`Oris/RB/Heap.lean`): each node with its chain
+  in `rbtree.rs` implements it is the next layer (`Oris/RB/Heap.lean`; design note:
+  [`docs/heap-layer.md`](docs/heap-layer.md)): each node with its chain
   of parents is a `(subtree, path)` pair, and each pointer write must be shown to perform the
   corresponding zipper step. Until then, the correspondence rests on the line-by-line
   transcription documented on each definition and on the cross-check above. The duplicate-key
