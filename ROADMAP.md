@@ -37,6 +37,25 @@ This invariant is the property that justifies maintaining two ports rather than 
 
 ---
 
+## Machine-checked proofs
+
+The trace gate shows that the two ports and HPHA *agree*; it cannot show that what they agree on is *correct*. [`Lean/`](Lean/README.md) does that part: machine-checked proofs, in Lean 4 and resting on Lean's kernel alone, about the algorithms `orisnik` runs. They hold for `orisnitsa` too, through the invariant above. A CI job (`lean-ci.yml`) also checks the proven model against the running Rust code, operation by operation, so a proof cannot drift away from what the code does. The rules are in [`Lean/CONVENTIONS.md`](Lean/CONVENTIONS.md).
+
+**Outside the release train.** Proofs change nothing that either port's users run: `Lean/` is not part of the `orisnik` crate or the `orisnitsa` tarball, and adding a theorem changes no API and no state transition. So proof work gets no version number of its own. Each stage lands on `main` when it is ready and is listed in the release notes of the next release. One exception: if a proof finds a port disagreeing with HPHA, the fix is a fidelity fix ([above](#fidelity-fixes-are-patches)). It ships as a patch in both ports, with an entry in `Cpp/ERRATA.md`, like any other.
+
+The stages, in order (each builds on the one before):
+
+- **The size arithmetic and the red-black tree's algorithm** ✅ *2026-11-14*:
+  - `round_up`, `normalize_size` and `MAX_ALLOCATION` (both sides of ERRATA E1), `Tree::grow`, and the bucket size classes, on 64-bit machine words.
+  - `rbtree.rs`'s insert and erase fix-ups, transcribed case by case on zippers. Proven: they keep the tree valid and ordered and hold exactly the right elements, with at most two and three rotations. HPHA's fix-up assertions are theorems too.
+  - The cross-check against the Rust code, on 20,000 operations.
+- **The heap layer — the tree's pointer code.** Proves that `rbtree.rs`'s pointer writes perform the proven zipper steps: each node with its chain of parents corresponds to a (subtree, path) pair. It also covers the equal-key chains (`insert_counted`'s `Chain` and `erase_counted`'s `Link` and `Promote` branches) and the sentinel's scratch fields. And it settles the one open question the first stage found: both ports read `erase_fixup`'s root once, where HPHA re-reads it. The expectation is that this never changes a transition, and the cross-check agrees so far; the heap layer is where that gets proven, or the fidelity fix made.
+- **Memory management — `tree.rs`'s invariants.** Built on the heap layer: block splitting and coalescing, what the free tree contains, and the aligned path's arithmetic (`extract_aligned`'s offsets, the split threshold), which the first stage left out.
+
+**What the proofs will not cover:** undefined behaviour, provenance and aliasing, and `Drop`. Miri remains the gate for those. Since 2026-11-14 it also runs the cross-check's operation sequence, so the pointer code of every tree fix-up case runs under it.
+
+---
+
 ## Milestones
 
 ### v0.1.0 — Foundation ✅ *Released 2026-08-17*

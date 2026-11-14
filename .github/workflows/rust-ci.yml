@@ -87,6 +87,13 @@ jobs:
         run: cargo miri test --features nightly,trace
         env:
           MIRIFLAGS: "-Zmiri-strict-provenance -Zmiri-tree-borrows"
+      # The Lean cross-check's trace producer is `#[ignore]`d (lean-ci.yml runs it natively, at
+      # 20,000 steps); under Miri it runs 1,000 steps, which reach every case of the red-black
+      # fix-ups, so the pointer code of each case runs under the soundness gate. About 12 minutes.
+      - name: Miri test of the red-black fix-ups' every case (the Lean cross-check's trace)
+        run: cargo miri test --lib rbtree::tests::print_lean_model_cross_check_trace -- --ignored
+        env:
+          MIRIFLAGS: "-Zmiri-strict-provenance -Zmiri-tree-borrows"
 
   miri-debug:
     # The same soundness gate for the debug allocator (`--features debug-allocator`):
