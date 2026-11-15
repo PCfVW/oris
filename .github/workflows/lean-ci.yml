@@ -39,7 +39,7 @@ env:
 jobs:
   proofs:
     name: Proofs, axiom audit and kernel replay
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: Lean
@@ -61,7 +61,7 @@ jobs:
 
   xcheck:
     name: Lean model against the Rust code
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -91,7 +91,7 @@ jobs:
     name: Lean CI success
     if: always()
     needs: [proofs, xcheck]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Every Lean job passed
         run: |

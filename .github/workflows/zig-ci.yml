@@ -23,7 +23,7 @@ jobs:
       fail-fast: false
       matrix:
         # Platform-specific OS-page layer → all three OSes are first-class.
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-24.04, windows-latest, macos-latest]
         # Debug + ReleaseSafe run with runtime safety checks ON (where leak
         # detection and checkAllAllocationFailures live); ReleaseFast confirms
         # the hot path compiles with safety OFF.
@@ -39,7 +39,7 @@ jobs:
         run: zig build test -Doptimize=${{ matrix.optimize }}
       # Independent of the optimize mode and the OS: once is enough.
       - name: API docs build
-        if: matrix.optimize == 'Debug' && matrix.os == 'ubuntu-latest'
+        if: matrix.optimize == 'Debug' && matrix.os == 'ubuntu-24.04'
         run: zig build docs
 
   # Aggregator gate: a single stable check to require in branch protection,
@@ -48,7 +48,7 @@ jobs:
     name: Zig CI success
     needs: [build-test]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: . # gate job has no checkout; override the Zig/ default

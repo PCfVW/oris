@@ -24,7 +24,7 @@ defaults:
 jobs:
   publish:
     name: Publish orisnik to crates.io
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Matches the crates.io Trusted Publishing config (PCfVW/oris, this filename,
     # environment crates-io). The filename rust-publish.yml is load-bearing.
     environment: crates-io

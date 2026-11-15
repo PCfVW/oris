@@ -10,6 +10,17 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ## [Unreleased]
 
+### Changed
+
+- **CI runs on `ubuntu-24.04`, pinned**, instead of `ubuntu-latest`, which GitHub is moving
+  to Ubuntu 26: the Linux image now changes only when the workflows say so.
+
+### Fixed
+
+- **`Cpp/oracle/build_trace_oracle.ps1` accepts an output directory containing a space.** Its
+  `"/Fo:$OutDir\"` ended in `\"`, which escapes the closing quote once PowerShell quotes the
+  argument, so `cl` rejected the command line. CI's temp path has no space and never hit it.
+
 ## [0.3.2] - 2026-11-15
 
 A fidelity patch (`ROADMAP.md` § *Fidelity fixes are patches*), plus the machine-checked proofs

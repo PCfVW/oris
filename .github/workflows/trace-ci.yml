@@ -31,7 +31,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-24.04, windows-latest, macos-latest]
     defaults:
       run:
         working-directory: benchmarks/scripts/tracegen
@@ -44,7 +44,7 @@ jobs:
         with:
           workspaces: benchmarks/scripts/tracegen
       - name: Formatting and lints
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-24.04'
         run: |
           cargo fmt --check
           cargo clippy --all-targets -- -D warnings
@@ -57,7 +57,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-24.04, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -158,7 +158,7 @@ jobs:
     # The benchmark harnesses and the mimalloc-bench shims are not part of either port's
     # package, so nothing else builds them; this keeps them from rotting as the ports change.
     name: Benchmark tools build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -184,7 +184,7 @@ jobs:
     name: Trace CI success
     needs: [tracegen, parity, oracle, bench-tools]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Fail if any required job did not succeed
         if: |
