@@ -31,7 +31,7 @@ jobs:
       matrix:
         # The OS-page layer is platform-specific (VirtualAlloc vs mmap), so all
         # three OSes are first-class. macOS runs on a free GitHub-hosted runner.
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-24.04, windows-latest, macos-latest]
         toolchain: ["1.85", "stable"] # 1.85 == MSRV (edition 2024 + strict provenance)
     steps:
       - uses: actions/checkout@v7
@@ -73,7 +73,7 @@ jobs:
     # `--features nightly` extends coverage to the optional `Allocator` trait
     # surface (allocator_trait.rs) — Miri already needs nightly, so this is free.
     name: Miri (nightly)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
@@ -105,7 +105,7 @@ jobs:
     # `tests/debug_global_allocator.rs` compiles to an empty `main` under Miri (the real
     # OS mapping cannot be interpreted), so it costs nothing here.
     name: Miri debug-allocator (nightly)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
@@ -129,7 +129,7 @@ jobs:
     # the `nightly` feature), so this was the only lane that could catch a lint
     # regression in it.
     name: nightly feature (nightly toolchain)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
@@ -156,7 +156,7 @@ jobs:
 
   docs:
     name: Doc (stable)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -180,7 +180,7 @@ jobs:
     name: Rust CI success
     needs: [check, miri, miri-debug, docs, nightly-feature]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: . # gate job has no checkout; override the Rust/ default

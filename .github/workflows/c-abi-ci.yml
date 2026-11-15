@@ -26,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-24.04, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -65,7 +65,7 @@ jobs:
       # carries a DT_SONAME/install-name of just its own bare filename. Without
       # one, the linker's fallback is to bake *whatever path it resolved the
       # library through* into the consuming binary's NEEDED entry — observed
-      # directly on ubuntu-latest, where switching from a bare relative path to
+      # directly on ubuntu-24.04, where switching from a bare relative path to
       # `-L<relative dir> -l<name>` made no difference; the NEEDED entry was
       # still "Rust/target/release/liborisnik.so" either way ("cannot open
       # shared object file", LD_LIBRARY_PATH notwithstanding — per ld.so(8), any
@@ -137,11 +137,11 @@ jobs:
     name: C-ABI CI success
     needs: [smoke-test]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       # `contains(needs.*.result, 'failure')` does NOT reliably surface a matrix
       # job's per-leg failures here — confirmed empirically (not just suspected):
-      # a genuine "smoke test on ubuntu-latest" step failure in this same job's
+      # a genuine "smoke test on ubuntu-24.04" step failure in this same job's
       # matrix left this step skipped and the job green. Check the dependency by
       # name instead; `!= 'success'` also catches 'cancelled'/'skipped'.
       - name: Fail if any required job did not succeed
