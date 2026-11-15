@@ -48,6 +48,18 @@ v0.3.0 additions, as of PR #8 (the v0.3.0 branch), CI run on the hosted runners:
 | Benchmark tools build (`bench-rust`, `aggregate`, the two shims, `bench-zig`) | — | CI | — |
 | The benchmarks themselves | local | local (WSL2) | never run |
 
+Additions since v0.3.2 (the Lean proofs, `Lean/`; the audit of 2026-11-15), CI run on the hosted
+runners:
+
+| Surface | Windows | Linux | macOS (Apple silicon runner) |
+|---|---|---|---|
+| Lean: `lake build --wfail`, the axiom audit `lake exe audit`, the kernel replay `leanchecker --fresh Oris` | local | CI | — (host-agnostic) |
+| Lean cross-check: `rbtree.rs`'s trace through both Lean models (`lake exe xcheck`) | local | CI | — (host-agnostic) |
+| Miri on the cross-check's producer (1,000 steps, chains and root-level fix-ups included) | — | CI | — (host-agnostic) |
+
+The publish workflows do not run Lean: `Lean/` ships in neither the crate nor the Zig tarball, so
+its gates are checked through `lean-ci.yml` and step 5 below.
+
 What the first CI runs found, so it is not forgotten:
 
 - **v0.3.0 — every replay step of `trace-ci.yml` failed silently**: GitHub runs `shell: bash`
@@ -146,12 +158,18 @@ place, empty, for the next cycle.
 - `zig fmt --check build.zig build.zig.zon src examples`
 - `zig build test` and `zig build test -Doptimize=ReleaseSafe`, then
   `zig build -Doptimize=ReleaseFast`
-- Confirm the last push of this commit to `main` shows green on **Rust CI**,
-  **Zig CI**, **C-ABI CI** and **Trace CI** (all four aggregators are required checks of the
-  `main protection` ruleset, since v0.3.0. The
-  publish/release workflows themselves independently re-run the Rust gauntlet and the Zig
-  Debug/ReleaseSafe/ReleaseFast + packaged-tarball build-test, but neither the C-ABI
-  smoke test nor the trace gate, so check those here).
+- The Lean proofs, from `Lean/` (`Lean/CLAUDE.md` gives the exact commands and expected output):
+  `lake build --wfail`, `lake exe audit` (it must print `standard axioms only` and `clean`),
+  `lake env leanchecker --fresh Oris`, and the cross-check
+  (`cargo test ... print_lean_model_cross_check_trace -- --ignored --nocapture | grep '^XC' |
+  lake exe xcheck`, with `pipefail` on): 20,000 operations, 0 mismatches, every coverage item
+  non-zero
+- Confirm the last push of this commit to `main` shows green on **Rust CI**, **Zig CI**,
+  **C-ABI CI**, **Trace CI** and **Lean CI** (their five aggregators are the required checks of
+  the `main protection` ruleset: the first four since v0.3.0, **Lean CI success** since
+  2026-11-15). The publish/release workflows themselves independently re-run the Rust gauntlet
+  and the Zig Debug/ReleaseSafe/ReleaseFast + packaged-tarball build-test, but neither the C-ABI
+  smoke test, the trace gate nor the Lean gates, so check those here).
 
 ## 6. Tag and push
 

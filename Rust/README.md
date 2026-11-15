@@ -9,7 +9,7 @@ A Rust port of [Oris](https://github.com/PCfVW/oris) — a Rust and Zig port of 
 [![License](https://img.shields.io/crates/l/orisnik)](https://github.com/PCfVW/oris/blob/main/LICENSE-MIT)
 [![Zig sibling: orisnitsa](https://img.shields.io/badge/zig%20sibling-orisnitsa-f7a41d?logo=zig)](https://github.com/PCfVW/oris/releases)
 
-**v0.3.1 is released on crates.io.** See the [project repo](https://github.com/PCfVW/oris) for the Zig sibling and full history.
+**v0.3.2 is released on crates.io.** See the [project repo](https://github.com/PCfVW/oris) for the Zig sibling and full history.
 
 ## What's here
 
@@ -19,7 +19,7 @@ A Rust port of [Oris](https://github.com/PCfVW/oris) — a Rust and Zig port of 
   - **`oris_*`** — a C-shaped API (`oris_new`, `oris_alloc`, `oris_free`, `oris_realloc`, ...), instance-scoped via an explicit handle — never a hidden global. `cargo build --release` also emits real linkable `liborisnik.so`/`.dylib`/`orisnik.dll` + `liborisnik.a`/`orisnik.lib` artifacts (`crate-type = ["lib", "cdylib", "staticlib"]`); pair with [`include/oris.h`](include/oris.h) (vendored here — byte-identical to [the canonical copy](https://github.com/PCfVW/oris/blob/main/include/oris.h), so this package is self-contained) to link from C/C++.
   - **`unsafe impl GlobalAlloc`** — opt in as a `#[global_allocator]`.
   - **`unsafe impl core::alloc::Allocator`** — optional, behind the `nightly` Cargo feature, for `Box::new_in`/`Vec::new_in`.
-- 118 tests (215 with `debug-allocator`, 130 with `trace`, 225 with both). The **entire public surface** runs under Miri
+- 118 tests (216 with `debug-allocator`, 130 with `trace`, 226 with both). The **entire public surface** runs under Miri
   (`-Zmiri-strict-provenance -Zmiri-tree-borrows`); the only tests skipped there are `os.rs`'s
   own real-syscall tests, which Miri cannot interpret, the manual C++ oracle tool, and the
   `Recorder` doc example, which reaches the real syscalls too (a unit test covers its calls).

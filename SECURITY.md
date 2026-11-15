@@ -67,7 +67,8 @@ allocator:
 
 | Version | Supported |
 |---|---|
-| 0.3.1 | ✅ |
+| 0.3.2 | ✅ |
+| 0.3.1 | ⚠️ — superseded; upgrade to 0.3.2 (a fidelity fix to the opt-in debug allocator: an overrun just past a request of 1 to 7 bytes is now detected, as in HPHA; no security fix was needed in release builds) |
 | 0.3.0 | ⚠️ — superseded; upgrade to 0.3.1 (documentation only: docs.rs now shows the feature-gated API; no security fix was needed) |
 | 0.2.0 | ⚠️ — superseded; upgrade to 0.3.0 (adds the opt-in `trace` feature, `letopis`; no security fix was needed) |
 | 0.1.1 | ⚠️ — superseded; upgrade to 0.2.0 (adds the opt-in debug allocator; no security fix was needed) |
