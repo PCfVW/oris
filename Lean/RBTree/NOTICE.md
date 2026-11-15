@@ -27,8 +27,11 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Leonardo de Moura, Mario Carneiro
 ```
 
-`LICENSE` in this directory is upstream's Apache License 2.0, copied verbatim. Apache-2.0 is
-compatible with Oris's `MIT OR Apache-2.0`.
+`LICENSE` in this directory is upstream's Apache License 2.0, copied verbatim. This directory is
+licensed under Apache-2.0 only, not under the MIT option of the rest of Oris (the root `LICENSE`
+says so); Apache-2.0 is compatible with Oris's `MIT OR Apache-2.0`. Upstream's `README.md`,
+copied verbatim, links `../LICENSE`, which here would be `Lean/LICENSE`: the license it means is
+`LICENSE` in this directory.
 
 ## Changes from upstream
 

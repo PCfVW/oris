@@ -679,7 +679,8 @@ unsafe fn insert_fixup(head: *mut NodeBase, node: *mut NodeBase) -> u32 {
 /// Rebalances after a black node was spliced out during erase, starting from the
 /// child (`node`) that took its place (possibly the tree's own nil sentinel — that is
 /// exactly the "double black at an empty subtree" case this walk terminates from via
-/// the `cur != root` / `cur` red checks, matching HPHA exactly), and returns the number
+/// the `cur != root` / `cur` red checks, as in HPHA, except that `root` is read once, on
+/// entry, where HPHA re-reads it: `Lean/docs/heap-layer.md` §6), and returns the number
 /// of rotations it performed (at most three). Ports
 /// `intrusive_multi_rbtree_base::erase_fixup` (`Cpp/hpha.cpp`); the count is this port's
 /// addition, for the transition record's `rot=` field.

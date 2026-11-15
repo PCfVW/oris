@@ -15,7 +15,7 @@ and proves them correct against the vendored library's red-black invariants.
 What this file establishes is about the *algorithm* `rbtree.rs` runs. That the pointer code
 implements this algorithm is the next layer (`Oris/RB/Heap.lean`: the definitions, and the first
 refinement theorems); this file's definitions are written so that each case can be checked against
-the Rust line by line, and each case's doc names the lines it transcribes.
+the Rust line by line, and each case's doc quotes the Rust statements it performs.
 
 ## Fidelity rules followed below
 
@@ -28,18 +28,23 @@ the Rust line by line, and each case's doc names the lines it transcribes.
   without testing it). So the model agrees with the Rust on *every* input of the shapes it
   matches, not only on valid trees.
 - Where the model deliberately does *not* follow the Rust, it is on states the theorems prove
-  unreachable (they all assume a valid tree with a black root, `Path.Balanced black`), with one
-  exception, the last item. The complete list:
+  unreachable (they all assume a valid tree with a black root, `Path.Balanced black`), with two
+  exceptions, both reachable: the `paint`/`setBlack`/`setRed` item, which changes nothing (it
+  would write black over black), and the last item. The complete list:
   * `insFix`, a red parent with no grandparent (a red root): the Rust would take the sentinel for
     the grandparent and rotate it; the model stops. HPHA asserts `pp != &mHead`;
     `hpha_grandparent_not_sentinel_left` and `_right` prove it cannot happen.
   * `rotate` without the child that comes up: the Rust precondition fails; the model is the
-    identity.
+    identity. No separate theorem states that this never happens: every rotation the proofs
+    reason about (`insFix_balanced`, `stage2L_balanced`, `stage2R_balanced`) is applied to a
+    subtree whose shape the proof has just established.
   * `stage2L`/`stage2R`, a `nil` sibling (HPHA asserts `w != &mHead`;
-    `hpha_sibling_not_sentinel_left` and `_right` prove it cannot happen): the Rust would read the
-    sentinel's links; the model goes on as in the second case.
-  * `eraseAt` on `nil`, or with a leftmost node that is `nil`: impossible shapes; the model returns
-    the tree with an empty hole and no rotation.
+    `hpha_sibling_not_sentinel_left` and `_right` prove it cannot happen at the loop top, and
+    `hpha_sibling_after_case1_not_sentinel_left` and `_right` after the first case): the Rust
+    would read the sentinel's links; the model goes on as in the second case.
+  * `eraseAt` on `nil` (the descent found no node, a case `erase` does not call it in), or with a
+    leftmost node that is `nil` (impossible: `leftmost_node`): the model returns the tree with an
+    empty hole and no rotation.
   * `paint`, `setBlack` and `setRed` leave `nil` alone, where the Rust's `make_black` on the
     sentinel writes its colour bit. It is reachable only as the final `make_black(cur)` of an
     erase that empties the tree, and writes black over black; the sentinel's colour, like its
@@ -51,10 +56,12 @@ the Rust line by line, and each case's doc names the lines it transcribes.
     `cur = root`; the Rust (and Zig) read it once, on entry, and use that value in the loop test,
     in the fourth case's `cur = root` and so in the final `make_black(cur)`. At this level nodes
     have no identity, so the model follows HPHA (see `delFix` for when the stale value is used,
-    and why it is expected to change nothing). This is the one departure that is not about an
-    unreachable state: whether the two readings ever differ is a question for the heap layer. The
-    model's agreement with the running Rust code on 20,000 operations (`Lean/README.md`) is
-    evidence that they do not.
+    and why it is expected to change nothing). Of the two reachable departures, this is the one
+    that could change a transition: whether the two readings ever differ is a question for the
+    heap layer, which models both (`Oris/RB/Heap.lean`, `eraseFixup` and `eraseFixupHpha`). The
+    evidence so far: on every erase of the cross-check (`Lean/README.md`), the heap model runs
+    both readings and they leave the same heap, and this model agrees with the running Rust code
+    on every rotation count, shape and colour.
 -/
 
 open RBTree RBTree.RBNode RBTree.RBColor
@@ -155,8 +162,9 @@ theorem balanced_black_of_not_red {u : RBNode α} {c : RBColor} {n : Nat}
   | black ha hb => exact .black ha hb
 
 /-- HPHA's `insert_fixup` assertion `assert(pp != &mHead)` (`cur` a left child): under a red
-parent there is always a grandparent, because the root is black. This is why `insFix`'s one
-departure from the Rust (it stops on a red parent with no grandparent) is unreachable. -/
+parent there is always a grandparent, because the root is black. This is why `insFix`'s
+red-root departure from the Rust (it stops on a red parent with no grandparent) is
+unreachable. -/
 theorem hpha_grandparent_not_sentinel_left {pp : Path α} {y : α} {b : RBNode α} {c : RBColor}
     {n n₀ : Nat} (hp : (Path.left red pp y b).Balanced black n₀ c n) : pp ≠ .root := by
   rintro rfl
@@ -292,13 +300,13 @@ def insert (cmp : α → α → Ordering) (t : RBNode α) (v : α) : RBNode α �
   | (nil, path) => let r := insFix path (node red nil v nil); (r.1, .node, r.2)
   | (node .., _) => (t, .chain, 0)
 
-/-- **Oris's insert is correct.** On a valid red-black tree with a black root (Oris's tree always
-has one), `insert_counted` either finds an element equal to the key and chains (`Chain`: the tree
-of keys is left as it is, no rotation), or returns a valid red-black tree with a black root,
-ordered, holding **exactly the same elements in the same order as the library's verified
-`RBNode.insert`** (whose tree has a different shape: it balances the Okasaki way), after at most
-two rotations. -/
-theorem insert_spec [Std.TransCmp cmp] {t : RBNode α} {n : Nat}
+/-- **Oris's insert is correct.** On an ordered, valid red-black tree with a black root (Oris's
+tree always is one), `insert_counted` either finds an element equal to the key and chains
+(`Chain`: the tree of keys is left as it is, no rotation), or returns a valid red-black tree with
+a black root, ordered, holding **exactly the same elements in the same order as the library's
+verified `RBNode.insert`** (whose tree has a different shape: it balances the Okasaki way), after
+at most two rotations. -/
+theorem insert_spec {t : RBNode α} {n : Nat}
     (ho : t.Ordered cmp) (hb : t.Balanced black n) (v : α) :
     match insert cmp t v with
     | (t', .chain, rot) => t' = t ∧ rot = 0 ∧ ∃ x, x ∈ t ∧ cmp v x = .eq
@@ -331,7 +339,7 @@ def paint (c : RBColor) : RBNode α → RBNode α
   | node _ a x b => node c a x b
   | nil => nil
 
-/-- Applies `f` to a node's child on side `s` (the Rust's `make_black(w.child(o))` and the like). -/
+/-- `make_black(w.child(o))` and the like: applies `f` to a node's child on side `s`. -/
 def mapChild (s : Side) (f : RBNode α → RBNode α) : RBNode α → RBNode α
   | node c a x b => match s with
     | .left => node c (f a) x b
@@ -345,11 +353,11 @@ def child (s : Side) : RBNode α → RBNode α
     | .right => b
   | nil => nil
 
-/-- The part of one `erase_fixup` iteration that follows its first case (`w` red), for `cur` the
-**left** child of `p` (`s = Left`, `o = Right`), `p` of colour `pc` and key `y`, `w` the sibling,
-`pp` the path above `p`. Returns `none` for the second case (`w`'s children both black: the Rust
-makes `w` red and continues from `p`; the caller performs that step), or the finished tree and
-the rotations of the third and fourth cases:
+/-- `rbtree.rs` `erase_fixup`, the part of one iteration that follows its first case (`w` red),
+for `cur` the **left** child of `p` (`s = Left`, `o = Right`), `p` of colour `pc` and key `y`,
+`w` the sibling, `pp` the path above `p`. Returns `none` for the second case (`w`'s children both
+black: the Rust makes `w` red and continues from `p`; the caller performs that step), or the
+finished tree and the rotations of the third and fourth cases:
 
 * third case, `w.child(o)` black: `make_black(w.child(s)); make_red(w); rotate(w, o); w = c`;
 * fourth case: `set_colour(w, colour(p)); make_black(p); make_black(w.child(o)); rotate(p, s);
@@ -357,7 +365,8 @@ the rotations of the third and fourth cases:
   (see `delFix` on why this is HPHA's "fresh root" reading).
 
 A `nil` sibling is unreachable (HPHA asserts `w != &mHead`; `hpha_sibling_not_sentinel_left`
-proves it); the model returns `none` there. -/
+proves it at the loop top, `hpha_sibling_after_case1_not_sentinel_left` after the first case);
+the model returns `none` there. -/
 def stage2L (pc : RBColor) (pp : Path α) (y : α) (w x : RBNode α) : Option (RBNode α × Nat) :=
   match w with
   | nil => none
@@ -404,10 +413,15 @@ anything is a question about node identity, settled in the heap layer. The expec
 proven there: the root changes only by a rotation at `p == root`. After the first case at the
 root, a second case stops the loop on `red(p)` before the stale value is compared, and a fourth
 case finishes as below. After a fourth case, the stale root *is* used, as `cur = root` (ending the
-loop) and by the final `make_black(cur)`, but it is then the old `p`, which `make_black(p)` has
-just made black, so that write changes nothing, while HPHA's lands on the new root, already black
-too. The cross-check (`Lean/README.md`: 20,000 operations, the model agreeing with the running Rust
-on every rotation count, shape and colour) is the evidence so far. -/
+loop) and by the final `make_black(cur)`. If that fourth case rotated at the root, the stale
+value is the old `p`, which `make_black(p)` has just made black, so that write changes nothing,
+while HPHA's lands on the new root, already black too; otherwise it is still the true root, and
+both readings write the same node. The evidence so far: the heap model runs both readings on
+every erase of the cross-check (`Lean/README.md`) and they leave the same heap.
+
+One more departure, reachable and harmless: at the `.root` arm with `x` the sentinel (an erase
+that empties the tree), `x.setBlack` leaves `nil` alone, where the Rust's final
+`make_black(cur)` writes the sentinel's colour bit, black over black. -/
 def delFix (path : Path α) (x : RBNode α) : RBNode α × Nat :=
   if red? x then (path.fill x.setBlack, 0)
   else match path with
@@ -641,17 +655,20 @@ theorem stage2R_balanced {pc : RBColor} {pp : Path α} {y : α} {w x : RBNode α
 
 /-! ### HPHA's `erase_fixup` assertions, as theorems
 
-`Cpp/hpha.cpp`'s `erase_fixup` asserts three facts, the first at three sites, that the Rust
-neither checks nor proves. Each is a theorem here, under the invariant `delFix` runs with (`cur`'s
-hole has black-height `n + 1`, `cur` itself one less):
+`Cpp/hpha.cpp`'s `erase_fixup` asserts three facts, in five `assert` statements (the first fact
+at three sites), that the Rust neither checks nor proves. Each is a theorem here, under the
+invariant `delFix` runs with (`cur`'s hole has black-height `n + 1`, `cur` itself one less):
 
 | HPHA | Theorems (`_left`/`_right`) |
 |---|---|
 | `assert(w != &mHead)`, loop top | `hpha_sibling_not_sentinel` |
-| `assert(w != &mHead)`, after the first case | `hpha_sibling_after_case1_not_sentinel` |
+| `assert(w != &mHead)`, after the first case's block | `hpha_sibling_after_case1_not_sentinel` |
 | `assert(w != &mHead)`, after the third case | `hpha_sibling_after_case3_not_sentinel` |
 | `assert(w->child(LEFT)->black() && ...)` | `hpha_red_sibling_children_black` |
-| `assert(w->child(o)->red())` | `hpha_far_child_red` | -/
+| `assert(w->child(o)->red())` | `hpha_far_child_red` |
+
+The second `w != &mHead` runs after the first case's block whether that case ran or not; when it
+did not, `w` is the loop top's, covered by `hpha_sibling_not_sentinel`. -/
 
 /-- `assert(w != &mHead)` (`cur` a left child): the sibling is never the sentinel, because the
 sibling's black-height is `n + 1 ≥ 1` and the sentinel's is 0. -/
@@ -775,7 +792,7 @@ left by splicing out a black node), and is a valid subtree except that, when it 
 have one red child (the state the second case leaves after the first: `p` red with `w` made
 red). The result is a valid red-black tree with a black root.
 
-The proof follows `delFix` case by case. HPHA's three assertions, which it relies on
+The proof follows `delFix` case by case. HPHA's three asserted facts, which it relies on
 implicitly, are stated and proven separately above (`hpha_sibling_not_sentinel_left` and its
 neighbours). -/
 theorem delFix_balanced_aux : ∀ (k : Nat) {path : Path α} {x : RBNode α} {c : RBColor}
@@ -913,6 +930,7 @@ theorem delFix_balanced_aux : ∀ (k : Nat) {path : Path α} {x : RBNode α} {c 
             exact key (.black hwl hwr) hpp fun _ _ hl hr' =>
               delFix_balanced_aux k (by simp at hk; omega) hpp
                 (.balanced (.black (.red hl hr') hxb))
+
 /-- **The erase fix-up restores the red-black invariant** (see `delFix_balanced_aux`, which
 carries the size bound its recursion needs). -/
 theorem delFix_balanced {path : Path α} {x : RBNode α} {c : RBColor} {n n₀ : Nat}
@@ -929,7 +947,7 @@ inductive EraseKind where
   | node
   deriving DecidableEq, Repr
 
-/-- The descent to the in-order successor in `erase_counted` (`repl = right; while
+/-- `rbtree.rs` `erase_counted`'s descent to the in-order successor (`repl = right; while
 repl.child(Left) != end { repl = repl.child(Left) }`), recording the path as it goes: returns the
 leftmost node of `t` and the path to it, extending `p`. -/
 def leftmost : RBNode α → Path α → RBNode α × Path α
@@ -990,7 +1008,11 @@ on the zipper: `t` is the erased node's subtree, `path` the path to it.
   under a node of the erased node's colour `c` carrying `m`.
 
 Then, if `repl` was black, `erase_fixup` runs from `repl`'s old child (`repl_child`, possibly the
-sentinel); if it was red, nothing more happens (no rotation, no final `make_black`). -/
+sentinel); if it was red, nothing more happens (no rotation, no final `make_black`).
+
+Two departures, both on impossible shapes: on `nil` (no node to erase; `erase` never calls
+`eraseAt` there) and when the leftmost node of the right subtree is `nil` (impossible by
+`leftmost_node`), the model returns the tree with an empty hole and no rotation. -/
 def eraseAt (path : Path α) : RBNode α → RBNode α × Nat
   | nil => (path.fill nil, 0)
   | node c l _ nil => match c with
@@ -1008,11 +1030,11 @@ def eraseAt (path : Path α) : RBNode α → RBNode α × Nat
       | black => delFix p' mr
     | nil => (path.fill nil, 0)
 
-/-- **Oris's erase is correct.** On a valid red-black tree with a black root, erasing the element
-the descent finds (`zoom` returns its subtree `node c l x r` and the path to it) removes exactly
-that element, keeps every other element in order, and leaves a valid red-black tree with a black
-root, after at most three rotations. -/
-theorem eraseAt_spec [Std.TransCmp cmp] {t : RBNode α} {n : Nat} {c : RBColor} {l r : RBNode α}
+/-- **Oris's erase is correct.** On an ordered, valid red-black tree with a black root, erasing the
+element the descent finds (`zoom` returns its subtree `node c l x r` and the path to it) removes
+exactly that element, keeps every other element in order, and leaves a valid red-black tree with
+a black root, after at most three rotations. -/
+theorem eraseAt_spec {t : RBNode α} {n : Nat} {c : RBColor} {l r : RBNode α}
     {x : α} {path : Path α}
     (ho : t.Ordered cmp) (hb : t.Balanced black n) (hz : zoom cut t = (node c l x r, path)) :
     t.toList = path.withList (l.toList ++ x :: r.toList) ∧
@@ -1137,12 +1159,13 @@ def erase (cmp : α → α → Ordering) (t : RBNode α) (v : α) : Option (RBNo
   | (node c l x r, path) => let q := eraseAt path (node c l x r); some (q.1, .node, q.2)
   | (nil, _) => none
 
-/-- **Oris's erase is correct.** On a valid red-black tree with a black root, erasing `v`:
+/-- **Oris's erase is correct.** On an ordered, valid red-black tree with a black root, for a
+transitive comparison (`Std.TransCmp`, which the lookup needs), erasing `v`:
 
 - if some element of the tree compares equal to `v`, finds it (`some`), removes exactly that
-  element (`cmp v x = .eq`; the ordering makes it the only one), keeps all the others in order,
-  and leaves a valid red-black tree with a black root, after at most three rotations
-  (`eraseAt_spec` at the node the descent finds);
+  element (`cmp v x = .eq`; `erase_unique` adds that no element left compares equal to `v`),
+  keeps all the others in order, and leaves a valid red-black tree with a black root, after at
+  most three rotations (`eraseAt_spec` at the node the descent finds);
 - returns `none` only if no element compares equal to `v`, the case the Rust's contract (the node
   is in the tree) excludes. -/
 theorem erase_spec [Std.TransCmp cmp] {t : RBNode α} {n : Nat}
@@ -1162,5 +1185,36 @@ theorem erase_spec [Std.TransCmp cmp] {t : RBNode α} {n : Nat}
     rw [hf] at this; cases this
   · obtain ⟨h1, h2, h3, h4, h5⟩ := eraseAt_spec ho hb hz
     exact ⟨l, x, r, path, Path.zoom_zoomed₁ hz, h1, h2, h3, h4, h5⟩
+
+/-- **The element erased is the only one equal to the key.** After a successful erase of `v`, no
+element left in the tree compares equal to `v`: in an ordered tree, every other element is
+strictly below or above the one erased. -/
+theorem erase_unique [Std.TransCmp cmp] {t : RBNode α} {n : Nat}
+    (ho : t.Ordered cmp) (hb : t.Balanced black n) (v : α) :
+    match erase cmp t v with
+    | some (t', _, _) => ∀ y ∈ t'.toList, cmp v y ≠ .eq
+    | none => True := by
+  have hs := erase_spec ho hb v
+  rcases he : erase cmp t v with _ | ⟨t', k, rot⟩
+  · trivial
+  · rw [he] at hs
+    obtain ⟨l, x, r, path, hx, h1, h2, -⟩ := hs
+    intro y hy hyv
+    have hp := ordered_iff.1 ho
+    rw [h1] at hp
+    rw [h2] at hy
+    have hp' : List.Pairwise (cmpLT cmp)
+        ((path.listL ++ l.toList) ++ x :: (r.toList ++ path.listR)) := by
+      simpa [Path.withList, List.append_assoc] using hp
+    have hy' : y ∈ (path.listL ++ l.toList) ∨ y ∈ (r.toList ++ path.listR) := by
+      simp only [Path.withList, List.mem_append] at hy ⊢
+      rcases hy with (h | h | h) | h <;> simp [h]
+    have hxy : cmp x y = .eq := Std.TransCmp.eq_trans (Std.OrientedCmp.eq_symm hx) hyv
+    rw [List.pairwise_append, List.pairwise_cons] at hp'
+    obtain ⟨_, ⟨hB, _⟩, hAB⟩ := hp'
+    rcases hy' with hy' | hy'
+    · have := hAB y hy' x (by simp); rw [cmpLT_iff] at this
+      rw [Std.OrientedCmp.eq_comm.mp hxy] at this; cases this
+    · have := hB y hy'; rw [cmpLT_iff, hxy] at this; cases this
 
 end Oris.RB

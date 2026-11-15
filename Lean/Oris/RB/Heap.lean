@@ -4,13 +4,18 @@ import Oris.RB.Fixup
 /-!
 # `rbtree.rs`'s pointer code, on a model heap
 
-Steps 1 and 2 of the heap layer (`Lean/docs/heap-layer.md`). The definitions (step 1): every
-function below transcribes one function of `Rust/src/rbtree.rs`, **one heap update per Rust
-write, in the Rust's order**, with every read where the Rust reads it. The abstraction relation
-and the first refinement theorem (step 2): when a heap represents a zipper state of
-`Oris/RB/Fixup.lean` (`Rep`, `RepPath`, `Located`, `Tree`), and `rotate` performing the
-zipper's rotation (`rotate_refines_left`, `rotate_refines_right`). The theorems that the other
-functions perform their zipper steps are steps 3 and 4 of the note.
+Steps 1 and 2 of the heap layer, as numbered in the plan of `Lean/docs/heap-layer.md` (§5;
+§4 numbers the theorems, `rotate_refines` being its first).
+
+- **Step 1, the definitions.** Every function below transcribes one function of
+  `Rust/src/rbtree.rs`, **one heap update per Rust write, in the Rust's order**, with every read
+  where the Rust reads it.
+- **Step 2, the abstraction relation and the first refinement theorem.** `Rep`, `RepPath`,
+  `Located` and `Tree` say when a heap represents a zipper state of `Oris/RB/Fixup.lean`, and
+  `rotate_refines_left` and `rotate_refines_right` prove that `rotate` performs the zipper's
+  rotation.
+
+That the other functions perform their zipper steps is the plan's steps 3 and 4.
 
 ## The model (the note's §2)
 
@@ -22,23 +27,30 @@ functions perform their zipper steps are steps 3 and 4 of the note.
   (`Heap.modify`). The Rust's `NodeBase` primitives that write the `parent` word
   (`set_parent_ptr`, `set_parent_side`, `set_colour`) are each one read-modify-write of that
   word, so each is one `Heap.modify` here.
-- Rust's `Colour` is a `Bool` (`true` for red), the colour bit itself.
+- Rust's `Colour` enum is modelled as a `Bool` (`true` for red), the colour bit itself.
 - Keys: the descent of `insert_counted` compares nodes with the Rust's `T::cmp`; here, with
   `cmp (key a) (key b)` for a fixed `key : Addr → α`.
 - The loops (`insert_fixup`, `erase_fixup` and the two descents) take explicit fuel and return
-  `none` when it runs out. That is this file's only departure from the Rust: the Rust loops
-  until the tree's structure stops them, and steps 3 and 4 will prove that fuel at least the
-  tree's height (or size, for the descents) always suffices.
-
-## Not modelled
-
-- The lazy sentinel (`head_ptr`'s first-touch self-linking): the operations here take an
-  initialized `head`. `initHead` performs that first touch's writes, for tools that start from
-  an empty tree.
-- The Rust's `debug_assert!`s, and the rotation witness `tests::count_rotation`.
+  `none` when it runs out. That is this file's one departure from the Rust's behaviour, and it
+  is not yet proven unreachable: the Rust loops until the tree's structure stops them. Each loop
+  spends one unit of fuel on its final, failing test, so the plan's steps 3 and 4 will prove
+  that fuel at least the tree's height **plus one** (its size plus one, for the descents)
+  always suffices. Each loop's doc repeats this.
 - `erase_fixup`'s root comes in two readings: `eraseFixup` reads it once on entry, as the Rust
   does, and `eraseFixupHpha` re-reads it, as `Cpp/hpha.cpp` does. The note's §6 plans the theorem
   that they agree.
+
+## Not modelled
+
+Reads and effects of the Rust that change no field of any node, each also named in the doc of
+the definition it concerns:
+- The lazy sentinel (`head_ptr`): its first-touch self-linking, and the test of
+  `head.children[Right]` it makes on every call (twice in `insert_counted`, through `head_ptr`
+  and `root`). The operations here take an initialized `head`; `initHead` performs that first
+  touch's writes, for tools that start from an empty tree.
+- The Rust's `debug_assert!`s and their reads (`switch_with`'s `is_attached(node)` and
+  `this != node`, `erase_counted`'s `repl != head` and `is_attached(repl)`).
+- The rotation witness `tests::count_rotation`, which `rotate` calls in test builds.
 -/
 
 namespace Oris.RB
@@ -151,9 +163,11 @@ def initHead (h : Heap) (head : Addr) : Heap :=
 /-! ## Structural operations -/
 
 /-- `NodeBase::rotate`: rotates `this` down and its side-`o` child (`o = s.other`) up into
-`this`'s former position. Three reads, then nine writes, in the Rust's order. When `top`'s
-side-`s` child is the sentinel, the second and third writes land on the sentinel's `parent` word
-(its scratch fields; `docs/heap-layer.md`, §1). -/
+`this`'s former position. Four reads (`this`'s side and parent, its side-`o` child `top`, and
+`top`'s side-`s` child), then nine writes, in the Rust's order. When `top`'s side-`s` child is
+the sentinel, the second and third writes land on the sentinel's `parent` word (its scratch
+fields; `docs/heap-layer.md`, §1). Not modelled: the test builds' call to
+`tests::count_rotation`. -/
 def rotate (h : Heap) (this : Addr) (s : Side) : Heap :=
   let o := s.other
   let ps := parentSide h this
@@ -186,7 +200,8 @@ def attachTo (h : Heap) (this parent : Addr) (s : Side) : Heap :=
 
 /-- `NodeBase::substitute_with`: `child` takes `this`'s place under `this`'s parent, its own
 colour untouched. When `child` is the sentinel, this writes the sentinel's scratch `parent` and
-side: how `erase_fixup` later finds an empty hole's parent. -/
+side: how `erase_fixup` later finds an empty hole's parent, unless `switch_with` overwrites them
+first (see `switchWith`). -/
 def substituteWith (h : Heap) (this child : Addr) : Heap :=
   let ps := parentSide h this
   let thisParent := parent h this
@@ -195,7 +210,14 @@ def substituteWith (h : Heap) (this child : Addr) : Heap :=
   setChild h thisParent ps child
 
 /-- `NodeBase::switch_with`: `this` takes `node`'s tree position, children and colour. The
-reads of `node`'s parent and colour come after the writes before them, as in the Rust. -/
+reads of `node`'s parent and colour come after the writes before them, as in the Rust.
+
+When one of `node`'s children is the sentinel at the time of the call, the writes to that
+child's `parent` word land on the sentinel's scratch fields. This happens in a two-child erase
+whose successor `repl` was `node`'s right child with no right child of its own: `substitute_with`
+has just written the sentinel's scratch `parent` as `node`, and this overwrites it as `this`
+(`repl`), side right, which is where the hole now is; `erase_fixup` reads this second value. Not
+modelled: the `debug_assert!`s on `is_attached(node)` and `this != node`. -/
 def switchWith (h : Heap) (this node : Addr) : Heap :=
   let nps := parentSide h node
   let nodeLeft := child h node .left
@@ -236,10 +258,11 @@ def linkIntoChain (h : Heap) (this node : Addr) : Heap :=
 
 /-! ## The fix-ups -/
 
-/-- The loop of `rbtree.rs` `insert_fixup`, from its test `while red(p)`, with the rotations
-counted so far. The first branch is the red uncle (recolour and climb); the second rotates once
-or twice and leaves `p` black, so the next test ends the loop. On exit:
-`make_black(head.child(Left))`, the root as it is then. -/
+/-- The loop of `rbtree.rs` `insert_fixup`, from its test `while red(p)`, with the rotations counted
+so far. The first branch is the red uncle (recolour and climb); the second rotates once or twice and
+leaves `p` black, so the next test ends the loop. On exit: `make_black(head.child(Left))`, the root
+as it is then. The fuel is this file's one departure from the Rust (see the module doc): `none` when
+it runs out. -/
 def insertFixupLoop (head : Addr) : Nat → Heap → Addr → Addr → Nat → Option (Heap × Nat)
   | 0, _, _, _, _ => none
   | fuel + 1, h, cur, p, rotations =>
@@ -249,12 +272,15 @@ def insertFixupLoop (head : Addr) : Nat → Heap → Addr → Addr → Nat → O
       let o := s.other
       let ppRight := child h pp o
       if red h ppRight then
+        -- Red uncle: `make_black(p); make_black(pp_right); make_red(pp); cur = pp`.
         let h := makeBlack h p
         let h := makeBlack h ppRight
         let h := makeRed h pp
         let cur := pp
         insertFixupLoop head fuel h cur (parent h cur) rotations
       else
+        -- Black uncle: if `cur == p_o_child`, `cur = p; rotate(cur, s)` first (inner case),
+        -- then `make_black(p); make_red(pp); rotate(pp, o)`.
         let pOChild := child h p o
         let (h, cur, p, rotations) :=
           if cur = pOChild then
@@ -271,17 +297,20 @@ def insertFixupLoop (head : Addr) : Nat → Heap → Addr → Addr → Nat → O
       some (makeBlack h root, rotations)
 
 /-- `rbtree.rs` `insert_fixup`: rebalances after `attach_to` attached `node` as a red leaf, and
-returns the rotations performed. -/
+returns the rotations performed. The fuel is this file's one departure from the Rust (see the module
+doc): `none` when it runs out. -/
 def insertFixup (fuel : Nat) (h : Heap) (head node : Addr) : Option (Heap × Nat) :=
   insertFixupLoop head fuel h node (parent h node) 0
 
-/-- The loop of `rbtree.rs` `erase_fixup`, from its test `while !red(cur) && cur != root`, with
-the rotations counted so far. `reread` chooses how `root` is read: `false` is the Rust's (the
-value `root₀` read once on entry, used in the loop test and for the fourth case's
-`cur = root`), `true` is `Cpp/hpha.cpp`'s (`mHead.child(LEFT)`, read afresh at each of those
-uses). The first case (`w` red) runs first if it applies, then the second (`w`'s children both
-black: `make_red(w); cur = p`), or the third if it applies and the fourth (which ends the loop).
-On exit: `make_black(cur)`. -/
+/-- The loop of `rbtree.rs` `erase_fixup`, from its test `while !red(cur) && cur != root`, with the
+rotations counted so far. `reread` chooses how `root` is read: `false` is the Rust's (the value
+`root₀` read once on entry, used in the loop test and for the fourth case's `cur = root`), `true` is
+`Cpp/hpha.cpp`'s (`mHead.child(LEFT)`, read afresh at each of those uses). The first case (`w` red)
+runs first if it applies, then the second (`w`'s children both black: `make_red(w); cur = p`), or
+the third if it applies and the fourth (which ends the loop). On exit: `make_black(cur)`. With
+`reread`, the root is read before the test's `&&`, where HPHA reads it only when `cur` is black: a
+read, so no field changes. The fuel is this file's one departure from the Rust (see the module doc):
+`none` when it runs out. -/
 def eraseFixupLoop (head : Addr) (reread : Bool) (root₀ : Addr) :
     Nat → Heap → Addr → Nat → Option (Heap × Nat)
   | 0, _, _, _ => none
@@ -333,10 +362,10 @@ def eraseFixupLoop (head : Addr) (reread : Bool) (root₀ : Addr) :
     else
       some (makeBlack h cur, rotations)
 
-/-- `erase_fixup` with its root read as `reread` chooses (see `eraseFixupLoop`): rebalances after
-a black node was spliced out, starting from the child that took its place (possibly the
-sentinel), and returns the rotations performed. `root₀` is read on entry, as the Rust reads
-`root`. -/
+/-- `erase_fixup` with its root read as `reread` chooses (see `eraseFixupLoop`): rebalances after a
+black node was spliced out, starting from the child that took its place (possibly the sentinel), and
+returns the rotations performed. `root₀` is read on entry, as the Rust reads `root`. The fuel is
+this file's one departure from the Rust (see the module doc): `none` when it runs out. -/
 def eraseFixupWith (reread : Bool) (fuel : Nat) (h : Heap) (head node : Addr) :
     Option (Heap × Nat) :=
   eraseFixupLoop head reread (child h head .left) fuel h node 0
@@ -351,9 +380,10 @@ def eraseFixupHpha (fuel : Nat) (h : Heap) (head node : Addr) : Option (Heap × 
 
 /-! ## The tree operations -/
 
-/-- The descent of `rbtree.rs` `insert_counted`, from its test `while cur != end`: `inl cur` if
-it meets a node with an equal key, `inr (last, s)` if it reaches the sentinel below `last` on
-side `s`. -/
+/-- The descent of `rbtree.rs` `insert_counted`, from its test `while cur != end`: `inl cur` if it
+meets a node with an equal key, `inr (last, s)` if it reaches the sentinel below `last` on side `s`.
+The fuel is this file's one departure from the Rust (see the module doc): `none` when it runs out.
+-/
 def insertDescent {α : Type _} (cmp : α → α → Ordering) (key : Addr → α) (h : Heap)
     (head node : Addr) : Nat → Addr → Addr → Side → Option (Addr ⊕ (Addr × Side))
   | 0, _, _, _ => none
@@ -366,9 +396,10 @@ def insertDescent {α : Type _} (cmp : α → α → Ordering) (key : Addr → �
       | .eq => some (.inl cur)
     else some (.inr (last, s))
 
-/-- `rbtree.rs` `IntrusiveMultiRbTree::insert_counted`: inserts `node`, chaining it onto an
-existing element with an equal key (`Chain`, no rotation) or attaching it as a red leaf and
-rebalancing (`Node`). -/
+/-- `rbtree.rs` `IntrusiveMultiRbTree::insert_counted`: inserts `node`, chaining it onto an existing
+element with an equal key (`Chain`, no rotation) or attaching it as a red leaf and rebalancing
+(`Node`). The fuel is this file's one departure from the Rust (see the module doc): `none` when it
+runs out. Not modelled: `head_ptr`'s lazy-initialization test (the `head` here is initialized). -/
 def insertCounted {α : Type _} (cmp : α → α → Ordering) (key : Addr → α) (fuel : Nat)
     (h : Heap) (head node : Addr) : Option (Heap × InsertKind × Nat) :=
   match insertDescent cmp key h head node fuel head (child h head .left) .left with
@@ -378,19 +409,22 @@ def insertCounted {α : Type _} (cmp : α → α → Ordering) (key : Addr → �
     let h := attachTo h node last s
     (insertFixup fuel h head node).map fun (h, rotations) => (h, .node, rotations)
 
-/-- The descent of `rbtree.rs` `erase_counted` to the in-order successor, from its test
-`while repl_left != end`: the leftmost node below `repl`. -/
+/-- The descent of `rbtree.rs` `erase_counted` to the in-order successor, from its test `while
+repl_left != end`: the leftmost node below `repl`. The fuel is this file's one departure from the
+Rust (see the module doc): `none` when it runs out. -/
 def successorDescent (h : Heap) (head : Addr) : Nat → Addr → Addr → Option Addr
   | 0, _, _ => none
   | fuel + 1, repl, replLeft =>
     if replLeft != head then successorDescent h head fuel replLeft (child h replLeft .left)
     else some repl
 
-/-- `rbtree.rs` `IntrusiveMultiRbTree::erase_counted`, with `erase_fixup`'s root read as
-`reread` chooses (see `eraseFixupLoop`). A chained, non-attached node is unlinked (`Link`); a
-chained, attached one hands its tree position to its chain successor (`Promote`); otherwise the
-node, or its in-order successor if it has two children, is spliced out, the successor takes the
-node's place, and the tree is rebalanced if the spliced node was black (`Node`). -/
+/-- `rbtree.rs` `IntrusiveMultiRbTree::erase_counted`, with `erase_fixup`'s root read as `reread`
+chooses (see `eraseFixupLoop`). A chained, non-attached node is unlinked (`Link`); a chained,
+attached one hands its tree position to its chain successor (`Promote`); otherwise the node, or its
+in-order successor if it has two children, is spliced out, the successor takes the node's place, and
+the tree is rebalanced if the spliced node was black (`Node`). The fuel is this file's one departure
+from the Rust (see the module doc): `none` when it runs out. Not modelled: `head_ptr`'s
+lazy-initialization test, and the `debug_assert!`s on `repl != head` and `is_attached(repl)`. -/
 def eraseCountedWith (reread : Bool) (fuel : Nat) (h : Heap) (head node : Addr) :
     Option (Heap × EraseKind × Nat) :=
   if chained h node then
@@ -1144,7 +1178,6 @@ theorem rotate_refines_right {h : Heap} {head a b p : Addr} {s : Side} {c c' : R
       have hpm' := hpm hph
       cases s <;> simp [rotate, child, parent, parentSide, Side.other, setChild, setParentPtr,
           setParentSide, Heap.modify, hab, hm, hpa, hsa, Ne.symm hap, Ne.symm hbp, hpm']
-
 
 /-- `rotate_frame` for `rotate_refines_right`: the only records changed are those of `a`, `b`,
 `b`'s right child (the first node of `lr`, or the sentinel) and `p`. -/

@@ -51,26 +51,31 @@ CI runs all four (`../.github/workflows/lean-ci.yml`).
 **Size arithmetic** (`Oris/Arith.lean`), on 64-bit words with Rust's exact operators:
 
 - `round_up` computes the mathematical round-up whenever its addition does not overflow
-  (`roundUp_spec`); its mask agrees with HPHA's `-(int)a` for every power-of-two alignment up to
-  `2^30` (`hphaMask_eq`; above that HPHA's mask is undefined behaviour).
+  (`roundUp_spec`); it computes the same word as HPHA's `round_up` for every power-of-two
+  alignment up to `2^30` (`hphaMask_eq`, `hphaRoundUp_eq`). Above that, HPHA's mask is undefined
+  behaviour at `2^31` (`-INT_MIN`) and a defined but wrong 0 from `2^32` on.
 - ERRATA E1, both sides: every request up to `MAX_ALLOCATION` normalizes without overflow to a
   block size that is a multiple of 16, at least the request and at least `MIN_BLOCK_SIZE`
   (`normalizeSize_spec`), and `Tree::grow` cannot overflow on it (`growSize_spec`; composed in
   `alloc_sizes_no_overflow`); HPHA's unchecked normalization of `SIZE_MAX`, computed with HPHA's
   own `round_up` and mask, really is zero (`hpha_normalize_SIZE_MAX`).
 - `alloc_aligned`'s guard cannot underflow and leaves enough headroom (`alloc_aligned_guard`).
-- The bucket size classes: every small request maps to one of 32 buckets whose element size is
-  the smallest class that fits; the inverse is an inverse; the aligned shortcut agrees; and
-  `is_small_allocation` cannot be fooled by wrap-around (`bucketSpacing_spec` and neighbours).
+- The bucket size classes: every `bucket_spacing_function` input in `[1, 256]` maps to one of 32
+  buckets whose element size is the smallest class that fits (`bucketSpacing_spec`), and on the
+  plain allocation path a small request, clamped and guarded, lands in that bucket
+  (`small_alloc_bucket`); the inverse is an inverse; the aligned shortcut agrees on every multiple
+  of 8; `clamp_small_allocation` is `max(size, 8)`; and `is_small_allocation` cannot be fooled by
+  wrap-around (`isSmall_iff`). The aligned bucket path, which rounds up to the alignment first,
+  is not covered.
 
 **The red-black tree insert** (`Oris/RB/Fixup.lean`):
 
 - `insFix_toList`: the insert fix-up only rearranges (in-order sequence unchanged).
 - `insFix_rotations`: at most two rotations.
 - `insFix_balanced`: it restores the red-black invariant.
-- `insert_spec`: `insert_counted` on a valid tree with a black root either finds an element
-  equal to the key and chains (tree unchanged, no rotation) or returns a valid, ordered tree
-  with a black root holding exactly the elements, in order, of the library's verified
+- `insert_spec`: `insert_counted` on an ordered, valid tree with a black root either finds an
+  element equal to the key and chains (tree unchanged, no rotation) or returns a valid, ordered
+  tree with a black root holding exactly the elements, in order, of the library's verified
   `RBNode.insert`, after at most two rotations.
 
 **The red-black tree erase** (`Oris/RB/Fixup.lean`):
@@ -80,10 +85,11 @@ CI runs all four (`../.github/workflows/lean-ci.yml`).
 - `delFix_balanced`: it restores the red-black invariant, starting from the "double black" a
   spliced-out black node leaves.
 - `eraseAt_spec`, `erase_spec`: `erase_counted`'s `Node` branch (splice out the node or its
-  in-order successor, `switch_with`, fix-up) on a valid tree with a black root, erasing a key
-  that some element compares equal to, finds that element and removes exactly it, keeps all
-  others in order, and leaves a valid tree with a black root, after at most three rotations;
-  the lookup fails only when no element compares equal to the key.
+  in-order successor, `switch_with`, fix-up) on an ordered, valid tree with a black root, for a
+  transitive comparison, erasing a key that some element compares equal to, finds that element
+  and removes exactly it, keeps all others in order, and leaves a valid tree with a black root,
+  after at most three rotations; the lookup fails only when no element compares equal to the
+  key, and after it no element left compares equal to the key (`erase_unique`).
 
 **HPHA's assertions, as theorems.** HPHA asserts four facts, at six sites, that the ports
 neither check nor prove; each site is a theorem (each with a `_left` and a `_right` form):
@@ -91,8 +97,9 @@ neither check nor prove; each site is a theorem (each with a `_left` and a `_rig
 - `insert_fixup`, `pp != &mHead`: under a red parent there is a grandparent
   (`hpha_grandparent_not_sentinel`);
 - `erase_fixup`, `w != &mHead`, at all three sites: the sibling is never the sentinel at the loop
-  top (`hpha_sibling_not_sentinel`), after the first case (`hpha_sibling_after_case1_not_sentinel`)
-  and after the third (`hpha_sibling_after_case3_not_sentinel`);
+  top (`hpha_sibling_not_sentinel`), after the first case's block
+  (`hpha_sibling_after_case1_not_sentinel`, and the loop top's theorem when the case did not
+  run) and after the third (`hpha_sibling_after_case3_not_sentinel`);
 - `erase_fixup`: a red sibling has black children (`hpha_red_sibling_children_black`), and before
   the fourth case the far child is red (`hpha_far_child_red`).
 
@@ -141,10 +148,13 @@ wrong way in `link_into_chain`. (A wrong side bit in `rotate` no longer builds a
 - **Memory management** (`tree.rs`'s invariants): after the tree.
 - **What Lean does not cover at all:** undefined behaviour, provenance and aliasing (Tree
   Borrows), the lazy sentinel's no-move contract, `Drop`. Miri remains the gate for those.
+- **`orisnitsa`.** The theorems are about `orisnik`; they carry over to `orisnitsa` to the extent
+  the cross-port invariant holds, which the trace gate checks and nothing proves.
 
 The trust base is Lean's kernel, the three standard axioms, and the faithfulness of the Lean
 transcriptions to the Rust: reviewable side by side, cross-checked against the running code, and
-to be mechanized by the heap layer.
+to be mechanized by the heap layer. The theorems also assume that the Rust's comparison
+(`T::cmp`, for `TestNode` and `FreeNode`) is a lawful total order (`docs/heap-layer.md`, §8).
 
 ## Rigour rules
 
