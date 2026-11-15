@@ -1,7 +1,7 @@
 # Design note — the heap layer (`Oris/RB/Heap.lean`)
 
-*Status: agreed, 2026-11-14. Steps 1 and 1b are done (§5); the theorems, steps 2 to 4, are
-not yet written. Decisions taken are recorded in §7.*
+*Status: agreed, 2026-11-14. Steps 1, 1b and 2 are done (§5); steps 3 and 4 are not yet
+written. Decisions taken are recorded in §7.*
 
 `Oris/RB/Fixup.lean` proves `rbtree.rs`'s red-black algorithm correct **on zippers**: a node
 together with its chain of parents is a `(subtree, path)` pair, and the fix-ups are functions on
@@ -95,11 +95,44 @@ nine writes and returns. It is proven as one block, `Repr` before and `Repr` aft
 between its writes never need describing. The loops are the same: their invariants hold at the
 loop head only. This settles the risk I first saw in this step.
 
+**As built (step 2).** The relation is the sketch above, with these changes:
+- **The names are `Rep` and `RepPath`.** `Repr` is Lean's printing class, and `deriving Repr`
+  inside `Oris.RB.Heap` would no longer mean it.
+- **`RepPath` is indexed by the slot, `(p, s)`, and by the slot's occupant**, not by the address
+  below. `RepPath h head a p s path` says that `p`'s side-`s` link holds `a` and lies at `path`;
+  `Located h head a p s t path := Rep h head a p s t ∧ RepPath h head a p s path`. The occupant is
+  an index, never read from `a`'s own record, so the relation is the same for an empty hole,
+  where `a` is the sentinel and its `parent` is scratch. And a write that changes the occupant
+  (`rotate` putting `b` where `a` was) changes only that index: `RepPath.retarget` proves the
+  path otherwise unchanged, once, for every operation that replaces a subtree in place. It asks
+  only that the path's other records be kept, so writes off the path (the node `attach_to`
+  attaches, the chain member `switch_with` promotes) need no separate frame step.
+- **`RepPath` is an inductive predicate**, not a definition by recursion on the `Path`, so that
+  proofs can do induction and case analysis on it; its root case reads nothing of `a`'s record
+  (the root's `parent` and side are `Rep`'s part).
+- **Sides and colours keep their types**: the side is a `Side`, not a `Bool`, and a colour
+  `c : RBColor` is linked to the colour bit by `colourBit c`, not `c == red`.
+
+`Rep.nodup` is proven from `Rep` alone, with no separate distinctness hypothesis, by two arguments:
+the heap determines the tree below an address (`Rep.unique`), so a node cannot occur below itself;
+and climbing `parent` pointers from an address in both subtrees of a node would reach its two
+children at the same height, whose side bits differ. The back-pointers are needed for the second:
+without them, a node whose two links both point to `c` would represent a tree holding `c` twice.
+
+The frame lemma takes the form "a heap that agrees on every address of `t` represents `t`"
+(`Rep.frame`), with a variant for the subtree a rotation moves across, whose first node takes a
+new `parent` and side (`Rep.reroot`).
+
 ## 4. The theorems, in order
 
 Each step uses the ones before it.
 
-1. **`rotate` performs the zipper rotation.**
+1. ✅ **`rotate` performs the zipper rotation** (`rotate_refines_left`, `rotate_refines_right`).
+   As built, the list of changed records is a separate theorem for each side,
+   `rotate_refines_left_frame` and `_right_frame`, and field by field `rotate_links` (the moving
+   subtree's first node, possibly the sentinel: only its `parent` word) and `rotate_parent_fields`
+   (the slot's node: only the link that held `a`, plus its `parent` word when it is the sentinel
+   and the moving subtree is empty).
    ```lean
    -- Sketch.
    theorem rotate_refines (hl : Located h head a t path) (ht : t = .node c l a (.node c' rl b rr)) :
@@ -134,7 +167,7 @@ Each step uses the ones before it.
 | 0 | This note, agreed | Decisions in §2 accepted or changed |
 | 1 ✅ | `Heap.lean`: `NodeRec`, the primitives, executable transcriptions of `rotate`, `attach_to`, `substitute_with`, `switch_with`, both fix-ups (in two variants: cached root and re-read root), and both counted operations | Each definition's doc names its Rust function, and its writes follow the Rust's order |
 | 1b ✅ | Extend `lake exe xcheck` to replay the trace through the heap model too, comparing with the Rust's shapes and with the zipper model, and running both root variants. Time the replay | 20,000 operations, 0 mismatches, before any proof is attempted. This also tests the cached-root expectation at heap level, for free |
-| 2 | `Repr`, `ReprPath`, `Repr.nodup`, the frame lemma, `rotate_refines` | The first refinement theorem; if the encoding is clumsy, it shows here, cheaply |
+| 2 ✅ | `Repr`, `ReprPath`, `Repr.nodup`, the frame lemma, `rotate_refines` (as built: `Rep`, `RepPath`, `Rep.nodup`, `Rep.frame`, `RepPath.retarget`, `rotate_refines_left` and `_right`; §3, §4) | The first refinement theorem; if the encoding is clumsy, it shows here, cheaply |
 | 3 | Steps 2–5 of §4 | `insert_fixup` and `erase_fixup` performing `insFix` and `delFix`; the cached-root theorem |
 | 4 | Steps 6–7 of §4, chains included | `insert_spec` and `erase_spec` hold for the pointer code |
 
@@ -148,7 +181,8 @@ which is extensionally equal to the heap it copies. Reads then cost one lookup, 
 definitions do not change: only the tool does the copying. With about 1,000 addresses, that is
 about 20 million steps per run. (The 20,000-operation limit seen before was Miri's, which
 interprets the Rust about a thousand times slower. Natively the Rust producer takes
-milliseconds, and today's `xcheck` job about 50 seconds, mostly building.)
+milliseconds, and the `xcheck` job then took about 50 seconds, mostly building; with the heap
+replay, it takes about 2 minutes 22 on GitHub, §7.)
 
 ## 6. The cached root, sketched
 
@@ -188,13 +222,14 @@ both ports. It would then be fixed as a patch, with an entry in `Cpp/ERRATA.md`
 ## 7. Decisions
 
 1. **Null pointers: `0`** (decided 2026-11-14). It is what the Rust compares against. `Option
-   Addr` would mostly guard places where null cannot occur: `Repr` already requires every tree
-   node to be non-null (`a ≠ 0`). Null appears in earnest only in the chain code, where a few
-   explicit checks cost less than wrapping every `parent` read.
-2. **Step 1b as a permanent CI check: measured, decision pending.** The heap replay is part of
-   `lake exe xcheck`, so `lean-ci.yml` already runs it. The whole replay of 20,000 operations,
-   both models and both root readings, takes about 95 seconds on the development machine
-   (2026-11-14), against a few seconds for the zipper model alone. Per operation, the replay
+   Addr` would mostly guard places where null cannot occur: `Repr` (as built, `Rep`) already
+   requires every tree node to be non-null (`a ≠ 0`). Null appears in earnest only in the chain
+   code, where a few explicit checks cost less than wrapping every `parent` read.
+2. **Step 1b stays a permanent CI check** (decided 2026-11-14). The heap replay is part of
+   `lake exe xcheck`, so `lean-ci.yml` runs it on every pull request; on GitHub the `xcheck` job
+   went from about 50 seconds to 2 minutes 22. The whole replay of 20,000 operations, both models
+   and both root readings, takes about 95 seconds on the development machine (2026-11-14),
+   against a few seconds for the zipper model alone. Per operation, the replay
    copies the heap into a table, and per erase it runs `erase_counted` twice and compares the two
    heaps: a few thousand reads, each through that operation's writes. (Not profiled further.)
 3. **The chains' proofs go in `Heap.lean`** (decided 2026-11-14).

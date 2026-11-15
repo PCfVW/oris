@@ -36,7 +36,7 @@ CI runs all three (`../.github/workflows/lean-ci.yml`).
 | `RBTree/`, `RBTree.lean` | A verified functional red-black tree library, vendored verbatim (`RBTree/NOTICE.md`) |
 | `Oris/Arith.lean` | Size arithmetic: `round_up`, `normalize_size`, `MAX_ALLOCATION`, `Tree::grow`, `alloc_aligned`'s guard, the bucket size classes |
 | `Oris/RB/Fixup.lean` | `rbtree.rs`'s `insert_fixup`, `insert_counted`, `erase_fixup` and `erase_counted` (its `Node` branch), on zippers |
-| `Oris/RB/Heap.lean` | The same functions as pointer code on a model heap, one write per Rust write (definitions; the proofs are the next steps of `docs/heap-layer.md`) |
+| `Oris/RB/Heap.lean` | The same functions as pointer code on a model heap, one write per Rust write; the abstraction relation to zippers, and `rotate` proven to perform the zipper rotation (the other proofs are the next steps of `docs/heap-layer.md`) |
 | `Oris/Audit.lean`, `Oris/Gate.lean` | The `#audit_axioms` command, and the gate that runs it over everything |
 | `Oris.lean` | Imports every proof module (what the gate audits) |
 | `Tools/XCheck.lean` | `lake exe xcheck`: replays `rbtree.rs`'s cross-check trace through both models |
@@ -117,10 +117,12 @@ in `rotate`, a black new node in `attach_to`, and a root reading that skips its 
 - **The pointer layer.** The theorems are about the algorithm on zippers. That the pointer code
   in `rbtree.rs` implements it is the next layer (design note:
   [`docs/heap-layer.md`](docs/heap-layer.md)). Its definitions are written
-  (`Oris/RB/Heap.lean`, run against the Rust by the cross-check above); the theorems are not yet:
-  that each node with its chain of parents is a `(subtree, path)` pair, and that each pointer
-  write performs the corresponding zipper step. Until then, the correspondence rests on the
-  write-by-write transcription and on the cross-check. The duplicate-key chains, the sentinel's
+  (`Oris/RB/Heap.lean`, run against the Rust by the cross-check above), and so is the relation
+  saying when a heap *is* a `(subtree, path)` pair, with its frame lemmas. One pointer function
+  is proven so far: `NodeBase::rotate` performs the zipper rotation (`rotate_refines_left`,
+  `rotate_refines_right`). That the fix-ups and the counted operations perform their zipper steps
+  is not proven yet; until it is, that correspondence rests on the write-by-write transcription
+  and on the cross-check. The duplicate-key chains, the sentinel's
   scratch `parent` field, and `erase_fixup`'s cached `root` (the Rust reads it once; HPHA, and
   the zipper model, re-read it; the cross-check finds no difference) belong to that layer.
 - **The `Link` and `Promote` branches** of `erase_counted` and the `Chain` branch of
