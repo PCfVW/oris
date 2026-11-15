@@ -254,11 +254,29 @@ pub fn Orisnitsa(comptime config: Config) type {
         /// all idle memory and the record store, and returns how many allocations were
         /// still live (always `0` without `config.debug`). Exists so a test can observe a
         /// leaking teardown, which `deinit` itself ends in a panic no Zig test can catch.
+        /// The report goes to stderr, as `deinit`'s does; `deinitReturningLeaksTo` writes it
+        /// to a writer of the caller's choice.
         fn deinitReturningLeaks(self: *Self) usize {
             const leaked = if (config.debug) self.debugTeardown() else 0;
+            self.releaseAfterTeardown();
+            return leaked;
+        }
+
+        /// `deinitReturningLeaks` with the leak report written to `writer` instead of
+        /// stderr, so a test that leaks on purpose can read the report rather than print
+        /// it: `zig build test` shows any test output on stderr under a `failed command:`
+        /// line, even when every test passes, which makes a green run look red.
+        fn deinitReturningLeaksTo(self: *Self, writer: *std.Io.Writer) usize {
+            const leaked = if (config.debug) self.debugTeardownTo(writer) else 0;
+            self.releaseAfterTeardown();
+            return leaked;
+        }
+
+        /// The release half of `deinitReturningLeaks`: all idle memory, then the record
+        /// store.
+        fn releaseAfterTeardown(self: *Self) void {
             self.purge();
             if (config.debug) self.records.deinit();
-            return leaked;
         }
 
         /// Latches this instance's address on first use and, on every later call,
@@ -2805,13 +2823,18 @@ test "report shows where a block was allocated (raw return addresses)" {
 
 test "a leak at deinit is audited and reported, and everything else is released" {
     // `deinit` ends a leaking teardown with a panic no Zig test can catch, so this drives
-    // `deinitReturningLeaks`: the audit, the report and the release, minus the panic.
+    // `deinitReturningLeaksTo`: the audit, the report and the release, minus the panic,
+    // with the report read back instead of printed (`src/leak_probe.zig` covers the real
+    // `deinit`, report to stderr and panic included).
     const before = os.test_vm.liveMappings();
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
     var o: Orisnitsa(debug_config) = .init();
     const leaked = o.alloc(24) orelse return error.TestUnexpectedResult;
     const idle = o.alloc(5000) orelse return error.TestUnexpectedResult;
     o.free(idle);
-    try testing.expectEqual(@as(usize, 1), o.deinitReturningLeaks());
+    try testing.expectEqual(@as(usize, 1), o.deinitReturningLeaksTo(&aw.writer));
+    try testing.expect(std.mem.startsWith(u8, aw.written(), "orisnitsa: 1 allocation(s) were still live when the allocator was dropped\nREPORT ===="));
     // Everything idle was returned (the tree arena, the record page); only the leaked
     // block's own bucket page remains.
     try testing.expectEqual(before + 1, os.test_vm.liveMappings());
@@ -2821,11 +2844,16 @@ test "a leak at deinit is audited and reported, and everything else is released"
 
 test "a leak audit counts every live block and survives a corrupted one" {
     const before = os.test_vm.liveMappings();
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
     var o: Orisnitsa(debug_config) = .init();
     const a = o.alloc(24) orelse return error.TestUnexpectedResult;
     const b = o.alloc(24) orelse return error.TestUnexpectedResult;
-    flipGuardByte(b, 24); // the audit prints this as the first problem instead of panicking
-    try testing.expectEqual(@as(usize, 2), o.deinitReturningLeaks());
+    flipGuardByte(b, 24); // the audit reports this as the first problem instead of panicking
+    try testing.expectEqual(@as(usize, 2), o.deinitReturningLeaksTo(&aw.writer));
+    const text = aw.written();
+    try testing.expect(std.mem.startsWith(u8, text, "orisnitsa: 2 allocation(s) were still live when the allocator was dropped\norisnitsa: guard bytes overwritten"));
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, text, "ptr="));
     // Both blocks live in one bucket page, which stays mapped; nothing else does.
     try testing.expectEqual(before + 1, os.test_vm.liveMappings());
     releaseLeakedBucketPage(a);
@@ -3077,17 +3105,14 @@ test "report golden output" {
     o.purge();
 }
 
-test "reportToStderr runs" {
-    // Kills: nothing behavioural (it writes to stderr) — but it makes the suite compile and
-    // run `reportToStderr`, which no other test does.
-    var o: Orisnitsa(debug_config) = .init();
-    var failed = false;
-    defer finishDebug(&o, &failed);
-    errdefer failed = true;
-    const p = o.alloc(24) orelse return error.TestUnexpectedResult;
-    o.reportToStderr();
-    o.free(p);
-    o.purge();
+test "reportToStderr compiles" {
+    // Kills: nothing behavioural — it makes the suite compile `reportToStderr`, which no
+    // other test references (Zig analyses only what is referenced). It is not called: its
+    // output would land on the test runner's stderr, which `zig build test` prints under a
+    // `failed command:` line even when every test passes. Its content is `report`'s, which
+    // the tests above read through a writer; its stderr handling (`lockStderr`, write,
+    // flush) is `deinit`'s, which `src/leak_probe.zig` runs for real.
+    _ = &Orisnitsa(debug_config).reportToStderr;
 }
 
 // ---- v0.1.1 regression tests (docs/audits/2026-08-29-pre-v0.2.0-audit.md) ----
