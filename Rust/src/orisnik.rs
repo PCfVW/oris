@@ -178,8 +178,8 @@ pub(crate) const fn is_hpha_alignment(alignment: usize) -> bool {
 /// then panics (HPHA's destructor assert) — unless the thread is already unwinding, when a
 /// second panic would abort.
 pub struct Orisnik {
-    /// The small-allocation path — every request `<= MAX_SMALL_ALLOCATION` (after
-    /// [`bucket::clamp_small_allocation`]) lands here.
+    /// The small-allocation path — every request with `size + MEMORY_GUARD_SIZE <=
+    /// MAX_SMALL_ALLOCATION` ([`bucket::is_small_allocation`]) lands here.
     buckets: Buckets,
     /// The large-allocation path — every request the bucket path doesn't serve.
     tree: Tree,
@@ -836,9 +836,9 @@ impl Orisnik {
     /// for the allocation (a mismatch panics — HPHA asserts the same). The record holds the
     /// *current* requested size, so after a `realloc`/`resize` only that current size passes;
     /// combined with the routing rule above, a sized free is only ever correct for a block
-    /// that was never reallocated — one more reason to prefer [`Orisnik::free`]. Sizes below
-    /// the minimum allocation are compared after the same clamp `alloc` applied (`Cpp/ERRATA.md`
-    /// E10).
+    /// that was never reallocated — one more reason to prefer [`Orisnik::free`]. The record
+    /// holds the size asked for, sizes below the minimum allocation included, as in HPHA
+    /// (`Cpp/ERRATA.md` E10's correction note).
     ///
     /// # Safety
     /// `ptr`, if `Some`, must be a still-live allocation this instance produced with
@@ -897,8 +897,7 @@ impl Orisnik {
     ///
     /// With `debug-allocator`, `orig_size` is additionally checked against the size recorded
     /// for the allocation, exactly as for [`Orisnik::free_with_size`] (a mismatch panics; the
-    /// comparison follows how the record holds the size — clamped for a bucket record, raw for
-    /// a tree record, `Cpp/ERRATA.md` E10).
+    /// record holds the size asked for, on both paths).
     ///
     /// # Safety
     /// `ptr`, if `Some`, must be a still-live allocation this instance produced with

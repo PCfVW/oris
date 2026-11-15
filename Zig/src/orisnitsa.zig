@@ -525,20 +525,10 @@ pub fn Orisnitsa(comptime config: Config) type {
             const what: Corruption = switch (err) {
                 error.UnknownPointer => .unknown_pointer,
                 // `orig_size` is non-null exactly when `verify` can return this.
-                error.SizeMismatch => .{ .size_mismatch = comparableSize(record.?.source, orig_size.?) },
+                error.SizeMismatch => .{ .size_mismatch = orig_size.? },
                 error.GuardOverrun => .guard_overrun,
             };
             failWith(what, ptr, record);
-        }
-
-        /// `given`, as `verify` compares it against a record served by `source`: clamped
-        /// to the minimum allocation on the bucket path (the record holds the clamped
-        /// size), raw on the tree path (the record holds the raw size).
-        fn comparableSize(source: Source, given: usize) usize {
-            return switch (source) {
-                .buckets => bucket.clampSmallAllocation(given),
-                .tree => given,
-            };
         }
 
         /// Checks `ptr` against its record without changing anything: a record must
@@ -547,22 +537,17 @@ pub fn Orisnitsa(comptime config: Config) type {
         /// detection half of `debugRemove`/`debugCheck`, kept a plain value so it is
         /// directly testable.
         ///
-        /// `orig_size` is compared the way the record holds it (`comparableSize`): a
-        /// *bucket*-path record holds the minimum-size-clamped size (`alloc(5)` records
-        /// 8), so `orig_size` is clamped before the compare; a *tree*-path record holds
-        /// the raw size (`allocAligned(5, 512)` and a tree-path `realloc(p, 5)` both
-        /// record 5), so `orig_size` is compared raw. HPHA compares the raw value
-        /// everywhere, so its own `free(p, 5)` of an `alloc(5)` would trip its assert on
-        /// a perfectly legal call — a 2007 debug-mode bug this port does not reproduce
-        /// (see `Cpp/ERRATA.md`) — while its raw compare was right for the tree path,
-        /// which is why the clamp must not be applied there.
+        /// `orig_size` is compared raw, as HPHA's `debug_record_map::remove` compares
+        /// it: with the guard, every record holds the size asked for, on both paths
+        /// (`clampSmallAllocation` raises nothing when the guard already fills the
+        /// smallest class; `Cpp/ERRATA.md` E10's correction note).
         ///
         /// The block at `ptr` must still be live if a record exists for it (the
         /// callers' contract: `ptr` is a live allocation this instance produced).
         fn verify(self: *Self, ptr: [*]u8, orig_size: ?usize) VerifyError!*Record {
             const record = self.records.find(ptr) orelse return error.UnknownPointer;
             if (orig_size) |given| {
-                if (comparableSize(record.source, given) != record.size) return error.SizeMismatch;
+                if (given != record.size) return error.SizeMismatch;
             }
             // SAFETY: the record describes the live allocation at `ptr` (this
             // function's contract), valid for `size + memoryGuardSize(config)` bytes and
@@ -869,7 +854,7 @@ pub fn Orisnitsa(comptime config: Config) type {
                 return raw;
             }
             if (size == 0) return null;
-            const sz = bucket.clampSmallAllocation(size);
+            const sz = bucket.clampSmallAllocation(config, size);
             const raw = self.bucketAlloc(sz);
             if (config.debug) return self.debugAdd(first_address, raw, sz, .buckets);
             return raw;
@@ -902,7 +887,7 @@ pub fn Orisnitsa(comptime config: Config) type {
                 return raw;
             }
             if (size == 0) return null;
-            const sz = bucket.clampSmallAllocation(size);
+            const sz = bucket.clampSmallAllocation(config, size);
             const raw = self.bucketAllocAligned(sz, alignment);
             if (config.debug) return self.debugAdd(first_address, raw, sz, .buckets);
             return raw;
@@ -960,7 +945,7 @@ pub fn Orisnitsa(comptime config: Config) type {
             // SAFETY: `p` is a live allocation this instance produced (this function's own
             // contract), exactly what `ptrInBucket` requires.
             if (self.buckets.ptrInBucket(p)) {
-                const sz = bucket.clampSmallAllocation(size);
+                const sz = bucket.clampSmallAllocation(config, size);
                 if (bucket.isSmallAllocation(config, sz)) {
                     const new_ptr = self.bucketRealloc(p, sz);
                     if (config.debug) self.debugReplace(first_address, p, new_ptr, sz, .buckets);
@@ -1058,7 +1043,7 @@ pub fn Orisnitsa(comptime config: Config) type {
             if (config.debug) self.debugCheck(p);
             // SAFETY: `p` is a live allocation this instance produced.
             if (self.buckets.ptrInBucket(p)) {
-                const sz = bucket.clampSmallAllocation(size);
+                const sz = bucket.clampSmallAllocation(config, size);
                 if (bucket.isSmallAllocation(config, sz) and alignment <= bucket.MAX_SMALL_ALLOCATION) {
                     // Growing in place within the bucket path here delegates to
                     // `bucketRealloc`, which is not itself alignment-aware —
@@ -1990,20 +1975,36 @@ test "a bucket resize re-records the slot's real usable size" {
     orisnitsa.purge();
 }
 
-test "sub-minimum requests are recorded clamped and a sized free accepts them" {
-    // `alloc(5)` records 8 (clamped). HPHA would assert on `free(p, 5)` because it
-    // compares the raw size; this port compares after the clamp, so the legal call
-    // passes (an HPHA debug-mode bug deliberately not reproduced).
+test "sub-minimum requests are recorded as asked and a sized free accepts them" {
+    // `alloc(5)` records 5, as HPHA's debug build does (its clamp leaves 5 alone once
+    // the guard fills the smallest class), and `free(p, 5)` passes the raw compare.
     var orisnitsa: Orisnitsa(debug_config) = .init();
     var failed = false;
     defer finishDebug(&orisnitsa, &failed);
     errdefer failed = true;
     const ptr = orisnitsa.alloc(5) orelse return error.TestUnexpectedResult;
     const record = orisnitsa.records.find(ptr) orelse return error.TestUnexpectedResult;
-    try testing.expectEqual(bucket.MIN_ALLOCATION, record.size);
+    try testing.expectEqual(@as(usize, 5), record.size);
+    try testing.expectEqual(5 + guard_size, orisnitsa.requested());
     orisnitsa.freeWithSize(ptr, 5);
     try testing.expectEqual(@as(usize, 0), orisnitsa.records.len());
     orisnitsa.purge();
+}
+
+test "an overrun just past a sub-minimum request is detected" {
+    // The guard starts right after the 5 bytes asked for, as in HPHA: writing the sixth
+    // byte is an overrun. (With a guard-unaware clamp to 8, the guard started at byte 8
+    // and this write went unnoticed.)
+    var o: Orisnitsa(debug_config) = .init();
+    var failed = false;
+    defer finishDebug(&o, &failed);
+    errdefer failed = true;
+    const p = o.alloc(5) orelse return error.TestUnexpectedResult;
+    flipGuardByte(p, 5);
+    try testing.expectError(error.GuardOverrun, o.verify(p, 5));
+    flipGuardByte(p, 5); // repaired
+    o.free(p);
+    o.purge();
 }
 
 test "realloc rekeys the record across every path" {
@@ -2109,14 +2110,14 @@ test "verify reports each corruption kind as a value" {
         orisnitsa.free(ptr);
     }
 
-    // Size mismatch: compared after the minimum-size clamp.
+    // Size mismatch: compared against the size asked for, below the minimum too.
     const ptr = orisnitsa.alloc(100) orelse return error.TestUnexpectedResult;
     try testing.expectError(error.SizeMismatch, orisnitsa.verify(ptr, 64));
     _ = try orisnitsa.verify(ptr, 100);
     orisnitsa.free(ptr);
     const tiny = orisnitsa.alloc(5) orelse return error.TestUnexpectedResult;
-    _ = try orisnitsa.verify(tiny, 5); // clamps to 8, which is what was recorded
-    _ = try orisnitsa.verify(tiny, 8);
+    _ = try orisnitsa.verify(tiny, 5); // the record holds the 5 asked for, as in HPHA
+    try testing.expectError(error.SizeMismatch, orisnitsa.verify(tiny, 8));
     try testing.expectError(error.SizeMismatch, orisnitsa.verify(tiny, 9));
     orisnitsa.free(tiny);
 
@@ -2382,29 +2383,30 @@ test "the record-store OOM path also frees an aligned block" {
     try testing.expectEqual(@as(usize, 0), o.allocated());
 }
 
-test "verify compares a tree-path record raw and a bucket-path record clamped" {
+test "verify compares against the size asked for, on both paths" {
     var o: Orisnitsa(debug_config) = .init();
     var failed = false;
     defer finishDebug(&o, &failed);
     errdefer failed = true;
 
-    // Tree path via a large alignment records the RAW size, even below the minimum:
-    // clamping the caller's size there would falsely report a mismatch.
+    // Tree path via a large alignment records the size asked for, even below the
+    // minimum.
     const t5 = o.allocAligned(5, 4096) orelse return error.TestUnexpectedResult;
     try testing.expectEqual(@as(usize, 5), (o.records.find(t5) orelse return error.TestUnexpectedResult).size);
     _ = try o.verify(t5, 5);
-    try testing.expectError(error.SizeMismatch, o.verify(t5, 8)); // clamped value is NOT the record
+    try testing.expectError(error.SizeMismatch, o.verify(t5, 8));
     const t3 = o.allocAligned(3, 512) orelse return error.TestUnexpectedResult;
     _ = try o.verify(t3, 3);
     try testing.expectError(error.SizeMismatch, o.verify(t3, 4));
     o.freeWithSizeAligned(t3, 3, 512); // the sized free must not falsely trip
     o.freeWithSizeAligned(t5, 5, 4096);
 
-    // Bucket path records the clamped size: a sub-minimum request verifies both ways.
+    // The bucket path records the size asked for too, so a wrong size is caught there
+    // as HPHA catches it, even within the smallest class.
     const b3 = o.allocAligned(3, 16) orelse return error.TestUnexpectedResult;
-    try testing.expectEqual(bucket.MIN_ALLOCATION, (o.records.find(b3) orelse return error.TestUnexpectedResult).size);
+    try testing.expectEqual(@as(usize, 3), (o.records.find(b3) orelse return error.TestUnexpectedResult).size);
     _ = try o.verify(b3, 3);
-    _ = try o.verify(b3, 8);
+    try testing.expectError(error.SizeMismatch, o.verify(b3, 8));
     try testing.expectError(error.SizeMismatch, o.verify(b3, 9));
     o.freeWithSizeAligned(b3, 3, 16);
 
@@ -3194,7 +3196,7 @@ test "zero-alignment free picks the bucket alloc used" {
     // over the whole bucket range rather than trusted.
     var size: usize = 1;
     while (size <= bucket.MAX_SMALL_ALLOCATION) : (size += 1) {
-        const allocated_from = bucket.bucketSpacingFunction(bucket.clampSmallAllocation(size));
+        const allocated_from = bucket.bucketSpacingFunction(bucket.clampSmallAllocation(.{}, size));
         const freed_into = bucket.bucketSpacingFunction(
             align_helpers.roundUp(size, block.DEFAULT_ALIGNMENT),
         );

@@ -46,7 +46,6 @@
 //! Only compiled with `debug-allocator`; see `orisnik.rs` for the no-op stand-ins.
 
 use super::{DebugSource, Orisnik};
-use crate::bucket;
 use crate::guard::MEMORY_GUARD_SIZE;
 use crate::spomen::error::OrisError;
 use crate::spomen::failure::{self, Corruption};
@@ -138,11 +137,9 @@ impl Orisnik {
     /// recorded size, and the guard ramp must be intact. The detection half of
     /// `debug_remove`/`debug_check`, kept a plain value so it is directly testable.
     ///
-    /// `orig_size` is compared the way the record holds it: after the minimum-size clamp for
-    /// a bucket-path record (`alloc(5)` records 8), raw for a tree-path one (an aligned
-    /// request past `MAX_SMALL_ALLOCATION` alignment is never clamped). HPHA compares the raw value, so its own
-    /// `free(p, 5)` of an `alloc(5)` would trip its assert on a perfectly legal call — a
-    /// 2007 debug-mode bug this port does not reproduce (see `Cpp/ERRATA.md`).
+    /// `orig_size` is compared raw, as HPHA's `debug_record_map::remove` compares it: with the
+    /// guard, every record holds the size asked for, on both paths (`alloc(5)` records 5;
+    /// `Cpp/ERRATA.md` E10's correction note).
     ///
     /// The block at `ptr` must still be live if a record exists for it (the callers'
     /// contract: `ptr` is a live allocation this instance produced).
@@ -157,15 +154,10 @@ impl Orisnik {
         if let Some(given) = orig_size {
             // SAFETY: `record` was just found in the store, so it is live.
             let recorded = unsafe { (*record.as_ptr()).size };
-            // SAFETY: as above; reads one field.
-            let source = unsafe { (*record.as_ptr()).source };
-            // The record holds what `debug_add` was given: the *clamped* size on the bucket
-            // path, the raw size on the tree path (a sub-minimum aligned request beyond
-            // `MAX_SMALL_ALLOCATION` alignment goes to the tree and is never clamped).
-            let given = match source {
-                Source::Buckets => bucket::clamp_small_allocation(given),
-                Source::Tree => given,
-            };
+            // The record holds what `debug_add` was given, which with the guard is the
+            // caller's size on both paths (`clamp_small_allocation` raises nothing when the
+            // guard already fills the smallest class): compared raw, as HPHA's
+            // `debug_record_map::remove` compares it.
             if given != recorded {
                 return Err((Corruption::SizeMismatch { given }, Some(record)));
             }
@@ -687,17 +679,31 @@ mod tests {
     }
 
     #[test]
-    fn sub_minimum_requests_are_recorded_clamped_and_sized_free_accepts_them() {
-        // `alloc(5)` records 8 (clamped). HPHA would assert on `free(p, 5)`; this port
-        // compares clamped, so the legal call passes.
+    fn sub_minimum_requests_are_recorded_as_asked_and_sized_free_accepts_them() {
+        // `alloc(5)` records 5, as HPHA's debug build does (its clamp leaves 5 alone once the
+        // guard fills the smallest class), and `free(p, 5)` passes the raw compare.
         let orisnik = Orisnik::new();
         let ptr = alloc(&orisnik, 5);
         let record = orisnik.records.find(ptr).expect("recorded");
         // SAFETY: `record` is a live record.
         let recorded_size = unsafe { (*record.as_ptr()).size };
-        assert_eq!(recorded_size, bucket::MIN_ALLOCATION);
+        assert_eq!(recorded_size, 5);
         free_sized(&orisnik, ptr, 5);
         assert_eq!(orisnik.records.len(), 0);
+        orisnik.purge();
+    }
+
+    #[test]
+    fn an_overrun_just_past_a_sub_minimum_request_is_caught() {
+        // The guard starts right after the 5 bytes asked for, as in HPHA: writing the sixth
+        // byte is an overrun. (With a guard-unaware clamp to 8, the guard started at byte 8
+        // and this write went unnoticed.)
+        let orisnik = Orisnik::new();
+        let ptr = alloc(&orisnik, 5);
+        overrun(ptr, 5);
+        let message = panic_message(|| free(&orisnik, ptr)).expect("the overrun must be detected");
+        assert!(message.contains("guard bytes overwritten"), "{message}");
+        free(&orisnik, ptr);
         orisnik.purge();
     }
 
@@ -940,22 +946,18 @@ mod tests {
     }
 
     #[test]
-    fn sized_frees_compare_the_way_the_record_holds_the_size() {
+    fn sized_frees_compare_against_the_size_asked_for() {
         let orisnik = Orisnik::new();
         // Tree path, sub-minimum size: an aligned request past MAX_SMALL_ALLOCATION
-        // alignment goes to the tree, which never clamps — the record holds the raw 5, so an
-        // unconditional clamp on the free side would falsely report a mismatch.
+        // alignment goes to the tree, which records the raw 5.
         let tree_aligned = orisnik.alloc_aligned(5, 4096).expect("alloc");
         assert_eq!(recorded_size(&orisnik, tree_aligned), 5);
         free_sized_aligned(&orisnik, tree_aligned, 5, 4096);
-        // Bucket path, aligned: clamped to 8 on the way in, so 3 must pass on the way out.
+        // Bucket path, aligned: the record holds the 3 asked for too.
         let bucket_aligned = orisnik.alloc_aligned(3, 16).expect("alloc");
-        assert_eq!(
-            recorded_size(&orisnik, bucket_aligned),
-            bucket::MIN_ALLOCATION
-        );
+        assert_eq!(recorded_size(&orisnik, bucket_aligned), 3);
         free_sized_aligned(&orisnik, bucket_aligned, 3, 16);
-        // Plain bucket path (the E10 case itself) and plain tree path.
+        // Plain bucket path (`Cpp/ERRATA.md` E10's case) and plain tree path.
         let plain_small = alloc(&orisnik, 1);
         free_sized(&orisnik, plain_small, 1);
         let plain_large = alloc(&orisnik, 3000);
@@ -1947,17 +1949,17 @@ mod tests {
 
     // ---- pins for what `docs/debug-allocator.md` promises -----------------------------------
 
-    /// "`requested` is the bytes you asked for (at least 8) plus 16 guard bytes per block", on
-    /// both paths.
+    /// "`requested` is the bytes you asked for plus 16 guard bytes per block", on both paths,
+    /// with no floor below 8 (HPHA's debug build counts `alloc(5)` as 5 + 16 = 21).
     #[test]
-    fn requested_is_the_size_plus_the_guard_with_an_eight_byte_floor() {
+    fn requested_is_the_size_plus_the_guard() {
         let orisnik = Orisnik::new();
-        for (asked, counted) in [(1, 8), (8, 8), (24, 24), (100, 100), (1000, 1000)] {
+        for asked in [1, 5, 8, 24, 100, 1000] {
             let before = orisnik.requested();
             let ptr = alloc(&orisnik, asked);
             assert_eq!(
                 orisnik.requested() - before,
-                counted + MEMORY_GUARD_SIZE,
+                asked + MEMORY_GUARD_SIZE,
                 "a request of {asked} bytes"
             );
             free(&orisnik, ptr);

@@ -64,7 +64,9 @@ CI runs all four (`../.github/workflows/lean-ci.yml`).
   buckets whose element size is the smallest class that fits (`bucketSpacing_spec`), and on the
   plain allocation path a small request, clamped and guarded, lands in that bucket
   (`small_alloc_bucket`); the inverse is an inverse; the aligned shortcut agrees on every multiple
-  of 8; `clamp_small_allocation` is `max(size, 8)`; and `is_small_allocation` cannot be fooled by
+  of 8; `clamp_small_allocation` is `max(size, 8 - guard)` (HPHA's guard-aware clamp:
+  `max(size, 8)` without the debug guard, the identity with it); and `is_small_allocation` cannot
+  be fooled by
   wrap-around (`isSmall_iff`). The aligned bucket path, which rounds up to the alignment first,
   is not covered.
 

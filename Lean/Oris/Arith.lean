@@ -20,8 +20,9 @@ plain small-allocation path (`is_small_allocation`, `clamp_small_allocation`, `g
 `bucket_spacing_function`, in `orisnik.rs` `alloc`) is composed in `small_alloc_bucket`.
 
 **Departures from the Rust: none.** Every definition above transcribes its Rust expression;
-`isSmall` takes the guard size as a parameter where the Rust reads the constant
-`MEMORY_GUARD_SIZE` (16 with `debug-allocator`, 0 without), so its theorems cover both builds.
+`isSmall` and `clampSmall` take the guard size as a parameter where the Rust reads the constant
+`MEMORY_GUARD_SIZE` (16 with `debug-allocator`, 0 without), so their theorems cover both
+builds.
 
 **Not modelled yet**, among the size arithmetic of `tree.rs`, `bucket.rs` and `align.rs`, all
 of it unchecked `usize` arithmetic that the memory-management tier will need:
@@ -283,12 +284,17 @@ def bucketSpacing (size : Usize) : Usize := ((size + (8 - 1)) >>> 3) - 1
 def bucketSpacingAligned (size : Usize) : Usize := (size >>> 3) - 1
 /-- `bucket.rs` `bucket_spacing_function_inverse`: `(index + 1) << 3`. -/
 def bucketSpacingInverse (index : Usize) : Usize := (index + 1) <<< 3
-/-- `bucket.rs` `clamp_small_allocation`. -/
-def clampSmall (size : Usize) : Usize := if size < 8 then 8 else size
 
 /-- Rust's `usize::saturating_add`. -/
 def saturatingAdd (a b : Usize) : Usize :=
   if a.toNat + b.toNat < 2^64 then a + b else BitVec.allOnes 64
+
+/-- `bucket.rs` `clamp_small_allocation`, for a guard size `guard` (`MEMORY_GUARD_SIZE`), HPHA's
+guard-aware clamp: `if size.saturating_add(guard) < MIN_ALLOCATION {
+MIN_ALLOCATION.wrapping_sub(guard) } else { size }` (`BitVec` subtraction wraps, as
+`wrapping_sub` does). -/
+def clampSmall (guard size : Usize) : Usize :=
+  if saturatingAdd size guard < 8 then 8 - guard else size
 
 /-- `bucket.rs` `is_small_allocation`, for a guard size `guard` (`MEMORY_GUARD_SIZE`: 16 with
 `debug-allocator`, 0 without). -/
@@ -355,10 +361,25 @@ theorem bucketSpacingAligned_eq (s : Usize) (h8 : s.toNat % 8 = 0) :
   simp
   omega
 
-/-- `clamp_small_allocation` is `max(size, MIN_ALLOCATION)`, on every input. -/
-theorem clampSmall_spec (s : Usize) : (clampSmall s).toNat = max s.toNat 8 := by
-  unfold clampSmall
-  split <;> rename_i hs <;> rw [BitVec.lt_def] at hs <;> simp at hs ⊢ <;> omega
+/-- `clamp_small_allocation` is `max(size, MIN_ALLOCATION - guard)`, on every input and for
+every guard (the subtraction truncating at 0): `max(size, 8)` without the guard, and `size`
+itself with the 16-byte guard, which alone fills the smallest class. -/
+theorem clampSmall_spec (guard s : Usize) :
+    (clampSmall guard s).toNat = max s.toNat (8 - guard.toNat) := by
+  unfold clampSmall saturatingAdd
+  have hs := s.isLt
+  have hg := guard.isLt
+  have e8 : (8 : Usize).toNat = 8 := rfl
+  split <;> rename_i h₁
+  · split <;> rename_i h₂
+    · rw [BitVec.lt_def, BitVec.toNat_add, Nat.mod_eq_of_lt h₁] at h₂
+      rw [BitVec.toNat_sub]
+      omega
+    · rw [BitVec.lt_def, BitVec.toNat_add, Nat.mod_eq_of_lt h₁] at h₂
+      omega
+  · split <;> rename_i h₂
+    · simp at h₂
+    · omega
 
 /-- `is_small_allocation` is exactly the mathematical test `size + guard ≤ 256`: the saturating
 add means no huge request can wrap around and be misrouted to a bucket. -/
@@ -373,23 +394,23 @@ theorem isSmall_iff (guard size : Usize) :
 /-- **The plain small-allocation path lands in the smallest bucket that fits.** `orisnik.rs`
 `alloc` sends a request `s` with `is_small_allocation(s)` to the bucket
 `bucket_spacing_function(inflate(clamp_small_allocation(s)))`, where `inflate` adds the guard.
-For any guard up to 248 (the Rust's is 0 or 16): the inflated size is `max(s, 8) + guard`
-(neither step overflows), the bucket is one of the 32, and its element size holds `s` and the
-guard and is less than one class (8 bytes) above the inflated size. (The aligned bucket path
-takes the bucket of `round_up(size + guard, alignment)` instead; it is not covered here.) -/
-theorem small_alloc_bucket (guard s : Usize) (hg : guard.toNat ≤ 248)
-    (hs : isSmall guard s = true) :
-    (clampSmall s + guard).toNat = max s.toNat 8 + guard.toNat ∧
-    (bucketSpacing (clampSmall s + guard)).toNat < 32 ∧
+For every guard (the Rust's is 0 or 16): the inflated size is `max(s + guard, 8)` (neither step
+overflows), the bucket is one of the 32, and its element size holds `s` and the guard and is
+less than one class (8 bytes) above the inflated size. (The aligned bucket path takes the bucket
+of `round_up(size + guard, alignment)` instead; it is not covered here.) -/
+theorem small_alloc_bucket (guard s : Usize) (hs : isSmall guard s = true) :
+    (clampSmall guard s + guard).toNat = max (s.toNat + guard.toNat) 8 ∧
+    (bucketSpacing (clampSmall guard s + guard)).toNat < 32 ∧
     s.toNat + guard.toNat ≤
-      (bucketSpacingInverse (bucketSpacing (clampSmall s + guard))).toNat ∧
-    (bucketSpacingInverse (bucketSpacing (clampSmall s + guard))).toNat <
-      max s.toNat 8 + guard.toNat + 8 := by
+      (bucketSpacingInverse (bucketSpacing (clampSmall guard s + guard))).toNat ∧
+    (bucketSpacingInverse (bucketSpacing (clampSmall guard s + guard))).toNat <
+      max (s.toNat + guard.toNat) 8 + 8 := by
   have hsg := (isSmall_iff guard s).1 hs
-  have hc := clampSmall_spec s
-  have hn : (clampSmall s + guard).toNat = max s.toNat 8 + guard.toNat := by
+  have hc := clampSmall_spec guard s
+  have hn : (clampSmall guard s + guard).toNat = max (s.toNat + guard.toNat) 8 := by
     rw [BitVec.toNat_add, hc, Nat.mod_eq_of_lt (by omega)]
-  have spec := bucketSpacing_spec (clampSmall s + guard) (by omega) (by omega)
+    omega
+  have spec := bucketSpacing_spec (clampSmall guard s + guard) (by omega) (by omega)
   rw [hn] at spec
   exact ⟨hn, spec.1, by omega, spec.2.2⟩
 

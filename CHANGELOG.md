@@ -62,6 +62,28 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
     `leanprover-community/batteries-recycling` ([`Lean/RBTree/NOTICE.md`](Lean/RBTree/NOTICE.md)),
     and [`Lean/CONVENTIONS.md`](Lean/CONVENTIONS.md).
 
+### Fixed
+
+- **The ports' `clamp_small_allocation` now ports HPHA's exactly, guard included; ERRATA E10
+  withdrawn.** HPHA's clamp is `(s + MEMORY_GUARD_SIZE < MIN_ALLOCATION) ? MIN_ALLOCATION -
+  MEMORY_GUARD_SIZE : s`; the ports had dropped the guard term. Without `debug-allocator` the
+  two are equal, so release builds, every state transition and the trace corpus are unchanged.
+  With it (a 16-byte guard), HPHA's clamp raises nothing, while the ports raised requests of 1
+  to 7 bytes to 8. In debug builds:
+  - the record now holds the size asked for, as in HPHA (`alloc(5)` records 5, and `requested`
+    grows by 5 + 16 = 21, no longer 8 + 16), and a sized free compares it raw, as HPHA does;
+  - the guard bytes start right after the bytes asked for, so an overrun into bytes `[size, 8)`
+    of a small allocation is now detected (`docs/debug-allocator.md` listed that blind spot as
+    a caveat; it is gone);
+  - the bucket chosen is the same as before.
+
+  `Cpp/ERRATA.md` E10, which v0.2.0 recorded as a defect in HPHA's debug mode, is withdrawn
+  with a correction note: HPHA's debug build, compiled from `Cpp/` with MSVC, records 5 for
+  `alloc(5)` and accepts `free(p, 5)`. The v0.2.0 workaround (clamping the caller's size before
+  the comparison, on the bucket path) is removed from both ports. `Oris/Arith.lean` follows:
+  `clampSmall` takes the guard, `clampSmall_spec` is `max(size, 8 - guard)`, and
+  `small_alloc_bucket` no longer needs a bound on the guard.
+
 ## [0.3.1] - 2026-10-24
 
 A documentation patch: no change to either port's API or behaviour, so every state transition,
@@ -255,6 +277,9 @@ no Zig change.
   `MAX_SMALL_ALLOCATION` alignment goes to the tree, which never clamps — an unconditional
   clamp would have introduced a false report there; caught in review, pinned by a test in each
   port).
+  > **Correction (2026-11-15):** this paragraph is wrong — HPHA has no such defect; the 8 came
+  > from the ports' guard-unaware clamp. See `Cpp/ERRATA.md`'s E10 correction note and the
+  > `[Unreleased]` entry above.
 
   `orisnitsa` specifics: a debug instance must be `deinit()`ed or its record pages leak;
   `RecordStore.replace(ptr, fresh)` and `update(..., callstack)` changed signature; and

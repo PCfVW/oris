@@ -25,9 +25,10 @@ no fields, no code, no cost.
 
 **Caveats.** A double free is only caught while the block is still free: if the allocator
 has already handed the same address out again, the stale `free` succeeds silently, and it is
-the *legitimate* owner's later `free` that panics — blaming the wrong site. And requests
-smaller than 8 bytes are rounded up to 8, so an overrun that stays inside those 8 bytes is not
-seen either.
+the *legitimate* owner's later `free` that panics — blaming the wrong site. The guard starts
+right after the bytes you asked for, whatever their number, so an overrun of even one byte is
+seen (a request smaller than 8 bytes was rounded up to 8 before the guard until the fix of
+2026-11-15, which hid an overrun inside those 8 bytes; HPHA's own debug build never did).
 
 Detected corruption **panics** (fail fast: a heap that has corrupted itself is not worth
 continuing with). `check()` is the way to *ask* instead, and get an error back.
@@ -84,8 +85,8 @@ program catches and prints as the last line above. The Zig program prints its li
 error, says `check() found Corruption: guard bytes overwritten…`, and does not leak (a leak
 would end its process with a panic); it stops after the report.
 
-- **`requested`** is the bytes you asked for (at least 8) **plus 16 guard bytes per block** —
-  24 + 16 = 40.
+- **`requested`** is the bytes you asked for **plus 16 guard bytes per block** — 24 + 16 = 40.
+  (A request of 5 bytes counts 5 + 16 = 21, as in HPHA's debug build.)
 - **`allocated`** is what the allocator has mapped from the OS, in whole pages (64 KiB for the
   small-block path).
 
@@ -247,7 +248,7 @@ rather than walk stale structures.
 
 ## What it costs
 
-- **Memory:** 16 guard bytes per block (and requests under 8 bytes are rounded up to 8), plus
+- **Memory:** 16 guard bytes per block (so even the smallest request takes a 24-byte slot), plus
   one record per live block in pages of their own. A Zig record is a small fixed-size entry
   with an 8-frame callstack; a Rust record holds a `Backtrace`, which is variable-size and
   lives on the system heap.
