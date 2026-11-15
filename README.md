@@ -55,10 +55,10 @@ discipline, extended for a high-performance heap allocator (`Grit-ORIS`):
 - **[Zig/CONVENTIONS.md](Zig/CONVENTIONS.md)** — `orisnitsa`
 - **[Lean/CONVENTIONS.md](Lean/CONVENTIONS.md)** — the Lean proofs (kernel-only proofs, transcription discipline)
 
-The two ports share the cross-port-invariant discipline (see [ROADMAP.md](ROADMAP.md)), which the
-Lean model follows too: an identical
-public alloc/free sequence must produce identical internal state transitions across both ports —
-checked by replaying the trace corpus in CI ([docs/traces.md](docs/traces.md)).
+The two ports share the cross-port-invariant discipline (see [ROADMAP.md](ROADMAP.md)): an
+identical public alloc/free sequence must produce identical internal state transitions across both
+ports, checked by replaying the trace corpus in CI ([docs/traces.md](docs/traces.md)). A change to
+the tree logic or the size arithmetic must also be mirrored in the Lean model.
 The `CLAUDE.md` files (repo root, one per port, and one for `Lean/`) wire these conventions into AI-assisted edits.
 
 ## License
@@ -66,3 +66,5 @@ The `CLAUDE.md` files (repo root, one per port, and one for `Lean/`) wire these 
 Dual-licensed under [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE), at your option — see [LICENSE](LICENSE).
 
 The HPHA reference source under `Cpp/` retains its original 2007 copyright header verbatim and is included under the same dual license, consistent with the public license trail established by the [Open 3D Engine](https://github.com/o3de/o3de) project. See [Cpp/NOTICE.md](Cpp/NOTICE.md) for full provenance.
+
+The red-black tree library vendored under `Lean/RBTree/` is licensed under Apache-2.0 only, not under the MIT option. See [Lean/RBTree/NOTICE.md](Lean/RBTree/NOTICE.md).

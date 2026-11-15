@@ -13,9 +13,10 @@ below closes one of those three gaps. Mechanical checks enforce the first; the s
 transcription discipline plus a running cross-check against the Rust; the third is held by doc
 discipline.
 
-The proofs are about `orisnik` (the Rust port). Because the two ports run the same algorithm
-transition for transition ([the cross-port invariant](../ROADMAP.md)), a theorem about the
-algorithm holds for `orisnitsa` too, but the cross-check runs against the Rust.
+The proofs are about `orisnik` (the Rust port). The two ports run the same algorithm transition
+for transition ([the cross-port invariant](../ROADMAP.md)), so a theorem about the algorithm
+carries over to `orisnitsa` to the extent that invariant holds; the trace gate checks it, nothing
+proves it, and the cross-check runs against the Rust.
 
 ## Trigger Checklist
 
@@ -112,8 +113,14 @@ A `def` that models Rust code is a **transcription**, not a re-derivation:
 
 Where a model deliberately does not follow the Rust (only ever on states the theorems prove
 unreachable, unless stated otherwise), say so in **two** places: the definition's doc, and the
-module doc's complete list of departures. A departure that is *not* about an unreachable state
-(today, only `erase_fixup`'s cached `root`) must be called out as such, with what settles it.
+module doc's complete list of departures. A departure that is *not* about a state proven
+unreachable must be called out as such, with what settles it. Today: in `Fixup.lean`, the cached
+`root` of `erase_fixup` (settled by the heap layer's planned cached-root theorem) and `setBlack`
+leaving the sentinel alone where the Rust writes black over black (harmless); in `Heap.lean`, the
+loops' fuel (to be proven sufficient by the heap layer's steps 3 and 4).
+
+Lean's unused-variable linter does not see instance arguments: check by hand, by deleting it in
+a scratch copy, that every `[Std.TransCmp cmp]` a theorem takes is needed.
 
 ---
 
@@ -165,7 +172,7 @@ case analysis on its argument may recurse on an explicit size bound instead
 | Mirror-image standalone theorems | suffix `_left` / `_right` | `hpha_sibling_not_sentinel_left` |
 | Correctness theorem of an operation | `<def>_spec` | `insert_spec`, `erase_spec`, `normalizeSize_spec` |
 | A fact HPHA asserts | `hpha_<fact>` | `hpha_far_child_red_left` |
-| A fact about HPHA's own code | `hpha_<function>_...` | `hpha_normalize_SIZE_MAX`, `hphaMask_eq` |
+| A fact about HPHA's own code | `hpha_<function>_...`, or `<def>_<property>` for a model of HPHA's code | `hpha_normalize_SIZE_MAX`; `hphaMask_eq` (about the model `hphaMask`) |
 
 Properties use the same words everywhere: `_toList` (only rearranges), `_rotations` (rotation
 bound), `_balanced` (red-black invariant), `_spec` (the operation's full contract).

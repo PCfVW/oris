@@ -19,18 +19,20 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
   any declaration of any proof module, private and auxiliary ones included, and on any
   metaprogramming or debug option in the proof sources:
   - **Size arithmetic** (`Oris/Arith.lean`), on 64-bit words with the Rust's own operators:
-    `round_up` is exact whenever it does not overflow and agrees with HPHA's mask for every
-    alignment up to 2^30; at or below `MAX_ALLOCATION`, `normalize_size` and `Tree::grow` cannot
-    overflow (ERRATA E1, port side) while HPHA's unchecked normalization of `SIZE_MAX`, with
-    HPHA's own `round_up`, is zero (E1, HPHA side); `alloc_aligned`'s guard cannot underflow; every small request lands in the
-    smallest bucket that fits it.
+    `round_up` is exact whenever it does not overflow and computes the same word as HPHA's for
+    every power-of-two alignment up to 2^30; at or below `MAX_ALLOCATION`, `normalize_size` and
+    `Tree::grow` cannot overflow (ERRATA E1, port side) while HPHA's unchecked normalization of
+    `SIZE_MAX`, with HPHA's own `round_up`, is zero (E1, HPHA side); `alloc_aligned`'s guard
+    cannot underflow; on the plain allocation path every small request lands in the smallest
+    bucket that fits it (the aligned bucket path is not covered).
   - **The red-black tree** (`Oris/RB/Fixup.lean`): `insert_fixup`/`insert_counted` and
-    `erase_fixup`/`erase_counted` (`Node` branch), transcribed case for case on zippers, keep
-    the tree a valid, ordered red-black tree with a black root, with at most two rotations per
+    `erase_fixup`/`erase_counted` (`Node` branch), transcribed case for case on zippers, turn an
+    ordered, valid red-black tree with a black root into another, with at most two rotations per
     insert and three per erase; an insert yields exactly the elements of the vendored library's
-    verified insert, and an erase of a key present in the tree finds the element equal to it and
-    removes exactly that element. HPHA's `insert_fixup` and `erase_fixup` assertions (four
-    facts, six sites), which the ports neither check nor prove, are theorems.
+    verified insert, and an erase of a key present in the tree (for a transitive comparison)
+    finds the element equal to it, removes exactly that element, and leaves none equal to the
+    key. HPHA's `insert_fixup` and `erase_fixup` assertions (four facts, six sites), which the
+    ports neither check nor prove, are theorems.
   - **The model agrees with the code**: the new ignored test
     `rbtree::tests::print_lean_model_cross_check_trace` prints, after each of 20,000 operations,
     the rotation count and kind, the whole tree of keys with its colours, every node's `parent`
@@ -51,7 +53,8 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
   - **The pointer layer, its first theorems** (`Oris/RB/Heap.lean`): the abstraction relation
     saying when a heap *is* a zipper state (`Rep`, `RepPath`, `Located`); in a represented tree
     no address occurs twice (`Rep.nodup`, from the relation alone, with no separate distinctness
-    hypothesis), and writes outside it preserve it (`Rep.frame`, `RepPath.frame`); and
+    hypothesis), and writes outside it preserve it (`Rep.frame`; `RepPath.frame`, which also
+    needs the sentinel's links and colour unchanged); and
     `NodeBase::rotate`, write by write, performs the zipper rotation the red-black proofs use
     (`rotate_refines_left`, `rotate_refines_right`), changing only the four records its frame
     theorems name. The other pointer functions are still to come.

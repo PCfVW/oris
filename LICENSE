@@ -16,3 +16,8 @@ conditions.
 
 The C++ reference source under `Cpp/` is included under the same terms; see
 `Cpp/NOTICE.md` for the upstream provenance and license trail.
+
+The red-black tree library vendored under `Lean/RBTree/` (from
+leanprover-community/batteries-recycling) is licensed under the Apache License,
+Version 2.0 only (`Lean/RBTree/LICENSE`), not under the MIT option; see
+`Lean/RBTree/NOTICE.md`.

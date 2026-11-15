@@ -11,13 +11,31 @@ arithmetic of the tree path's normalization and growth and of the bucket size cl
 | `roundUp` | `align.rs` `round_up` |
 | `normalizeSize`, `MAX_ALLOCATION` | `tree.rs` `normalize_size`, `MAX_ALLOCATION` |
 | `growSize` | `tree.rs` `Tree::grow` (its two size lines) |
-| `bucketSpacing`, `bucketSpacingAligned`, `bucketSpacingInverse` | `bucket.rs` `bucket_spacing_function`, `_aligned`, `_inverse` |
+| `bucketSpacing`, `bucketSpacingAligned`, `bucketSpacingInverse` | `bucket.rs` `bucket_spacing_function{,_aligned,_inverse}` |
 | `clampSmall`, `isSmall` | `bucket.rs` `clamp_small_allocation`, `is_small_allocation` |
-| `hphaMask`, `hphaRoundUp` | `Cpp/hpha.h` `round_up` and its mask `-(int)a` |
+| `hphaMask`, `hphaRoundUp`, `hphaNormalize` | `Cpp/hpha.h` `round_up`, its mask `-(int)a`, and the normalization in `tree_alloc` |
 
-`alloc_aligned`'s guard is stated directly on its expression (`alloc_aligned_guard`). Not
-modelled yet: `extract_aligned`'s alignment offsets and the split threshold
-(`SPLIT_REMAINDER_MIN`), which belong with the memory-management tier.
+`alloc_aligned`'s guard is stated directly on its expression (`alloc_aligned_guard`), and the
+plain small-allocation path (`is_small_allocation`, `clamp_small_allocation`, `guard::inflate`,
+`bucket_spacing_function`, in `orisnik.rs` `alloc`) is composed in `small_alloc_bucket`.
+
+**Departures from the Rust: none.** Every definition above transcribes its Rust expression;
+`isSmall` takes the guard size as a parameter where the Rust reads the constant
+`MEMORY_GUARD_SIZE` (16 with `debug-allocator`, 0 without), so its theorems cover both builds.
+
+**Not modelled yet**, among the size arithmetic of `tree.rs`, `bucket.rs` and `align.rs`, all
+of it unchecked `usize` arithmetic that the memory-management tier will need:
+- the tree path's other sums: `extract_aligned`'s alignment offsets and the split threshold
+  (`SPLIT_REMAINDER_MIN`); `split`'s `size + size_of::<BlockHeader>()`; `realloc`'s,
+  `realloc_aligned`'s and `resize`'s neighbour sums (`bl_size + next_size`,
+  `bl_size + prev_size + next_size`, plus the alignment offset and a header); `purge`'s
+  `mem_end - mem_start`; the `allocated_bytes` counters (`tree.rs`, `bucket.rs`);
+- `bucket.rs`'s page carving (`usable / elem_size`, `slot_count * elem_size`, and the slot
+  walk's `n - elem_size` and `i + elem_size`);
+- `align.rs`'s `round_down`, `align_up` and `align_down`: `align_up` is `round_up` on an
+  address, which the `MAX_ALLOCATION` bound does not limit;
+- the aligned small-allocation path (`orisnik.rs` `bucket_alloc_aligned`), which takes the
+  bucket of `round_up(size + guard, alignment)`.
 
 Each definition transcribes the Rust expression operator for operator. Rust's `+`/`-` on `usize`
 panic on overflow in debug builds and wrap in release builds; `BitVec` wraps. So every theorem
@@ -28,9 +46,14 @@ not overflow* (so debug builds never panic and the wrapped value is the mathemat
 
 Layout constants: `BLOCK_HEADER = 16` and `FREE_NODE = 40` are the values of the Rust's
 compile-time assertions `size_of::<BlockHeader>() == 2 * size_of::<usize>()` (`block.rs`) and
-`size_of::<NodeBase>() == 5 * size_of::<usize>()` (`rbtree.rs`; `FreeNode` is `#[repr(C)]` with
-`NodeBase` as its only field) on 64-bit `usize`; `PAGE_SIZE = 65536` is `os.rs`'s constant
-`PAGE_SIZE`, fixed at 64 KiB on every platform.
+`size_of::<NodeBase>() == 5 * size_of::<usize>()` (`rbtree.rs`; `FreeNode`, in `block.rs`, is
+`#[repr(C)]` with `NodeBase` as its only field) on 64-bit `usize`; `PAGE_SIZE = 65536` is
+`os.rs`'s constant `PAGE_SIZE`, fixed at 64 KiB on every platform. HPHA's own
+`sizeof(block_header)` and `sizeof(free_node)` are the same 16 and 40 on x64 (`Cpp/hpha.h`: a
+pointer and a `size_t`, then a padding array of length 0 at `DEFAULT_ALIGNMENT = sizeof(double)`;
+a tree node of five pointers). The bucket functions' literals are `bucket.rs`'s constants:
+`8 = MIN_ALLOCATION`, `>>> 3` and `<<< 3` for `MIN_ALLOCATION_LOG2 = 3`,
+`256 = MAX_SMALL_ALLOCATION`, and 32 buckets (`NUM_BUCKETS`).
 -/
 
 namespace Oris.Arith
@@ -114,9 +137,10 @@ theorem roundUp_spec (v : Usize) (k : Nat) (hk : k < 64) (h : v.toNat + (2^k - 1
 conversion to the 64-bit `size_t` sign-extends. -/
 def hphaMask (a : Usize) : Usize := (-(a.truncate 32)).signExtend 64
 
-/-- For every power-of-two alignment up to `2^30`, HPHA's mask is the port's `!(a - 1)`, so
-`round_up` is a faithful port there. (At `a = 2^31` HPHA's `(int)a` is `INT_MIN` and `-INT_MIN`
-is undefined behaviour in C++; the port's mask stays correct up to `2^63`.) -/
+/-- For every power-of-two alignment up to `2^30`, HPHA's mask is the port's `!(a - 1)`
+(`hphaRoundUp_eq` draws the consequence for `round_up`). At `a = 2^31` HPHA's `(int)a` is
+`INT_MIN` and `-INT_MIN` is undefined behaviour in C++; from `2^32` on, `(int)a` is `0` and so is
+the mask, a defined but wrong value. The port's mask stays correct up to `2^63`. -/
 theorem hphaMask_eq : ∀ k : Fin 31,
     hphaMask (BitVec.ofNat 64 (2^k.val)) = ~~~(BitVec.ofNat 64 (2^k.val) - 1) := by
   decide
@@ -124,12 +148,20 @@ theorem hphaMask_eq : ∀ k : Fin 31,
 /-- `Cpp/hpha.h` `round_up`, with its own mask: `(x + (a-1)) & -(int)a`. -/
 def hphaRoundUp (x a : Usize) : Usize := (x + (a - 1)) &&& hphaMask a
 
+/-- **`round_up` is a faithful port of HPHA's** for every power-of-two alignment up to `2^30`:
+on every value, the two compute the same word. -/
+theorem hphaRoundUp_eq (x : Usize) (k : Fin 31) :
+    hphaRoundUp x (BitVec.ofNat 64 (2^k.val)) = roundUp x (BitVec.ofNat 64 (2^k.val)) := by
+  unfold hphaRoundUp roundUp
+  rw [hphaMask_eq k]
+
 /-! ## `normalize_size` and `MAX_ALLOCATION` -/
 
 /-- `tree.rs` `MAX_ALLOCATION`:
 `usize::MAX - PAGE_SIZE - 3 * size_of::<BlockHeader>() - size_of::<BlockHeader>()`. -/
 def MAX_ALLOCATION : Usize := BitVec.allOnes 64 - PAGE_SIZE - 3 * BLOCK_HEADER - BLOCK_HEADER
 
+/-- `MAX_ALLOCATION`'s value: its three subtractions do not underflow. -/
 theorem MAX_ALLOCATION_toNat : MAX_ALLOCATION.toNat = 2^64 - 1 - 65536 - 48 - 16 := by decide
 
 /-- `tree.rs` `normalize_size`. -/
@@ -174,11 +206,16 @@ theorem normalizeSize_spec (size : Usize) :
     have : size > MAX_ALLOCATION := by rw [gt_iff_lt, BitVec.lt_def, MAX_ALLOCATION_toNat]; omega
     simp [normalizeSize, this]
 
-/-- **ERRATA E1, HPHA side.** HPHA's unchecked normalization of `SIZE_MAX`
-(`if (size < sizeof(free_node)) ...; size = round_up(size, sizeof(block_header))`), computed with
-HPHA's own `round_up` and mask, wraps to a block size of **zero**, exactly as the register says. -/
-theorem hpha_normalize_SIZE_MAX :
-    hphaRoundUp (BitVec.allOnes 64) BLOCK_HEADER = 0 := by decide
+/-- `Cpp/hpha.h` `tree_alloc`'s normalization, unchecked:
+`if (size < sizeof(free_node)) size = sizeof(free_node); size = round_up(size,
+sizeof(block_header));`, with HPHA's own `round_up`. -/
+def hphaNormalize (size : Usize) : Usize :=
+  let size := if size < FREE_NODE then FREE_NODE else size
+  hphaRoundUp size BLOCK_HEADER
+
+/-- **ERRATA E1, HPHA side.** HPHA's unchecked normalization of `SIZE_MAX`, computed with HPHA's
+own `round_up` and mask, wraps to a block size of **zero**, exactly as the register says. -/
+theorem hpha_normalize_SIZE_MAX : hphaNormalize (BitVec.allOnes 64) = 0 := by decide
 
 /-! ## `Tree::grow` -/
 
@@ -257,8 +294,12 @@ def saturatingAdd (a b : Usize) : Usize :=
 `debug-allocator`, 0 without). -/
 def isSmall (guard size : Usize) : Bool := saturatingAdd size guard ≤ 256
 
-private theorem bucketSpacing_toNat (s : Usize) (h1 : 1 ≤ s.toNat) (h2 : s.toNat ≤ 256) :
+/-- `bucket_spacing_function` on `[1, 256]`, in two halves: its addition does not overflow and
+its subtraction does not underflow, and its value is the mathematical one. -/
+theorem bucketSpacing_toNat (s : Usize) (h1 : 1 ≤ s.toNat) (h2 : s.toNat ≤ 256) :
+    s.toNat + 7 < 2^64 ∧ 1 ≤ (s.toNat + 7) / 8 ∧
     (bucketSpacing s).toNat = (s.toNat + 7) / 8 - 1 := by
+  refine ⟨by omega, by omega, ?_⟩
   unfold bucketSpacing
   have a : (1 : Usize).toNat = 1 := rfl
   have b : (8 : Usize).toNat = 8 := rfl
@@ -266,22 +307,27 @@ private theorem bucketSpacing_toNat (s : Usize) (h1 : 1 ≤ s.toNat) (h2 : s.toN
     Nat.shiftRight_eq_div_pow, a, b]
   omega
 
-private theorem bucketSpacingInverse_toNat (i : Usize) (h : i.toNat < 32) :
+/-- `bucket_spacing_function_inverse` on the 32 buckets, in two halves: its addition does not
+overflow and its shift drops no bit, and its value is the mathematical one. -/
+theorem bucketSpacingInverse_toNat (i : Usize) (h : i.toNat < 32) :
+    i.toNat + 1 < 2^64 ∧ (i.toNat + 1) * 8 < 2^64 ∧
     (bucketSpacingInverse i).toNat = (i.toNat + 1) * 8 := by
+  refine ⟨by omega, by omega, ?_⟩
   unfold bucketSpacingInverse
   simp only [BitVec.toNat_shiftLeft, BitVec.toNat_add, Nat.shiftLeft_eq]
   simp; omega
 
-/-- Every small request maps to one of the 32 buckets, and that bucket's element size is the
-**smallest** size class that fits it: at least the request, less than one class (8 bytes) above
-it. -/
+/-- Every `bucket_spacing_function` input in `[1, 256]` maps to one of the 32 buckets, and that
+bucket's element size is the **smallest** size class that fits it: at least the input, less than
+one class (8 bytes) above it. (`small_alloc_bucket` composes this with the plain allocation path,
+from the request.) -/
 theorem bucketSpacing_spec (s : Usize) (h1 : 1 ≤ s.toNat) (h2 : s.toNat ≤ 256) :
     (bucketSpacing s).toNat < 32 ∧
     s.toNat ≤ (bucketSpacingInverse (bucketSpacing s)).toNat ∧
     (bucketSpacingInverse (bucketSpacing s)).toNat < s.toNat + 8 := by
-  have e := bucketSpacing_toNat s h1 h2
+  have e := (bucketSpacing_toNat s h1 h2).2.2
   have hi : (bucketSpacing s).toNat < 32 := by omega
-  rw [bucketSpacingInverse_toNat _ hi, e]
+  rw [(bucketSpacingInverse_toNat _ hi).2.2, e]
   omega
 
 /-- The inverse really is an inverse: bucket `i`'s element size maps back to bucket `i`, and
@@ -289,24 +335,28 @@ every element size lies in `[8, 256]`. -/
 theorem bucketSpacing_inverse (i : Usize) (h : i.toNat < 32) :
     bucketSpacing (bucketSpacingInverse i) = i ∧
     8 ≤ (bucketSpacingInverse i).toNat ∧ (bucketSpacingInverse i).toNat ≤ 256 := by
-  have e := bucketSpacingInverse_toNat i h
+  have e := (bucketSpacingInverse_toNat i h).2.2
   refine ⟨?_, by omega, by omega⟩
   apply BitVec.eq_of_toNat_eq
-  rw [bucketSpacing_toNat _ (by omega) (by omega), e]
+  rw [(bucketSpacing_toNat _ (by omega) (by omega)).2.2, e]
   omega
 
-/-- On multiples of 8 the cheaper aligned form computes the same bucket. -/
-theorem bucketSpacingAligned_eq (s : Usize) (h1 : 1 ≤ s.toNat) (h2 : s.toNat ≤ 256)
-    (h8 : s.toNat % 8 = 0) : bucketSpacingAligned s = bucketSpacing s := by
+/-- On every multiple of 8 the cheaper aligned form computes the same word (at `0` both wrap to
+`usize::MAX`). -/
+theorem bucketSpacingAligned_eq (s : Usize) (h8 : s.toNat % 8 = 0) :
+    bucketSpacingAligned s = bucketSpacing s := by
   apply BitVec.eq_of_toNat_eq
-  rw [bucketSpacing_toNat s h1 h2]
-  unfold bucketSpacingAligned
-  simp only [BitVec.toNat_sub, BitVec.toNat_ushiftRight, Nat.shiftRight_eq_div_pow]
-  simp; omega
+  unfold bucketSpacingAligned bucketSpacing
+  have hs := s.isLt
+  have a : (1 : Usize).toNat = 1 := rfl
+  have b : (8 : Usize).toNat = 8 := rfl
+  simp only [BitVec.toNat_sub, BitVec.toNat_ushiftRight, BitVec.toNat_add,
+    Nat.shiftRight_eq_div_pow, a, b]
+  simp
+  omega
 
-/-- Clamping makes every small request (including 0) a valid `bucket_spacing_function` input. -/
-theorem clampSmall_spec (s : Usize) (h : s.toNat ≤ 256) :
-    1 ≤ (clampSmall s).toNat ∧ (clampSmall s).toNat ≤ 256 ∧ s.toNat ≤ (clampSmall s).toNat := by
+/-- `clamp_small_allocation` is `max(size, MIN_ALLOCATION)`, on every input. -/
+theorem clampSmall_spec (s : Usize) : (clampSmall s).toNat = max s.toNat 8 := by
   unfold clampSmall
   split <;> rename_i hs <;> rw [BitVec.lt_def] at hs <;> simp at hs ⊢ <;> omega
 
@@ -319,5 +369,28 @@ theorem isSmall_iff (guard size : Usize) :
   · rename_i h; simp only [decide_eq_true_eq, BitVec.le_def, BitVec.toNat_add]
     rw [Nat.mod_eq_of_lt h]; simp
   · rename_i h; simp only [decide_eq_true_eq, BitVec.le_def]; simp; omega
+
+/-- **The plain small-allocation path lands in the smallest bucket that fits.** `orisnik.rs`
+`alloc` sends a request `s` with `is_small_allocation(s)` to the bucket
+`bucket_spacing_function(inflate(clamp_small_allocation(s)))`, where `inflate` adds the guard.
+For any guard up to 248 (the Rust's is 0 or 16): the inflated size is `max(s, 8) + guard`
+(neither step overflows), the bucket is one of the 32, and its element size holds `s` and the
+guard and is less than one class (8 bytes) above the inflated size. (The aligned bucket path
+takes the bucket of `round_up(size + guard, alignment)` instead; it is not covered here.) -/
+theorem small_alloc_bucket (guard s : Usize) (hg : guard.toNat ≤ 248)
+    (hs : isSmall guard s = true) :
+    (clampSmall s + guard).toNat = max s.toNat 8 + guard.toNat ∧
+    (bucketSpacing (clampSmall s + guard)).toNat < 32 ∧
+    s.toNat + guard.toNat ≤
+      (bucketSpacingInverse (bucketSpacing (clampSmall s + guard))).toNat ∧
+    (bucketSpacingInverse (bucketSpacing (clampSmall s + guard))).toNat <
+      max s.toNat 8 + guard.toNat + 8 := by
+  have hsg := (isSmall_iff guard s).1 hs
+  have hc := clampSmall_spec s
+  have hn : (clampSmall s + guard).toNat = max s.toNat 8 + guard.toNat := by
+    rw [BitVec.toNat_add, hc, Nat.mod_eq_of_lt (by omega)]
+  have spec := bucketSpacing_spec (clampSmall s + guard) (by omega) (by omega)
+  rw [hn] at spec
+  exact ⟨hn, spec.1, by omega, spec.2.2⟩
 
 end Oris.Arith

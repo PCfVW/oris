@@ -29,6 +29,11 @@ covers both ports' layout. The proofs, like the cross-check, are against the Rus
   - `erase_counted` writes them through `substitute_with(repl, repl_child)` when `repl_child` is
     `head`. That is how `erase_fixup`, starting from an empty hole, finds the hole's parent and
     side.
+  - `switch_with(repl, node)` then overwrites them when one of `node`'s children is `head` at
+    the time of the call: in a two-child erase whose successor `repl` was `node`'s right child
+    with no right child, it writes the scratch `parent` as `repl`, side right, which is where the
+    hole now is. That second value is the one `erase_fixup` reads, so the hole invariant of
+    step 4 holds after `switch_with`, not after `substitute_with`.
   - `rotate` overwrites them whenever the child it moves across (`top_s_child`) is `head`.
   - `Fixup.lean` leaves this field out (the "sentinel's scratch `parent`" in its module doc).
 - **Equal keys form a chain**, not duplicate tree nodes. One member of each group is attached to
@@ -52,7 +57,7 @@ covers both ports' layout. The proofs, like the cross-check, are against the Rus
 | Keys | A fixed function `key : Addr → α` with a `cmp` satisfying `Std.TransCmp` | Keys never change (§1), and the Rust's `T::cmp` compares the keys of two nodes. |
 | The abstract tree | `RBNode Addr`, ordered by `fun a b => cmp (key a) (key b)` | A tree of **addresses**, not of keys, so node identity survives. That identity is what `Promote`, `switch_with` and the cached-root question are about. `Fixup.lean`'s theorems are generic in the element type, so they apply unchanged. |
 | Rust functions | One Lean function per Rust function, one heap update per Rust write, **in the Rust's order** | Transcription rule 2 of `CONVENTIONS.md`, now at pointer granularity: each Lean line can be checked against one Rust line. |
-| The loops | `insert_fixup` and `erase_fixup` take explicit fuel, plus a theorem that fuel at least the tree's height suffices | Keeps the transcriptions executable (see §5, step 1b) and avoids a termination measure that would need the abstraction relation inside the definition. |
+| The loops | `insert_fixup` and `erase_fixup` take explicit fuel, plus a theorem that fuel at least the tree's height plus one suffices (each loop spends one unit on its final, failing test) | Keeps the transcriptions executable (see §5, step 1b) and avoids a termination measure that would need the abstraction relation inside the definition. |
 
 ## 3. The abstraction relation
 
@@ -123,6 +128,13 @@ The frame lemma takes the form "a heap that agrees on every address of `t` repre
 (`Rep.frame`), with a variant for the subtree a rotation moves across, whose first node takes a
 new `parent` and side (`Rep.reroot`).
 
+**Left for step 4** (found by the audit of 2026-11-15). `Tree` does not require `head ≠ null`:
+in a heap whose sentinel is at `0`, the root reads as not attached, and `erase_counted` would take
+the `Link` branch. And nothing constrains `prev` and `next`, which `erase_counted`'s branch choice
+(`chained`) reads. The step-4 theorems will add `head ≠ null` (to `Tree`, or as a hypothesis), and
+`Groups` must pin `prev = a` for an attached node with no equal-key duplicates; until then, the
+step-3 theorems about the `Node` branch take `!chained h node` as a hypothesis.
+
 ## 4. The theorems, in order
 
 Each step uses the ones before it.
@@ -180,10 +192,10 @@ write. Over 20,000 operations, roughly 400,000 writes, that is quadratic. The re
 therefore copies the heap into a table after each operation (`fun a => table.getD a default`),
 which is extensionally equal to the heap it copies. Reads then cost one lookup, and the proven
 definitions do not change: only the tool does the copying. With about 1,000 addresses, that is
-about 20 million steps per run. (The 20,000-operation limit seen before was Miri's, which
-interprets the Rust about a thousand times slower. Natively the Rust producer takes
-milliseconds, and the `xcheck` job then took about 50 seconds, mostly building; with the heap
-replay, it takes about 2 minutes 22 on GitHub, §7.)
+about 20 million steps per run. (The Miri run, which interprets the Rust about a thousand times
+slower, is limited to the first 1,000 steps; 20,000 is the native length. Natively the Rust
+producer takes milliseconds, and the `xcheck` job then took about 50 seconds, mostly building;
+with the heap replay, it took between 2 and 3 minutes on GitHub, §7.)
 
 ## 6. The cached root, sketched
 
