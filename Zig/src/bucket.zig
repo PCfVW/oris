@@ -73,10 +73,29 @@ pub fn isSmallAllocation(comptime config: Config, size: usize) bool {
     return size +| guard.memoryGuardSize(config) <= MAX_SMALL_ALLOCATION;
 }
 
-/// Raises `size` up to the smallest bucket size class if it's below it. Ports
-/// `allocator::clamp_small_allocation`.
-pub fn clampSmallAllocation(size: usize) usize {
-    return if (size < MIN_ALLOCATION) MIN_ALLOCATION else size;
+/// Raises a request so that it, plus the memory guard, fills at least the smallest
+/// bucket size class. Ports `allocator::clamp_small_allocation` exactly:
+/// `(s + MEMORY_GUARD_SIZE < MIN_ALLOCATION) ? MIN_ALLOCATION - MEMORY_GUARD_SIZE : s`.
+///
+/// With `config.debug` false (a guard of 0) this is `max(size, MIN_ALLOCATION)`. With
+/// it (a guard of 16, already more than `MIN_ALLOCATION`) it never raises anything: the
+/// guard alone fills the smallest class, so the debug record keeps the caller's size
+/// and the guard bytes start right after it, as in HPHA (`Cpp/ERRATA.md` E10's
+/// correction note).
+///
+/// Two departures in form, none in value on any size HPHA's own `+` does not wrap:
+/// `+|` (saturating), as in `isSmallAllocation`, because `realloc` clamps *before* it
+/// tests smallness, so `size` can be huge, where HPHA's wrapping `+` would turn the last
+/// `MEMORY_GUARD_SIZE` values below `maxInt(usize)` into tiny ones; and `-%` (wrapping),
+/// HPHA's `size_t` subtraction, which would wrap only for a guard of `MIN_ALLOCATION` or
+/// more, when this branch cannot be taken. Mirrors `orisnik`'s
+/// `bucket::clamp_small_allocation`.
+pub fn clampSmallAllocation(comptime config: Config, size: usize) usize {
+    const memory_guard_size = comptime guard.memoryGuardSize(config);
+    return if (size +| memory_guard_size < MIN_ALLOCATION)
+        MIN_ALLOCATION -% memory_guard_size
+    else
+        size;
 }
 
 /// The bucket index serving `size` (rounding up to the next size class). Ports
@@ -718,9 +737,22 @@ test "bucket spacing round-trips every class" {
 }
 
 test "clamp and is-small-allocation" {
-    try testing.expectEqual(MIN_ALLOCATION, clampSmallAllocation(1));
-    try testing.expectEqual(MIN_ALLOCATION, clampSmallAllocation(MIN_ALLOCATION));
-    try testing.expectEqual(MIN_ALLOCATION + 1, clampSmallAllocation(MIN_ALLOCATION + 1));
+    // Raised to `MIN_ALLOCATION` without the guard; with it (16 bytes, already a whole
+    // class), left as the caller asked, as HPHA's guard-aware clamp does.
+    inline for ([_]Config{ .{}, .{ .debug = true } }) |config| {
+        const memory_guard_size = guard.memoryGuardSize(config);
+        for ([_]usize{ 1, MIN_ALLOCATION - 1 }) |size| {
+            const want = if (memory_guard_size == 0) MIN_ALLOCATION else size;
+            try testing.expectEqual(want, clampSmallAllocation(config, size));
+            try testing.expect(clampSmallAllocation(config, size) + memory_guard_size >= MIN_ALLOCATION);
+        }
+        try testing.expectEqual(MIN_ALLOCATION, clampSmallAllocation(config, MIN_ALLOCATION));
+        try testing.expectEqual(MIN_ALLOCATION + 1, clampSmallAllocation(config, MIN_ALLOCATION + 1));
+        // `realloc` clamps before testing smallness: a huge size stays as it is.
+        const max = std.math.maxInt(usize);
+        try testing.expectEqual(max, clampSmallAllocation(config, max));
+        try testing.expectEqual(max - 9, clampSmallAllocation(config, max - 9));
+    }
     // The threshold itself shifts down by `guard.memoryGuardSize(config)` under
     // `config.debug` (0 otherwise, restoring the pre-v0.2.0 boundary exactly) —
     // see `isSmallAllocation`'s own doc.

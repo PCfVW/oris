@@ -61,12 +61,25 @@ pub(crate) const fn is_small_allocation(size: usize) -> bool {
     size.saturating_add(crate::guard::MEMORY_GUARD_SIZE) <= MAX_SMALL_ALLOCATION
 }
 
-/// Raises `size` up to the smallest bucket size class if it's below it. Ports
-/// `allocator::clamp_small_allocation`.
+/// Raises a request so that it, plus the memory guard, fills at least the smallest bucket
+/// size class. Ports `allocator::clamp_small_allocation` exactly:
+/// `(s + MEMORY_GUARD_SIZE < MIN_ALLOCATION) ? MIN_ALLOCATION - MEMORY_GUARD_SIZE : s`.
+///
+/// Without `debug-allocator` (a guard of 0) this is `max(size, MIN_ALLOCATION)`. With it (a
+/// guard of 16, already more than `MIN_ALLOCATION`) it never raises anything: the guard alone
+/// fills the smallest class, so the debug record keeps the caller's size and the guard bytes
+/// start right after it, as in HPHA (`Cpp/ERRATA.md` E10's correction note).
+///
+/// Two departures in form, none in value on any size HPHA's own `+` does not wrap:
+/// `saturating_add`, as in [`is_small_allocation`], because `realloc` clamps *before* it
+/// tests smallness, so `size` can be huge, where HPHA's wrapping `+` would turn the last
+/// `MEMORY_GUARD_SIZE` values below `usize::MAX` into tiny ones; and `wrapping_sub`, HPHA's
+/// `size_t` subtraction, which would wrap only for a guard of `MIN_ALLOCATION` or more, when
+/// this branch cannot be taken.
 #[must_use]
 pub(crate) const fn clamp_small_allocation(size: usize) -> usize {
-    if size < MIN_ALLOCATION {
-        MIN_ALLOCATION
+    if size.saturating_add(crate::guard::MEMORY_GUARD_SIZE) < MIN_ALLOCATION {
+        MIN_ALLOCATION.wrapping_sub(crate::guard::MEMORY_GUARD_SIZE)
     } else {
         size
     }
@@ -986,12 +999,22 @@ mod tests {
 
     #[test]
     fn clamp_and_is_small_allocation() {
-        assert_eq!(clamp_small_allocation(1), MIN_ALLOCATION);
+        // Raised to `MIN_ALLOCATION` without the guard; with it (16 bytes, already a whole
+        // class), left as the caller asked, as HPHA's guard-aware clamp does.
+        let guard = crate::guard::MEMORY_GUARD_SIZE;
+        for size in [1, MIN_ALLOCATION - 1] {
+            let want = if guard == 0 { MIN_ALLOCATION } else { size };
+            assert_eq!(clamp_small_allocation(size), want, "size {size}");
+            assert!(clamp_small_allocation(size) + guard >= MIN_ALLOCATION);
+        }
         assert_eq!(clamp_small_allocation(MIN_ALLOCATION), MIN_ALLOCATION);
         assert_eq!(
             clamp_small_allocation(MIN_ALLOCATION + 1),
             MIN_ALLOCATION + 1
         );
+        // `realloc` clamps before testing smallness: a huge size stays as it is.
+        assert_eq!(clamp_small_allocation(usize::MAX), usize::MAX);
+        assert_eq!(clamp_small_allocation(usize::MAX - 9), usize::MAX - 9);
         // The threshold itself shifts down by `MEMORY_GUARD_SIZE` under the
         // `debug-allocator` feature (0 otherwise, restoring the v0.1.x boundary
         // exactly) — see `is_small_allocation`'s own doc.

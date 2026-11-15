@@ -179,7 +179,9 @@ its record — would be undefined.
 
 ### E10 — under `DEBUG_ALLOCATOR`, a sized `free` of a sub-minimum allocation asserts
 
-**HPHA:** `allocator::alloc(size_t size)` (`hpha.h`) clamps a small request up to
+**Status: withdrawn (2026-11-15) — see the correction note below: the defect this entry describes does not exist. HPHA's clamp accounts for the memory guard, and in a debug build it leaves `alloc(5)`'s size at 5. The ports' clamp did not, which is where the 8 came from; they now port HPHA's clamp exactly.**
+
+**Superseded — see the correction below. What this entry claimed:** **HPHA:** `allocator::alloc(size_t size)` (`hpha.h`) clamps a small request up to
 `MIN_ALLOCATION` (`size = clamp_small_allocation(size)`) *before* `debug_add(ptr, size,
 …)`, so the debug record for `alloc(5)` holds size **8**. `free(void* ptr, size_t
 origSize)` passes the caller's `origSize` — 5 — unclamped to `debug_remove(ptr, origSize)`,
@@ -207,6 +209,46 @@ detection step).
 allocator state; where HPHA's assert would have aborted, the ports continue.
 
 **Fixed in:** v0.2.0.
+
+**Correction (2026-11-15).** HPHA's `clamp_small_allocation` is guard-aware:
+
+```cpp
+static inline size_t clamp_small_allocation(size_t s) {
+    return (s + MEMORY_GUARD_SIZE < MIN_ALLOCATION) ? MIN_ALLOCATION - MEMORY_GUARD_SIZE : s;
+}
+```
+
+and `MEMORY_GUARD_SIZE` is 16 exactly when `DEBUG_ALLOCATOR` is defined (`hpha.h`, in
+`class allocator`), 0 otherwise. So in the debug build, the only build that has the
+assertion, the clamp leaves every small size alone (`s + 16 < 8` never holds): `alloc(5)`
+records **5**, and `free(p, 5)` passes `assert(size == record->size())`. Without
+`DEBUG_ALLOCATOR` the clamp is `max(s, 8)`, but there is no record to compare. The entry above
+read HPHA through the ports' own clamp, which had dropped the guard term
+(`size < MIN_ALLOCATION ? MIN_ALLOCATION : size`) and so recorded 8.
+
+Checked by compiling this directory's `hpha.h` and `hpha.cpp`, unmodified, with MSVC as a debug
+build (`/D_DEBUG /MTd`, which defines `DEBUG_ALLOCATOR`; asserts on), on 2026-11-15:
+
+| Program | Result |
+|---|---|
+| `alloc(5)` | recorded size 5 (`requested()` grows by 5 + 16 = 21) |
+| `alloc(5)`, then `free(p, 5)` | passes the assertion |
+| `alloc(5)`, then `free(p, 8)` | `Assertion failed: size == record->size()` (`hpha.cpp`, line 809) |
+| `alloc(3)`, then `free(p, 3)`; `alloc(12)`, then `free(p, 12)` | pass |
+
+**What the ports' clamp changed**, in debug-allocator builds only and for requests of 1 to 7
+bytes: the record held 8 instead of the size asked for, and the guard bytes started at byte 8,
+so an overrun into bytes `[size, 8)` went undetected, which HPHA detects. The bucket chosen
+was the same (the guard alone fills the smallest class). The v0.2.0 "fix" above, comparing
+the caller's size after the same clamp on the bucket path, compensated for the ports' own
+divergence.
+
+**Ports, since the correction (`[Unreleased]`):** `clamp_small_allocation` /
+`clampSmallAllocation` port HPHA's guard-aware clamp exactly (with a saturating add, as
+`is_small_allocation` has, because `realloc` clamps before it tests smallness); the debug
+record holds the size asked for on both paths; and `verify` compares the caller's size raw, as
+HPHA does. Release builds are unchanged (a guard of 0 makes the two clamps equal), and so is
+the trace corpus, which the oracle and both replayers run without the debug allocator.
 
 
 ## B. Defects the ports preserve
