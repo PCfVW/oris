@@ -10,6 +10,16 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-15
+
+A fidelity patch (`ROADMAP.md` § *Fidelity fixes are patches*), plus the machine-checked proofs
+in `Lean/`, which ship in neither package. Without `debug-allocator` nothing changes: every state
+transition, and every transition record of the trace corpus, is the same as in 0.3.1. With it,
+both ports now clamp small requests as HPHA's debug build does (see *Fixed* below), which changes
+one documented number: after a request of 1 to 7 bytes, `requested()` grows by the size asked for
+plus 16 (21 for `alloc(5)`, as in HPHA), no longer by 8 plus 16. `orisnik` and `orisnitsa` 0.3.2
+ship in lockstep.
+
 ### Added
 
 - **Machine-checked proofs in Lean 4** ([`Lean/`](Lean/README.md)), about the algorithms
