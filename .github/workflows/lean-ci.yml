@@ -1,16 +1,23 @@
 name: Lean CI
 
-# The Lean proofs about orisnik (Lean/, see Lean/README.md), checked in two ways:
+# The Lean proofs about orisnik (Lean/, see Lean/README.md), checked in three ways:
 #
-# - proofs: every theorem compiles with no warnings, and the axiom gate (Lean/Oris/Gate.lean)
-#   confirms that every proof, the vendored RBTree library's included, rests on Lean's kernel and
-#   its three standard axioms alone (no sorry, no native_decide or bv_decide, no axiom).
+# - proofs: every theorem compiles with no warnings; the axiom audit (lake exe audit,
+#   Lean/Tools/Audit.lean, run outside the build so no proof module can tamper with it)
+#   confirms that every declaration of every Oris and RBTree module rests on Lean's three
+#   standard axioms alone, that Oris.lean imports every proof module, and that no proof module
+#   uses sorry, native_decide, axioms, metaprogramming or debug options; and the kernel replay
+#   (leanchecker --fresh) re-checks every declaration from scratch, so none can have skipped the
+#   kernel.
 # - xcheck: the Lean models agree with the running Rust code. rbtree.rs's ignored test
-#   print_lean_model_cross_check_trace prints the rotation count and the whole tree's shape and
-#   colours after each of 20,000 operations; lake exe xcheck replays them through the proven
-#   zipper model and through the heap model (Lean/Oris/RB/Heap.lean, the pointer code write by
-#   write), checks that erase_fixup's two root readings (once, as the ports do; re-read, as HPHA
-#   does) give the same heap, and fails on any difference.
+#   print_lean_model_cross_check_trace prints, after each of 20,000 operations (equal keys and
+#   drains to empty included), the rotation count, the kind, the whole tree of keys and the
+#   whole heap (every node's parent word and equal-key chain, and the sentinel's scratch
+#   fields); lake exe xcheck replays them through the proven zipper model and through the heap
+#   model (Lean/Oris/RB/Heap.lean, the pointer code write by write), checks that erase_fixup's
+#   two root readings give the same heap, that the trace is complete and that it exercises
+#   every kind and rotation count, and fails on any difference.
+# - Lean CI success: the single required status check, green only if both jobs passed.
 
 on:
   push:
@@ -25,25 +32,32 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # elan, pinned by version and checksum; it fetches the toolchain pinned in Lean/lean-toolchain.
+  ELAN_URL: https://github.com/leanprover/elan/releases/download/v4.2.4/elan-x86_64-unknown-linux-gnu.tar.gz
+  ELAN_SHA256: 42b94d4244e8353142c456ec0e4ca6528fd898a6c604d4059f494e706e431f63
 
 jobs:
   proofs:
-    name: Proofs and axiom gate
+    name: Proofs, axiom audit and kernel replay
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: Lean
     steps:
       - uses: actions/checkout@v7
-      - name: Install elan (it fetches the toolchain pinned in Lean/lean-toolchain)
+      - name: Install elan
         run: |
-          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
-            | sh -s -- -y --default-toolchain none
+          curl -sSfL -o "$RUNNER_TEMP/elan.tar.gz" "$ELAN_URL"
+          echo "$ELAN_SHA256  $RUNNER_TEMP/elan.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/elan.tar.gz" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/elan-init" -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-      - name: Every proof module is imported by Oris.lean (so the gate audits it)
-        run: ./scripts/check-imports.sh
-      - name: Build every proof, warnings as errors, and run the axiom gate
-        run: lake build --wfail
+      - name: Build every proof and both tools, warnings as errors
+        run: lake build --wfail RBTree Oris audit xcheck
+      - name: Axiom audit, imports, namespaces and lint
+        run: lake exe audit
+      - name: Kernel replay of every declaration
+        run: lake env leanchecker --fresh Oris
 
   xcheck:
     name: Lean model against the Rust code
@@ -56,17 +70,29 @@ jobs:
           workspaces: Rust
       - name: Install elan
         run: |
-          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
-            | sh -s -- -y --default-toolchain none
+          curl -sSfL -o "$RUNNER_TEMP/elan.tar.gz" "$ELAN_URL"
+          echo "$ELAN_SHA256  $RUNNER_TEMP/elan.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/elan.tar.gz" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/elan-init" -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-      - name: Build the cross-check consumer
+      - name: Build the cross-check consumer, warnings as errors
         working-directory: Lean
-        run: lake build xcheck
-      - name: Replay rbtree.rs's trace through the Lean model
+        run: lake build --wfail xcheck
+      - name: Replay rbtree.rs's trace through the Lean models
         working-directory: Lean
         shell: bash
         run: |
           set -euo pipefail
           cargo test --manifest-path ../Rust/Cargo.toml --lib \
             rbtree::tests::print_lean_model_cross_check_trace -- --ignored --nocapture \
-            | grep '^XC ' | lake exe xcheck
+            | grep '^XC' | lake exe xcheck
+
+  lean-ci-success:
+    name: Lean CI success
+    if: always()
+    needs: [proofs, xcheck]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every Lean job passed
+        run: |
+          [ "${{ needs.proofs.result }}" = success ] && [ "${{ needs.xcheck.result }}" = success ]

@@ -171,7 +171,8 @@ Each step uses the ones before it.
 | 3 | Steps 2–5 of §4 | `insert_fixup` and `erase_fixup` performing `insFix` and `delFix`; the cached-root theorem |
 | 4 | Steps 6–7 of §4, chains included | `insert_spec` and `erase_spec` hold for the pointer code |
 
-At every step, the gate, `check-imports.sh` and the cross-check stay green.
+At every step, the build, the audit, the kernel replay and the cross-check stay green
+(`../CLAUDE.md`).
 
 **Running the heap model fast (step 1b).** A heap updated pointwise, executed as is, wraps the
 previous heap in one more closure per write, so each read walks back through every earlier
@@ -227,18 +228,19 @@ both ports. It would then be fixed as a patch, with an entry in `Cpp/ERRATA.md`
    code, where a few explicit checks cost less than wrapping every `parent` read.
 2. **Step 1b stays a permanent CI check** (decided 2026-11-14). The heap replay is part of
    `lake exe xcheck`, so `lean-ci.yml` runs it on every pull request; on GitHub the `xcheck` job
-   went from about 50 seconds to 2 minutes 22. The whole replay of 20,000 operations, both models
-   and both root readings, takes about 95 seconds on the development machine (2026-11-14),
-   against a few seconds for the zipper model alone. Per operation, the replay
-   copies the heap into a table, and per erase it runs `erase_counted` twice and compares the two
-   heaps: a few thousand reads, each through that operation's writes. (Not profiled further.)
+   went from about 50 seconds to between 2 and 3 minutes. The replay then took about 95 seconds
+   on the development machine, copying the whole heap into a table after each operation. Since
+   the audit of 2026-11-15 it copies only the addresses an operation can reach (the live nodes,
+   the sentinel and the operation's node), and the whole replay, with the richer trace (equal
+   keys, drains to empty, every node's `parent` word and chain), takes about 15 seconds.
 3. **The chains' proofs go in `Heap.lean`** (decided 2026-11-14).
 
 ## 8. What stays outside the heap layer
 
 - **Undefined behaviour, provenance and aliasing.** The model's heap is a total function, with
-  no Tree Borrows and no `UnsafeCell`. Miri remains the gate. It runs the cross-check's sequence,
-  so the pointer code of every fix-up case runs under it.
+  no Tree Borrows and no `UnsafeCell`. Miri remains the gate. It runs the first 1,000 steps of
+  the cross-check's sequence, so the pointer code of every fix-up case, and of the chain
+  operations, runs under it.
 - **The lazy sentinel's self-linking** (`head_ptr` on first touch) and its no-move contract. The
   model starts from a self-linked `head`.
 - **The descent's calls to `T::cmp`** are modelled as `cmp (key a) (key b)`. That `TestNode`'s

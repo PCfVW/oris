@@ -7,7 +7,7 @@ defaultTargets = ["RBTree", "Oris"]
 [[lean_lib]]
 name = "RBTree"
 
-# Oris's own proofs: every module under Oris/, the gate (Oris/Gate.lean) included.
+# Oris's own proofs: every module under Oris/.
 [[lean_lib]]
 name = "Oris"
 globs = ["Oris.*"]
@@ -16,6 +16,12 @@ globs = ["Oris.*"]
 [[lean_exe]]
 name = "xcheck"
 root = "Tools.XCheck"
+
+# The axiom audit, run after the build and outside it (see Tools/Audit.lean).
+[[lean_exe]]
+name = "audit"
+root = "Tools.Audit"
+supportInterpreter = true
 
 # Pinned to the release tag matching lean-toolchain (upstream tracked the `cell-network` branch).
 [[require]]
