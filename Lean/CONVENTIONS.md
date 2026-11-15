@@ -23,7 +23,7 @@ algorithm holds for `orisnitsa` too, but the cross-check runs against the Rust.
 
 | You are about to... | Check these rules |
 |---|---|
-| Create a `.lean` file | [File layout](#file-layout), [the gate covers it](#the-gate-covers-every-module) |
+| Create a `.lean` file | [File layout](#file-layout), [the audit covers it](#the-audit-covers-every-module) |
 | Write a `def` that models Rust code | [Transcription](#transcription-rules), [departures](#departures-are-listed) |
 | Write a theorem | [Kernel-only](#kernel-only-proofs), [statement honesty](#statements-say-what-the-doc-says), [naming](#naming) |
 | Write a recursive `def` or theorem | [Termination](#termination) |
@@ -45,27 +45,43 @@ axioms (`propext`, `Classical.choice`, `Quot.sound`). Concretely, never commit:
 |---|---|
 | `sorry`, `admit` | elaborates to the axiom `sorryAx`: the theorem is unproven |
 | `axiom` | an assumption, not a proof |
-| `native_decide` | trusts compiled code through `Lean.ofReduceBool` (and an auxiliary axiom per use) |
-| `bv_decide` | trusts a compiled SAT-certificate checker through `Lean.ofReduceBool` |
+| `native_decide` | trusts compiled code: each use adds an auxiliary axiom (`<thm>._native.native_decide.ax_…`) asserting what the code computed |
+| `bv_decide` | trusts a compiled SAT-certificate checker, through the same kind of auxiliary axiom |
 | `implemented_by`, `@[extern]` on a definition a theorem unfolds | the theorem is about the reference definition, the run is about other code |
+| metaprogramming (`elab`, `macro`, `syntax`, `run_cmd`, `run_meta`, `initialize`, any `Lean.` name) | code that runs during elaboration can add a declaration without the kernel check, or change how later commands, the tools' included, behave |
+| `set_option` other than `maxHeartbeats` and `maxRecDepth` | `debug.skipKernelTC`, for one, switches the kernel check off |
 
 `decide`, `omega`, `simp`, `rfl` and every other kernel-checked tactic are fine. A `decide` that
 is too slow for the kernel is a sign to restate the lemma (prove it for a symbolic `k`, as
 `and_not_two_pow_sub_one` does), not to switch to `native_decide`.
 
-**Enforced by** `Oris/Gate.lean`, which runs `#audit_axioms` (`Oris/Audit.lean`) over every
-declaration of the `Oris` namespace and of the vendored `RBTree` library on every `lake build`,
-`private` declarations and Lean's auxiliary ones included. The gate was checked to reject a
-`sorry`, a `native_decide` (public and `private`), a `bv_decide` that reaches its SAT checker, and
-a hand-written axiom. (A `bv_decide` whose preprocessing closes the goal leaves an ordinary kernel
-proof, which the gate rightly accepts.) If you change `Oris/Audit.lean`, re-run that check: a
-scratch file with each of them, then `#audit_axioms`.
+**Enforced by** two checks, both run by `lean-ci.yml` on every pull request:
 
-### The gate covers every module
+- **The audit**, `lake exe audit` (`Tools/Audit.lean`). It runs after the build, as a separate
+  executable that imports no proof module and loads their compiled environment without running
+  any of their code, so a proof module cannot intercept it (a command run inside the build
+  could be redefined by a module it imports). It checks every declaration *defined in* an Oris
+  or RBTree module, whatever its name, `private` declarations and Lean's auxiliary ones
+  included, against the three standard axioms; and it lints the source of every proof module,
+  comments and strings removed, for the banned constructs above.
+- **The kernel replay**, `lake env leanchecker --fresh Oris`, which re-checks every declaration
+  from scratch: the axiom audit alone cannot see a declaration that was added with the kernel
+  check switched off.
 
-`Oris/Gate.lean` audits exactly what `Oris.lean` imports. Every new module under `Oris/` must be
-imported by `Oris.lean`; `scripts/check-imports.sh` fails otherwise (CI runs it). Every
-declaration must live under the `Oris` namespace, so the audit sees it.
+The audit was checked to reject a `sorry`, a `native_decide`, a hand-written axiom (inside and
+outside the `Oris` namespace), a module redefining the audit command of the old in-build gate,
+and a theorem added with `debug.skipKernelTC`, which the kernel replay rejects too. (A
+`bv_decide` whose preprocessing closes the goal leaves an ordinary kernel proof, which the audit
+rightly accepts.) If you change `Tools/Audit.lean`, re-run those checks on a scratch copy of the
+project.
+
+### The audit covers every module
+
+The audit imports every `.lean` file under `Oris/` and `RBTree/`, found on disk. `lake build`
+builds what `Oris.lean` imports, so the audit also fails if `Oris.lean` does not import a module
+under `Oris/` (read with Lean's own header parser). Every declaration of an Oris module must live
+under the `Oris` namespace (Lean's internal auxiliary names, and the equation lemmas it generates
+about constants defined elsewhere, excepted); the audit checks that too.
 
 ---
 
@@ -174,10 +190,8 @@ bound), `_balanced` (red-black invariant), `_spec` (the operation's full contrac
 |---|---|
 | `Oris/Arith.lean` | Size arithmetic |
 | `Oris/RB/*.lean` | The red-black tree (`Fixup.lean`: the zipper level; `Heap.lean`: the pointer level, its definitions and the refinement theorems proven so far) |
-| `Oris/Audit.lean`, `Oris/Gate.lean` | The axiom audit and the gate that runs it |
-| `Tools/` | Executables (`XCheck.lean`, the cross-check consumer) |
+| `Tools/` | Executables, run after the build (`Audit.lean`, the axiom audit and lint; `XCheck.lean`, the cross-check consumer) |
 | `docs/` | Design notes (`heap-layer.md`), agreed before the proofs they plan |
-| `scripts/` | Shell checks run by CI |
 | `RBTree/` | Vendored, verbatim |
 
 ---
@@ -212,5 +226,6 @@ fails on any difference (the `xcheck` job of `lean-ci.yml`).
 
 `lean-toolchain` and the Batteries pin in `lakefile.toml` move together, to a Batteries release
 tag named after the toolchain. After a bump, the vendored library must still build unchanged (or
-its patch is recorded in `RBTree/NOTICE.md`), and the whole gate must pass. No Mathlib: the
-project needs only Batteries, and a heavy dependency would slow every CI run for nothing.
+its patch is recorded in `RBTree/NOTICE.md`), and every check of `CLAUDE.md` must pass. No
+Mathlib: the project needs only Batteries, and a heavy dependency would slow every CI run for
+nothing.

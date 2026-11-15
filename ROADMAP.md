@@ -52,7 +52,7 @@ The stages, in order (each builds on the one before):
 - **The heap layer — the tree's pointer code.** Proves that `rbtree.rs`'s pointer writes perform the proven zipper steps: each node with its chain of parents corresponds to a (subtree, path) pair. It also covers the equal-key chains (`insert_counted`'s `Chain` and `erase_counted`'s `Link` and `Promote` branches) and the sentinel's scratch fields. And it settles the one open question the first stage found: both ports read `erase_fixup`'s root once, where HPHA re-reads it. The expectation is that this never changes a transition, and the cross-check agrees so far; the heap layer is where that gets proven, or the fidelity fix made.
 - **Memory management — `tree.rs`'s invariants.** Built on the heap layer: block splitting and coalescing, what the free tree contains, and the aligned path's arithmetic (`extract_aligned`'s offsets, the split threshold), which the first stage left out.
 
-**What the proofs will not cover:** undefined behaviour, provenance and aliasing, and `Drop`. Miri remains the gate for those. Since 2026-11-14 it also runs the cross-check's operation sequence, so the pointer code of every tree fix-up case runs under it.
+**What the proofs will not cover:** undefined behaviour, provenance and aliasing, and `Drop`. Miri remains the gate for those. Since 2026-11-14 it also runs the first 1,000 steps of the cross-check's operation sequence, so the pointer code of every tree fix-up case, and of the equal-key chains, runs under it.
 
 ---
 

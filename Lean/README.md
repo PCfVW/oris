@@ -3,7 +3,7 @@
 Machine-checked proofs, in [Lean 4](https://lean-lang.org/), about the algorithms `orisnik` (the
 Rust port, `../Rust/`) runs: its size arithmetic, its red-black tree, and, to come, its tree-path
 memory management. Every theorem is checked by Lean's kernel alone; a CI job also checks that
-the proven model behaves exactly like the running Rust code.
+the models behave exactly like the running Rust code on a 20,000-operation trace.
 
 ## Build
 
@@ -12,22 +12,25 @@ itself), then from this directory, in bash (on Windows, Git Bash):
 
 ```
 lake build --wfail
-./scripts/check-imports.sh
+lake exe audit
+lake env leanchecker --fresh Oris
 ```
 
-A successful build means every theorem below compiled without warnings and passed the axiom
-gate. The first build downloads and compiles the Batteries modules the vendored library needs
-(about a minute). The cross-check against the Rust code (needs a Rust toolchain; `pipefail` makes
-a failure anywhere in the pipe fail the command):
+The build compiles every theorem below without warnings (the first one also downloads and compiles
+the Batteries modules the vendored library needs, about a minute). The audit (`Tools/Audit.lean`)
+then checks, from outside the build, that every declaration of every proof module rests on the
+three standard axioms alone, and lints the proof sources; the kernel replay re-checks every
+declaration from scratch (about a minute). The cross-check against the Rust code (needs a Rust
+toolchain; `pipefail` makes a failure anywhere in the pipe fail the command):
 
 ```
 set -o pipefail
 cargo test --manifest-path ../Rust/Cargo.toml --lib \
   rbtree::tests::print_lean_model_cross_check_trace -- --ignored --nocapture \
-  | grep '^XC ' | lake exe xcheck
+  | grep '^XC' | lake exe xcheck
 ```
 
-CI runs all three (`../.github/workflows/lean-ci.yml`).
+CI runs all four (`../.github/workflows/lean-ci.yml`).
 
 ## Layout
 
@@ -37,11 +40,10 @@ CI runs all three (`../.github/workflows/lean-ci.yml`).
 | `Oris/Arith.lean` | Size arithmetic: `round_up`, `normalize_size`, `MAX_ALLOCATION`, `Tree::grow`, `alloc_aligned`'s guard, the bucket size classes |
 | `Oris/RB/Fixup.lean` | `rbtree.rs`'s `insert_fixup`, `insert_counted`, `erase_fixup` and `erase_counted` (its `Node` branch), on zippers |
 | `Oris/RB/Heap.lean` | The same functions as pointer code on a model heap, one write per Rust write; the abstraction relation to zippers, and `rotate` proven to perform the zipper rotation (the other proofs are the next steps of `docs/heap-layer.md`) |
-| `Oris/Audit.lean`, `Oris/Gate.lean` | The `#audit_axioms` command, and the gate that runs it over everything |
-| `Oris.lean` | Imports every proof module (what the gate audits) |
+| `Oris.lean` | Imports every proof module (what `lake build` builds) |
+| `Tools/Audit.lean` | `lake exe audit`: the axiom audit, the import and namespace checks, and the lint, run outside the build |
 | `Tools/XCheck.lean` | `lake exe xcheck`: replays `rbtree.rs`'s cross-check trace through both models |
 | `docs/heap-layer.md` | The design note for the pointer layer: the model, the theorems to come, the plan |
-| `scripts/check-imports.sh` | Fails if a module under `Oris/` escapes `Oris.lean`, hence the gate |
 | `CONVENTIONS.md`, `CLAUDE.md` | How proofs here are written, and the pre-commit checks |
 
 ## What is proven
@@ -95,22 +97,30 @@ neither check nor prove; each site is a theorem (each with a `_left` and a `_rig
   the fourth case the far child is red (`hpha_far_child_red`).
 
 **The model agrees with the Rust code.** `rbtree.rs`'s ignored test
-`print_lean_model_cross_check_trace` runs 20,000 operations (inserts and erases of distinct keys;
-every rotation count from 0 to 3 occurs, including 71 erases with three) and prints, after each,
-the rotation count and the whole tree's shape with every node's colour. `lake exe xcheck`
-replays the same operations through two Lean models and fails on any difference:
+`print_lean_model_cross_check_trace` runs 20,000 inserts and erases and prints, after each, the
+rotation count and kind, the whole tree of keys with every node's colour, the whole tree again
+by node with every node's `parent` word and equal-key chain, and the sentinel's scratch
+`parent` word. Keys repeat, so equal-key chains form (2,770 chained inserts, 1,554 `Link` and
+1,188 `Promote` erases), and the tree's size goes through phases that drain it to empty 75 times,
+so the fix-ups also run at the root (the root changes during 447 erases; every rotation count
+from 0 to 3 occurs). `lake exe xcheck` replays the same operations through two Lean models and
+fails on any difference:
 
-- the zipper model the theorems are about (`Oris/RB/Fixup.lean`);
+- the zipper model the theorems are about (`Oris/RB/Fixup.lean`), against the tree of keys;
 - the heap model (`Oris/RB/Heap.lean`), which runs the Rust's pointer code write by write on a
-  model heap. On every erase it also runs `erase_fixup` with HPHA's reading of the root
-  (re-read at each use, where the Rust reads it once) and requires the same rotation count and
-  the same whole heap.
+  model heap, against the whole line. On every erase it also runs `erase_fixup` with HPHA's
+  reading of the root (re-read at each use, where the Rust reads it once) and requires the same
+  rotation count and the same heap.
 
-Both models agree with the Rust on all 20,000 lines, and the two root readings give identical
-heaps on all 9,927 erases. `xcheck` was checked to detect an injected one-rotation and
-one-colour difference, malformed input and empty input; and, in the heap model, a wrong side bit
-in `rotate`, a black new node in `attach_to`, and a root reading that skips its final
-`make_black`. The run takes about a minute and a half.
+It also fails if the trace is truncated (it ends with an `XC-END` line giving its counts), or if
+it stops exercising an operation kind, a rotation count, an emptied tree or a root change. Both
+models agree with the Rust on all 20,000 lines, and the two root readings give identical heaps
+on all 9,935 erases. `xcheck` was checked to fail on a flipped side bit, a changed chain member
+or a changed sentinel field in the trace; on a truncated trace, a stale `XC-END` line, lines
+after it, a trace missing a rotation count or never emptying the tree, and empty input; and,
+injected into the heap model, on a black new node in `attach_to` and a chain link written the
+wrong way in `link_into_chain`. (A wrong side bit in `rotate` no longer builds at all:
+`rotate_refines_left` fails.) The run takes about 15 seconds after building.
 
 ## What is not (yet) proven, and the trust base
 
@@ -122,9 +132,9 @@ in `rotate`, a black new node in `attach_to`, and a root reading that skips its 
   is proven so far: `NodeBase::rotate` performs the zipper rotation (`rotate_refines_left`,
   `rotate_refines_right`). That the fix-ups and the counted operations perform their zipper steps
   is not proven yet; until it is, that correspondence rests on the write-by-write transcription
-  and on the cross-check. The duplicate-key chains, the sentinel's
-  scratch `parent` field, and `erase_fixup`'s cached `root` (the Rust reads it once; HPHA, and
-  the zipper model, re-read it; the cross-check finds no difference) belong to that layer.
+  and on the cross-check. The duplicate-key chains, the sentinel's scratch `parent` field, and
+  `erase_fixup`'s cached `root` (the Rust reads it once; HPHA, and the zipper model, re-read it;
+  the heap model runs both readings and finds no difference) belong to that layer.
 - **The `Link` and `Promote` branches** of `erase_counted` and the `Chain` branch of
   `insert_counted` change the equal-key chains, not the tree of keys: they belong to the heap
   layer, where a tree node carries its chain.
@@ -140,9 +150,13 @@ to be mechanized by the heap layer.
 
 In brief (the full rules, with the reasons, are in [`CONVENTIONS.md`](CONVENTIONS.md)):
 
-1. **Kernel-checked only.** No `sorry`, `native_decide`, `bv_decide` or `axiom`; the gate
-   enforces it on every build, on every declaration (private ones included), for the vendored
-   library too, and was checked to reject each of the four, and a private `native_decide`.
+1. **Kernel-checked only.** No `sorry`, `native_decide`, `bv_decide` or `axiom`. The audit
+   enforces it on every declaration of every Oris and RBTree module (private and auxiliary ones
+   included, whatever their names), and lints the proof sources against metaprogramming and
+   debug options; the kernel replay re-checks every declaration. Both run in CI on every pull
+   request, and were checked to reject each of the four, a theorem added with the kernel check
+   switched off, a module redefining the audit command, and an axiom outside the `Oris`
+   namespace.
 2. **Transcribe, don't re-derive.** Each definition names the Rust it models, follows its
    operations in order and sets every colour the Rust sets; every deliberate departure is listed.
 3. **Statements say what the docs say.** A fact a doc claims is proven is a theorem.

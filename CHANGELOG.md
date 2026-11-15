@@ -13,9 +13,11 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 ### Added
 
 - **Machine-checked proofs in Lean 4** ([`Lean/`](Lean/README.md)), about the algorithms
-  `orisnik` runs, every one checked by Lean's kernel alone (an axiom gate, covering every
-  declaration, private ones included, fails the build on any `sorry`, `native_decide`,
-  `bv_decide` or hand-written axiom):
+  `orisnik` runs, every one checked by Lean's kernel alone. CI re-checks every declaration in
+  the kernel from scratch (`leanchecker --fresh`), and an axiom audit run outside the build
+  (`lake exe audit`) fails on any `sorry`, `native_decide`, `bv_decide` or hand-written axiom in
+  any declaration of any proof module, private and auxiliary ones included, and on any
+  metaprogramming or debug option in the proof sources:
   - **Size arithmetic** (`Oris/Arith.lean`), on 64-bit words with the Rust's own operators:
     `round_up` is exact whenever it does not overflow and agrees with HPHA's mask for every
     alignment up to 2^30; at or below `MAX_ALLOCATION`, `normalize_size` and `Tree::grow` cannot
@@ -30,10 +32,14 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
     removes exactly that element. HPHA's `insert_fixup` and `erase_fixup` assertions (four
     facts, six sites), which the ports neither check nor prove, are theorems.
   - **The model agrees with the code**: the new ignored test
-    `rbtree::tests::print_lean_model_cross_check_trace` prints the rotation count and the whole
-    tree's shape and colours after each of 20,000 operations, and `lake exe xcheck` replays them
-    through the Lean model; the two agree on every line. New workflow `lean-ci.yml` runs the
-    proofs (warnings as errors) and this cross-check on every pull request, and the Miri job of
+    `rbtree::tests::print_lean_model_cross_check_trace` prints, after each of 20,000 operations,
+    the rotation count and kind, the whole tree of keys with its colours, every node's `parent`
+    word and equal-key chain, and the sentinel's scratch fields; keys repeat and the tree is
+    drained to empty again and again, so the chain branches and the fix-ups at the root run.
+    `lake exe xcheck` replays the trace through the Lean models and requires every line to match,
+    the trace to be complete, and every operation kind and rotation count to occur. New workflow
+    `lean-ci.yml` runs the proofs (warnings as errors), the audit, the kernel replay and this
+    cross-check on every pull request, behind one status check, `Lean CI success`; the Miri job of
     `rust-ci.yml` runs the test too (1,000 steps under Miri).
   - **The pointer layer, its definitions** (`Oris/RB/Heap.lean`, planned in
     [`Lean/docs/heap-layer.md`](Lean/docs/heap-layer.md)): `rbtree.rs`'s pointer code on a model
@@ -41,7 +47,7 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
     `switch_with`, the chain operations, both fix-ups, `insert_counted`, `erase_counted`).
     `lake exe xcheck` replays the cross-check trace through it too: it matches the Rust on all
     20,000 operations, and `erase_fixup` reading the root once (as both ports do) or re-reading
-    it (as HPHA does) yields the same heap on all 9,927 erases.
+    it (as HPHA does) yields the same heap on all 9,935 erases.
   - **The pointer layer, its first theorems** (`Oris/RB/Heap.lean`): the abstraction relation
     saying when a heap *is* a zipper state (`Rep`, `RepPath`, `Located`); in a represented tree
     no address occurs twice (`Rep.nodup`, from the relation alone, with no separate distinctness

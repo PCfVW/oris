@@ -1862,28 +1862,124 @@ mod tests {
         out.push(')');
     }
 
+    /// Appends `p`, a pointer read out of a node or the sentinel, in the notation
+    /// `Lean/Tools/XCheck.lean` reads: `h` for the sentinel, `-` for null, otherwise the
+    /// test node's id.
+    fn write_ref(head: *mut NodeBase, p: *mut NodeBase, out: &mut String) {
+        if p == head {
+            out.push('h');
+        } else if let Some(node) = NonNull::new(p) {
+            // SAFETY: every non-sentinel pointer the cross-check trace prints is a test node
+            // the producer boxed and has not freed (it frees them all only at its end).
+            let id = unsafe { TestNode::from_node(node).as_ref().id };
+            out.push_str(&id.to_string());
+        } else {
+            out.push('-');
+        }
+    }
+
+    /// Appends the ids of `n`'s equal-key chain read along `neighbours[s]`, from `n`'s
+    /// neighbour round to (not including) `n` itself, space-separated.
+    fn write_chain(n: *mut NodeBase, s: Side, out: &mut String) {
+        // SAFETY: `n` is a live test node; reads one neighbour link.
+        let mut m = unsafe { NodeBase::neighbour(n, s) };
+        let mut first = true;
+        // A chain longer than every node ever boxed means a broken ring; stop rather
+        // than loop forever.
+        for _ in 0..100_000 {
+            if m == n {
+                return;
+            }
+            if !first {
+                out.push(' ');
+            }
+            first = false;
+            write_ref(core::ptr::null_mut(), m, out);
+            // SAFETY: `m` is a member of `n`'s chain, hence a live test node.
+            m = unsafe { NodeBase::neighbour(m, s) };
+        }
+        panic!("equal-key chain does not close");
+    }
+
+    /// Appends the subtree at `n` in the heap notation `Lean/Tools/XCheck.lean` reads:
+    /// `(<R|B> <id> <parent> <L|R> [<chain forwards>|<chain backwards>] <left> <right>)`
+    /// for a node (its tagged `parent` word's pointer and side bit, and its chain read
+    /// along `neighbours[Right]` then `neighbours[Left]`), `.` for the sentinel.
+    fn write_heap_shape(head: *mut NodeBase, n: *mut NodeBase, out: &mut String) {
+        if n == head {
+            out.push('.');
+            return;
+        }
+        // SAFETY: `n != head`, so it is a live node of the tree being printed.
+        out.push_str(if unsafe { NodeBase::red(n) } {
+            "(R "
+        } else {
+            "(B "
+        });
+        write_ref(head, n, out);
+        out.push(' ');
+        // SAFETY: `n` is live; reads its parent pointer.
+        write_ref(head, unsafe { NodeBase::parent(n) }, out);
+        // SAFETY: `n` is live and attached (it is in the tree).
+        out.push_str(match unsafe { NodeBase::parent_side(n) } {
+            Side::Left => " L [",
+            Side::Right => " R [",
+        });
+        write_chain(n, Side::Right, out);
+        out.push('|');
+        write_chain(n, Side::Left, out);
+        out.push_str("] ");
+        // SAFETY: `n` is live; reads one child link.
+        write_heap_shape(head, unsafe { NodeBase::child(n, Side::Left) }, out);
+        out.push(' ');
+        // SAFETY: `n` is live; reads one child link.
+        write_heap_shape(head, unsafe { NodeBase::child(n, Side::Right) }, out);
+        out.push(')');
+    }
+
     /// The trace the Lean model is checked against (`Lean/Tools/XCheck.lean`, run by the
     /// `xcheck` job of `.github/workflows/lean-ci.yml`).
     ///
-    /// Runs a PRNG-driven sequence of inserts and erases of **distinct** keys (the Lean
-    /// model is the tree of keys; equal-key chains belong to its heap layer, still to come)
-    /// and prints one line per operation: `XC <I|E> <key> <rotations> <shape>`, the
-    /// rotation count `insert_counted`/`erase_counted` reported and the whole tree's shape
-    /// with every node's colour. The Lean side replays the same operations through its
-    /// model and requires every line to match, so the rotation counts *and* the shapes of
-    /// this code and of the proven model agree after every step.
+    /// Runs a PRNG-driven sequence of inserts and erases and prints one line per operation:
+    ///
+    /// ```text
+    /// XC <I|E> <id> <key> <rotations> <C|N|L|P> <key shape> | <heap shape> | <sentinel>
+    /// ```
+    ///
+    /// - the operation, the node's id and key, the rotation count and kind
+    ///   `insert_counted`/`erase_counted` reported (`InsertKind` `Chain`/`Node`, `EraseKind`
+    ///   `Link`/`Promote`/`Node`);
+    /// - the whole tree of keys with every node's colour (`write_shape`), which the
+    ///   zipper model (`Oris/RB/Fixup.lean`) must reproduce;
+    /// - the whole tree again, by node id, with every node's tagged `parent` word and
+    ///   equal-key chain (`write_heap_shape`), which the heap model (`Oris/RB/Heap.lean`)
+    ///   must reproduce;
+    /// - the sentinel's own `parent` word: its pointer, side and colour bit (the scratch
+    ///   fields `substitute_with`, `switch_with` and `rotate` write).
+    ///
+    /// The last line is `XC-END <steps> <erases>`, so a truncated trace fails the check.
+    ///
+    /// The sequence is built to reach every path of the pointer code:
+    /// - keys repeat (one insert in four reuses a live key), so equal-key chains form and
+    ///   every `Chain`, `Link` and `Promote` branch runs;
+    /// - the tree's size goes through phases, growing to a random target of up to 150
+    ///   nodes and shrinking, every other time down to empty, so the fix-ups also run on
+    ///   small trees, where they reach the root (the loop ending at the root, rotations at
+    ///   the root, the root changing during `erase_fixup`);
+    /// - no node is freed before the end and ids are never reused, so every pointer the
+    ///   trace prints, the sentinel's scratch `parent` included (it can name a node erased
+    ///   long before), names one allocated node.
     ///
     /// `#[ignore]`d because it is a producer, not an assertion: the check is made by the
-    /// Lean consumer. `Lean/CLAUDE.md` gives the exact pipeline (run from `Lean/`, this test
-    /// selected through `--manifest-path ../Rust/Cargo.toml`, its `XC ` lines piped into
+    /// Lean consumer, which also requires that every kind and every rotation count occurs.
+    /// `Lean/CLAUDE.md` gives the exact pipeline (run from `Lean/`, this test selected
+    /// through `--manifest-path ../Rust/Cargo.toml`, its `XC` lines piped into
     /// `lake exe xcheck`).
     ///
-    /// Under Miri it runs 1,000 steps instead of 20,000: they reach every rotation count
-    /// (0 to 2 for inserts, 0 to 3 for erases; the first three-rotation erase is the 509th
-    /// step), so the pointer code of every fix-up case runs under the soundness gate (the
+    /// Under Miri it runs 1,000 steps instead of 20,000, which include a first drain to
+    /// empty and every fix-up case, so the pointer code runs under the soundness gate (the
     /// `miri` job of `.github/workflows/rust-ci.yml` runs it, with `--ignored`), where the
-    /// full run (each step printing a tree of up to 150 nodes) takes hours. The cross-check
-    /// itself always runs natively, at full length.
+    /// full run takes hours. The cross-check itself always runs natively, at full length.
     #[test]
     #[ignore = "trace producer for the Lean model cross-check (Lean/Tools/XCheck.lean)"]
     fn print_lean_model_cross_check_trace() {
@@ -1897,42 +1993,88 @@ mod tests {
             state ^= state << 5;
             state
         };
+        // `x % n` as an index or a count.
+        let below = |x: u32, n: usize| usize::try_from(x).expect("u32 fits in usize") % n;
         let tree: IntrusiveMultiRbTree<TestNode> = IntrusiveMultiRbTree::new();
+        let head = tree.head_ptr();
+        // Every node boxed so far, freed only at the end (see this function's doc).
+        let mut nodes: Vec<NonNull<TestNode>> = Vec::new();
         let mut live: Vec<NonNull<TestNode>> = Vec::new();
+        let mut growing = true;
+        let mut target = 1 + below(next(), MAX_LIVE);
+        let mut phase: u32 = 0;
+        let mut erases: u32 = 0;
         for step in 0..STEPS {
-            let insert = live.len() < 3 || (live.len() < MAX_LIVE && next() % 5 < 3);
-            let (op, key, rotations) = if insert {
-                // EXPLICIT: draw until the key is absent; the state is the PRNG's.
-                let key = loop {
-                    // CAST: u32 -> i32, bounded to [0, 1000) by the modulo.
-                    #[allow(clippy::as_conversions, clippy::cast_possible_wrap)]
-                    let candidate = (next() % 1000) as i32;
-                    if !live.iter().any(|&n| key_of(n) == candidate) {
-                        break candidate;
-                    }
+            if growing && live.len() >= target {
+                growing = false;
+                phase += 1;
+                // Every other shrinking phase drains the tree to empty.
+                target = if phase % 4 == 1 {
+                    0
+                } else {
+                    below(next(), live.len())
+                };
+            } else if !growing && live.len() <= target {
+                growing = true;
+                phase += 1;
+                target = 1 + below(next(), MAX_LIVE);
+            }
+            let insert_odds = if growing { 4 } else { 1 };
+            let insert = live.is_empty() || (live.len() < MAX_LIVE && next() % 5 < insert_odds);
+            let (op, n, kind, rotations) = if insert {
+                let key = if !live.is_empty() && next() % 4 == 0 {
+                    let i = below(next(), live.len());
+                    key_of(*live.get(i).expect("i < live.len()"))
+                } else {
+                    i32::try_from(next() % 1000).expect("below 1000")
                 };
                 let n = boxed(key, step);
-                let (_, rotations) = tree.insert_counted(n);
+                nodes.push(n);
+                let (kind, rotations) = tree.insert_counted(n);
                 live.push(n);
-                ('I', key, rotations)
+                let kind = match kind {
+                    InsertKind::Chain => 'C',
+                    InsertKind::Node => 'N',
+                };
+                ('I', n, kind, rotations)
             } else {
-                // CAST: u32 -> usize, bounded by `live.len()` via the modulo.
-                #[allow(clippy::as_conversions)]
-                let idx = (next() as usize) % live.len();
-                let n = live.swap_remove(idx);
-                let key = key_of(n);
-                let (_, rotations) = tree.erase_counted(n);
-                // SAFETY: `n` was just erased from `tree` above.
-                unsafe { drop_boxed(n) };
-                ('E', key, rotations)
+                let n = live.swap_remove(below(next(), live.len()));
+                let (kind, rotations) = tree.erase_counted(n);
+                erases += 1;
+                let kind = match kind {
+                    EraseKind::Link => 'L',
+                    EraseKind::Promote => 'P',
+                    EraseKind::Node => 'N',
+                };
+                ('E', n, kind, rotations)
             };
-            let mut trace_line = format!("XC {op} {key} {rotations} ");
-            write_shape(tree.head_ptr(), tree.root(), &mut trace_line);
+            // SAFETY: `n` was boxed by this test and is freed only at its end.
+            let node = unsafe { n.as_ref() };
+            let (id, key) = (node.id, node.key);
+            let mut trace_line = format!("XC {op} {id} {key} {rotations} {kind} ");
+            write_shape(head, tree.root(), &mut trace_line);
+            trace_line.push_str(" | ");
+            write_heap_shape(head, tree.root(), &mut trace_line);
+            trace_line.push_str(" | ");
+            // SAFETY: the sentinel is live; reads its `parent` pointer, which `write_ref`
+            // prints without dereferencing it unless it names a test node.
+            let head_parent = unsafe { NodeBase::parent(head) };
+            write_ref(head, head_parent, &mut trace_line);
+            // SAFETY: the sentinel is live; reads its tagged `parent` word's side bit.
+            let head_right = unsafe { NodeBase::raw_parent(head) }.bit(BIT_SIDE);
+            trace_line.push_str(if head_right { " R" } else { " L" });
+            // SAFETY: the sentinel is live; reads its colour bit.
+            let head_red = unsafe { NodeBase::red(head) };
+            trace_line.push_str(if head_red { "R" } else { "B" });
             println!("{trace_line}");
         }
+        println!("XC-END {STEPS} {erases}");
         for n in live {
             tree.erase(n);
-            // SAFETY: `n` was just erased from `tree` above.
+        }
+        for n in nodes {
+            // SAFETY: every node was leaked by `boxed`, is out of the tree, and is not
+            // used again.
             unsafe { drop_boxed(n) };
         }
     }
