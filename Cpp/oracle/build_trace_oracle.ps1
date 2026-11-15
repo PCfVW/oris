@@ -42,9 +42,12 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'git apply failed' }
 
     $exe = Join-Path $OutDir 'trace_replay.exe'
+    # `/Fo:` names a directory by its trailing separator. It is a forward slash, not a
+    # backslash: when $OutDir contains a space, PowerShell quotes the argument, and a trailing
+    # `\"` would escape the closing quote for cl, which then rejects the command line.
     cl /nologo /EHsc /O2 /DWIN32 /D_CRT_SECURE_NO_WARNINGS /W3 "/I$OutDir" "/I$oracle" `
         (Join-Path $oracle 'trace_replay.cpp') (Join-Path $OutDir 'hpha.cpp') `
-        "/Fe:$exe" "/Fo:$OutDir\" | Out-Host
+        "/Fe:$exe" "/Fo:$OutDir/" | Out-Host
     if ($LASTEXITCODE -ne 0) { throw 'cl failed' }
     Write-Output $exe
 }
