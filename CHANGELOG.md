@@ -29,6 +29,13 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Changed
 
+- **Lean: a fresh-eyes audit before step 3c** (`Lean/docs/audits/2026-11-21-fresh-eyes/`, which
+  keeps its verified findings). `switchWith_frame` and `rotateAt_apply` drop a hypothesis each
+  that they did not need, so they are stronger; `modify_red` is now `Heap.modify_red`. The design
+  note defines the plan's steps 3a-3d and records two findings for what comes next: step 3c's
+  refinement needs a `DelFixClean` hypothesis (on an unbalanced tree the heap model, like the
+  Rust, paints the sentinel red), and the cached-root theorem a black root (on a red root the two
+  readings differ). Documentation made consistent throughout.
 - **Lean: the heap model's `child` and `rotate` are now `childAt` and `rotateAt`**, and the
   theorems about them are renamed with them: `rotate_refines_left` and `_right` (cited in 0.3.2
   below) are now `rotateAt_refines_left` and `_right`, likewise `rotateAt_refines_left_frame`,
