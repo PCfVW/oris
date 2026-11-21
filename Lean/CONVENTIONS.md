@@ -120,7 +120,7 @@ unreachable, unless stated otherwise), say so in **two** places: the definition'
 module doc's complete list of departures. A departure that is *not* about a state proven
 unreachable must be called out as such, with what settles it. Today: in `Fixup.lean`, the cached
 `root` of `erase_fixup` (settled by the heap layer's planned cached-root theorem) and `setBlack`
-leaving the sentinel alone where the Rust writes black over black (harmless); in `Heap.lean`, the
+leaving the sentinel alone where the Rust writes black over black (harmless); in `Heap/Model.lean`, the
 loops' fuel (proven sufficient for `insert_fixup` by `insertFixup_refines_depth`; for `erase_fixup`
 and the descents, to be proven by the heap layer's steps 3c and 4).
 
@@ -207,7 +207,13 @@ bound), `_balanced` (red-black invariant), `_spec` (the operation's full contrac
 | Path | Contents |
 |---|---|
 | `Oris/Arith.lean` | Size arithmetic |
-| `Oris/RB/*.lean` | The red-black tree (`Fixup.lean`: the zipper level; `Heap.lean`: the pointer level, its definitions and the refinement theorems proven so far) |
+| `Oris/RB/Fixup.lean` | The red-black tree at the zipper level, and the path facts the heap layer uses |
+| `Oris/RB/Heap.lean` | The pointer level's overview: imports its parts, says what is proven, file by file |
+| `Oris/RB/Heap/Model.lean` | The pointer level's definitions: the model heap and the transcriptions, with their departures |
+| `Oris/RB/Heap/Rep.lean` | The abstraction relation (`Rep`, `RepPath`, `Located`, `Tree`) and its lemmas |
+| `Oris/RB/Heap/Apply.lean` | Each structural operation address by address (`_apply`, `_frame`), the colour writes |
+| `Oris/RB/Heap/Structural.lean` | `rotate`, `attach_to`, `substitute_with`, `switch_with` perform their zipper steps |
+| `Oris/RB/Heap/InsertFixup.lean` | `insert_fixup` performs `insFix` (later parts: `EraseFixup.lean`, `CachedRoot.lean`, ...) |
 | `Tools/` | Executables, run after the build (`Audit.lean`, the axiom audit and lint; `XCheck.lean`, the cross-check consumer) |
 | `docs/` | Design notes (`heap-layer.md`), agreed before the proofs they plan; audit records (`audits/`), each with its findings and the scratch files behind them, not built |
 | `RBTree/` | Vendored, verbatim |
@@ -234,8 +240,8 @@ fails on any difference (the `xcheck` job of `lean-ci.yml`).
   cross-port transition records too (see the root `CLAUDE.md`), and must update
   `Oris/RB/Fixup.lean` in the same commit so the cross-check passes.
 - A change to `rbtree.rs`'s pointer code (any read or write of a `NodeBase` field, or their
-  order) must update `Oris/RB/Heap.lean` in the same commit: the heap model transcribes it write
-  by write, and the cross-check runs it.
+  order) must update `Oris/RB/Heap/Model.lean` in the same commit: the heap model transcribes it
+  write by write, and the cross-check runs it.
 - A change to `tree.rs`'s, `bucket.rs`'s or `align.rs`'s size arithmetic must update
   `Oris/Arith.lean` in the same commit.
 - A change to the trace format must change both the Rust producer and `Tools/XCheck.lean`.

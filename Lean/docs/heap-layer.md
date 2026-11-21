@@ -1,4 +1,4 @@
-# Design note — the heap layer (`Oris/RB/Heap.lean`)
+# Design note — the heap layer (`Oris/RB/Heap.lean` and `Oris/RB/Heap/`)
 
 *Status: agreed, 2026-11-14. Steps 1, 1b, 2, 3a and 3b are done (§5; 3a and 3b on 2026-11-21);
 steps 3c, 3d and 4 are not yet written. Decisions taken are recorded in §7.*
@@ -202,7 +202,7 @@ Each theorem uses the ones before it. The steps of §5 that prove them are given
    `DelFixClean path x`, by the same recursion as `delFix`, true when `delFix` never reaches its
    nil-sibling departure, and proves it from the invariant of `delFix_balanced_aux` (reusing
    `hpha_sibling_not_sentinel_*` and `hpha_sibling_after_case1_not_sentinel_*`). The heap theorem
-   takes `DelFixClean path x` as a hypothesis, which keeps black heights out of `Heap.lean`, and
+   takes `DelFixClean path x` as a hypothesis, which keeps black heights out of the heap layer, and
    the step-4 spec theorem supplies it from `Path.Balanced`.
 5. [step 3d] **The cached root (§6).** `erase_fixup` with the root read once produces the same
    heap and the same rotation count as with HPHA's re-reads, **given a black root**: on a red
@@ -294,13 +294,23 @@ both ports. It would then be fixed as a patch, with an entry in `Cpp/ERRATA.md`
    the audit of 2026-11-15 it copies only the addresses an operation can reach (the live nodes,
    the sentinel and the operation's node), and the whole replay, with the richer trace (equal
    keys, drains to empty, every node's `parent` word and chain), takes about 15 seconds.
-3. **The chains' proofs go in `Heap.lean`** (decided 2026-11-14).
-4. **The heap's `child` and `rotate` are `childAt` and `rotateAt`** (decided 2026-11-21). Named
-   `child` and `rotate`, as first written, they shadowed the zipper's `Oris.RB.child` and
+3. **The chains' proofs go in `Heap.lean`** (decided 2026-11-14). Since the split of 2026-11-21
+   (decision 5), that means a part of `Oris/RB/Heap/`, as step 4 is written.
+4. **The heap's `child` and `rotate` are `childAt` and `rotateAt`** (decided 2026-11-21).
+   Named `child` and `rotate`, as first written, they shadowed the zipper's `Oris.RB.child` and
    `Oris.RB.rotate` inside `Oris.RB.Heap`, so a statement naming both levels had to qualify the
    zipper's, and a file opening both namespaces could not use either name unqualified. The
    theorems about them were renamed with them (`rotate_refines_left` became
    `rotateAt_refines_left`, and so on), following `CONVENTIONS.md`'s `<def>_<property>`.
+5. **`Heap.lean` is split into `Oris/RB/Heap/`** (decided 2026-11-21, after the audit of that day,
+   structure S5). At 2,235 lines, with step 3c to come, it became `Heap/Model.lean` (the
+   definitions: the file the pointer-code rule of `CONVENTIONS.md` points to), `Heap/Rep.lean`
+   (the relation), `Heap/Apply.lean` (each operation address by address), `Heap/Structural.lean`
+   (rotate and step 3a) and `Heap/InsertFixup.lean` (step 3b), with `Oris/RB/Heap.lean` kept as
+   the overview that imports them. Every declaration kept its name and namespace. The facts about
+   zippers alone (`Side.other`, `nodup_node`, `pathDepth`, `rootColour`) moved to `Fixup.lean`,
+   generalised from addresses to any element type. Steps 3c, 3d and 4 add parts of their own
+   (`EraseFixup.lean`, `CachedRoot.lean`, `Counted.lean`).
 
 ## 8. What stays outside the heap layer
 

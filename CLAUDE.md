@@ -37,7 +37,7 @@ gate:
   `tracegen verify` must pass.
 - The Lean model must follow: a change to `rbtree.rs`'s tree logic updates
   `Lean/Oris/RB/Fixup.lean`, a change to its pointer code (any `NodeBase` read or write, or
-  their order) updates `Lean/Oris/RB/Heap.lean`, and a change to the size arithmetic (`tree.rs`, `bucket.rs`,
+  their order) updates `Lean/Oris/RB/Heap/Model.lean`, and a change to the size arithmetic (`tree.rs`, `bucket.rs`,
   `align.rs`) updates `Lean/Oris/Arith.lean`, in the same commit, so that `lake build` and the
   Rust-against-Lean cross-check (`lean-ci.yml`; `Lean/CLAUDE.md`) pass.
 

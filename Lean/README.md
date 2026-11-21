@@ -39,7 +39,7 @@ CI runs all four (`../.github/workflows/lean-ci.yml`).
 | `RBTree/`, `RBTree.lean` | A verified functional red-black tree library, vendored verbatim (`RBTree/NOTICE.md`) |
 | `Oris/Arith.lean` | Size arithmetic: `round_up`, `normalize_size`, `MAX_ALLOCATION`, `Tree::grow`, `alloc_aligned`'s guard, the bucket size classes |
 | `Oris/RB/Fixup.lean` | `rbtree.rs`'s `insert_fixup`, `insert_counted`, `erase_fixup` and `erase_counted` (its `Node` branch), on zippers |
-| `Oris/RB/Heap.lean` | The same functions as pointer code on a model heap, one write per Rust write; the abstraction relation to zippers, and refinement proofs for `rotate`, `attach_to`, `substitute_with`, `switch_with` and `insert_fixup` (the rest is planned in `docs/heap-layer.md`) |
+| `Oris/RB/Heap.lean`, `Oris/RB/Heap/` | The same functions as pointer code on a model heap, one write per Rust write (`Heap/Model.lean`); the abstraction relation to zippers (`Heap/Rep.lean`), and refinement proofs for `rotate`, `attach_to`, `substitute_with`, `switch_with` (`Heap/Structural.lean`) and `insert_fixup` (`Heap/InsertFixup.lean`); `Heap.lean` gives the overview (the rest is planned in `docs/heap-layer.md`) |
 | `Oris.lean` | Imports every proof module (what the kernel replay checks) |
 | `Tools/Audit.lean` | `lake exe audit`: the axiom audit, the import and namespace checks, and the lint, run outside the build |
 | `Tools/XCheck.lean` | `lake exe xcheck`: replays `rbtree.rs`'s cross-check trace through both models |
@@ -106,7 +106,7 @@ neither check nor prove; each site is a theorem (each with a `_left` and a `_rig
 - `erase_fixup`: a red sibling has black children (`hpha_red_sibling_children_black`), and before
   the fourth case the far child is red (`hpha_far_child_red`).
 
-**The pointer layer** (`Oris/RB/Heap.lean`; design note: [`docs/heap-layer.md`](docs/heap-layer.md)).
+**The pointer layer** (`Oris/RB/Heap/`; design note: [`docs/heap-layer.md`](docs/heap-layer.md)).
 The Rust's pointer code, transcribed write by write onto a model heap, performs the zipper steps
 above. Each theorem takes a heap that represents a zipper state (`Located`: a subtree at a path),
 and nothing more unless stated:
@@ -136,7 +136,7 @@ writes and `switch_with` overwrites before any read, are checked by reading the 
 fails on any difference:
 
 - the zipper model the theorems are about (`Oris/RB/Fixup.lean`), against the tree of keys;
-- the heap model (`Oris/RB/Heap.lean`), which runs the Rust's pointer code write by write on a
+- the heap model (`Oris/RB/Heap/Model.lean`), which runs the Rust's pointer code write by write on a
   model heap, against the whole line. On every erase it also runs `erase_fixup` with HPHA's
   reading of the root (re-read at each use, where the Rust reads it once) and requires the same
   rotation count and the same heap.
