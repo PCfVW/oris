@@ -13,12 +13,12 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 ### Added
 
 - **Lean: `insert_fixup` performs `insFix`** (step 3b of the heap layer, `Lean/docs/heap-layer.md`
-  §4). `insertFixupLoop_refines` and `insertFixup_refines`: from any located subtree whose tree
+  §5). `insertFixupLoop_refines` and `insertFixup_refines`: from any located subtree whose tree
   has a black root, `insert_fixup`'s pointer code leaves a heap representing `insFix`'s tree, after
   `insFix`'s number of rotations. `insertFixup_refines_depth`, the first fuel theorem: fuel at
   least the tree's depth suffices, so the heap model's fuel never runs out there.
 - **Lean: `attach_to`, `substitute_with` and `switch_with` perform their zipper steps** (step 3a
-  of the heap layer, `Lean/docs/heap-layer.md` §4). `attachTo_refines`: from an empty hole, the
+  of the heap layer, `Lean/docs/heap-layer.md` §5). `attachTo_refines`: from an empty hole, the
   red leaf `insert` hands to `insFix`. `substituteWith_refines_left` and `_right`: a node with at
   most one child gives way to it, and the child's `parent` word names the slot, also when it is
   the sentinel (the scratch fields `erase_fixup` reads). `switchWith_refines`: another address
@@ -34,8 +34,8 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
   below) are now `rotateAt_refines_left` and `_right`, likewise `rotateAt_refines_left_frame`,
   `_right_frame`, `rotateAt_frame`, `rotateAt_links` and `rotateAt_parent_fields`. Under their
   old names they shadowed the zipper's `Oris.RB.child` and `Oris.RB.rotate` inside
-  `Oris.RB.Heap` (`Lean/docs/heap-layer.md`, §7, decision 4). Statements and proofs are
-  otherwise unchanged.
+  `Oris.RB.Heap` (`Lean/docs/heap-layer.md`, §7, decision 4). Statements are otherwise
+  unchanged (the rotation proofs now go through `rotateAt_apply`).
 - **CI runs on `ubuntu-24.04`, pinned**, instead of `ubuntu-latest`, which GitHub is moving
   to Ubuntu 26: the Linux image now changes only when the workflows say so.
 

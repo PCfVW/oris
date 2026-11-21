@@ -117,8 +117,8 @@ grandparent `pp` of any colour, and the uncle `u = pp.child(o)`.
 * `u` black, `cur` on the other side (Rust: `cur == p_o_child`): first `cur = p; rotate(cur, s)`,
   so the old `cur` takes `p`'s place, then as in the previous case: two rotations.
 
-The last arm is the loop's exit with `p` black (or no parent at all: `cur` is the root), plus the
-unreachable red-root shape discussed in the module doc. -/
+The first arm is the exit at the root (`cur` has no parent: `p` is the black sentinel); the last
+arm is the exit with `p` black, plus the unreachable red-root shape discussed in the module doc. -/
 def insFix : Path α → RBNode α → RBNode α × Nat
   | .root, t => (t.setBlack, 0)
   -- `p` is `pp`'s left child (`s = Left`, `o = Right`), `cur` is `p`'s left child (outer).
@@ -415,7 +415,8 @@ root, a second case stops the loop on `red(p)` before the stale value is compare
 case finishes as below. After a fourth case, the stale root *is* used, as `cur = root` (ending the
 loop) and by the final `make_black(cur)`. If that fourth case rotated at the root, the stale
 value is the old `p`, which `make_black(p)` has just made black, so that write changes nothing,
-while HPHA's lands on the new root, already black too; otherwise it is still the true root, and
+while HPHA's lands on the new root, already black too if the tree's root was black (the new root
+takes `p`'s colour; on a red root the readings differ); otherwise it is still the true root, and
 both readings write the same node. The evidence so far: the heap model runs both readings on
 every erase of the cross-check (`Lean/README.md`) and they leave the same heap.
 

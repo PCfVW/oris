@@ -238,7 +238,8 @@ def main : IO UInt32 := do
       afterEnd := true
       break
     if line.startsWith "XC-END " then
-      match (line.splitOn " ")[1]?.bind String.toNat?, (line.splitOn " ")[2]?.bind String.toNat? with
+      let field (i : Nat) := (line.splitOn " ")[i]?.bind String.toNat?
+      match field 1, field 2 with
       | some n, some e => endLine := some (n, e)
       | _, _ =>
         bad := bad + 1
@@ -265,7 +266,8 @@ def main : IO UInt32 := do
       if !heapOk then heapBad := heapBad + 1
       if !zipperOk || !heapOk || !o.rootsAgree then
         bad := bad + 1
-        report bad s!"MISMATCH at line {lines}:\n rust:   {line}\n zipper: {o.zipper}\n heap:   {o.heap}"
+        report bad
+          s!"MISMATCH at line {lines}:\n rust:   {line}\n zipper: {o.zipper}\n heap:   {o.heap}"
         if !o.rootsAgree then report bad " erase_fixup's two root readings disagree"
       seen := note seen s!"{op}{kind}"
       seen := note seen s!"{op} rot {(ws[4]?).getD "?"}"

@@ -1,8 +1,11 @@
 # Design note — the heap layer (`Oris/RB/Heap.lean`)
 
-*Status: agreed, 2026-11-14. Steps 1, 1b and 2 are done (§5), and so are the first two parts of
-step 3 (§4, steps 2 and 3, done 2026-11-21); the rest of step 3, and step 4, are not yet
-written. Decisions taken are recorded in §7.*
+*Status: agreed, 2026-11-14. Steps 1, 1b, 2, 3a and 3b are done (§5; 3a and 3b on 2026-11-21);
+steps 3c, 3d and 4 are not yet written. Decisions taken are recorded in §7.*
+
+*Numbering.* "Step N" (with its parts 1b and 3a–3d) is always a row of §5's plan; "§4, theorem
+N" is an item of §4's list of theorems. Step 3a is theorem 2, 3b theorem 3, 3c theorem 4, 3d
+theorem 5, and step 4 theorems 6 and 7.
 
 `Oris/RB/Fixup.lean` proves `rbtree.rs`'s red-black algorithm correct **on zippers**: a node
 together with its chain of parents is a `(subtree, path)` pair, and the fix-ups are functions on
@@ -34,7 +37,7 @@ covers both ports' layout. The proofs, like the cross-check, are against the Rus
     the time of the call: in a two-child erase whose successor `repl` was `node`'s right child
     with no right child, it writes the scratch `parent` as `repl`, side right, which is where the
     hole now is. That second value is the one `erase_fixup` reads, so the hole invariant of
-    step 4 holds after `switch_with`, not after `substitute_with`.
+    step 3c (§4, theorem 4) holds after `switch_with`, not after `substitute_with`.
   - `rotate` overwrites them whenever the child it moves across (`top_s_child`) is `head`.
   - `Fixup.lean` leaves this field out (the "sentinel's scratch `parent`" in its module doc).
 - **Equal keys form a chain**, not duplicate tree nodes. One member of each group is attached to
@@ -129,18 +132,20 @@ The frame lemma takes the form "a heap that agrees on every address of `t` repre
 (`Rep.frame`), with a variant for the subtree a rotation moves across, whose first node takes a
 new `parent` and side (`Rep.reroot`).
 
-**Left for step 4** (found by the audit of 2026-11-15). `Tree` does not require `head ≠ null`:
-in a heap whose sentinel is at `0`, the root reads as not attached, and `erase_counted` would take
-the `Link` branch. And nothing constrains `prev` and `next`, which `erase_counted`'s branch choice
-(`chained`) reads. The step-4 theorems will add `head ≠ null` (to `Tree`, or as a hypothesis), and
-`Groups` must pin `prev = a` for an attached node with no equal-key duplicates; until then, the
-step-3 theorems about the `Node` branch take `!chained h node` as a hypothesis.
+**Left for step 4** (§4, theorem 6; found by the audit of 2026-11-15). `Tree` does not require
+`head ≠ null`: in a heap whose sentinel is at `0`, the root reads as not attached, and
+`erase_counted` would take the `Link` branch. And nothing constrains `prev` and `next`, which
+`erase_counted`'s branch choice (`chained`) reads. The step-4 theorems will add `head ≠ null` (to
+`Tree`, or as a hypothesis), and `Groups` must pin `prev = a` for an attached node with no
+equal-key duplicates. No theorem so far depends on `erase_counted`'s branch choice; the step-4
+theorems about its `Node` branch will take `!chained h node` as a hypothesis or derive it from
+`Groups`.
 
 ## 4. The theorems, in order
 
-Each step uses the ones before it.
+Each theorem uses the ones before it. The steps of §5 that prove them are given in brackets.
 
-1. ✅ **`rotate` performs the zipper rotation** (`rotateAt_refines_left`,
+1. ✅ [step 2] **`rotate` performs the zipper rotation** (`rotateAt_refines_left`,
    `rotateAt_refines_right`). As built, the list of changed records is a separate theorem for each
    side, `rotateAt_refines_left_frame` and `_right_frame`, and field by field `rotateAt_links` (the
    moving subtree's first node, possibly the sentinel: only its `parent` word) and
@@ -152,9 +157,10 @@ Each step uses the ones before it.
    theorem rotateAt_refines (hl : Located h head a t path) (ht : t = .node c l a (.node c' rl b rr)) :
        Located (rotateAt h a .left) head b (Oris.RB.rotate .left t) path
    ```
-   The theorem also states exactly which addresses' fields changed: `a`, `b`, `rl`'s root, the
-   parent, and `head` when `rl` is empty. Later frame arguments need that list.
-2. ✅ **`attach_to`, `substitute_with` and `switch_with`.** Each performs the zipper step that
+   The plan had the theorem also state which addresses changed (`a`, `b`, `rl`'s root, the
+   parent, and `head` when `rl` is empty). As built, that list is `rotateAt_refines_left_frame`
+   and `_right_frame`, with `head` arising as `(h b).left` when `rl` is empty.
+2. ✅ [step 3a] **`attach_to`, `substitute_with` and `switch_with`.** Each performs the zipper step that
    `insert` (fill the empty hole with a red leaf) or `eraseAt` (splice, then put the successor in
    the erased node's place) performs. `switch_with` is the first theorem where the tree of
    addresses changes but its keys don't. As built: `attachTo_refines` (from an empty hole at
@@ -163,11 +169,11 @@ Each step uses the ones before it.
    its other child; the child's `parent` word names the slot, also when it is the sentinel), and
    `switchWith_refines` (`node c l node r` becomes `node c l this r` for an address `this` outside
    the tree and its path; `node`'s children's `parent` words name `this`: for the sentinel, the
-   value step 4's hole invariant starts from). Each operation also has a per-address description,
-   `_apply` (for `rotate` too: `rotateAt_apply`, which shortened the rotation proofs, Heap.lean
-   then elaborating in about 2.4 seconds instead of 24), and the list of the records it changes,
-   `_frame`.
-3. ✅ **`insert_fixup` performs `insFix`.** Its loop invariant is `Located h head cur t path`, `p`
+   value step 3c's hole invariant starts from). Each operation also has a per-address
+   description, `_apply` (for `rotate` too: `rotateAt_apply`, which shortened the rotation proofs:
+   at step 3a, Heap.lean elaborated in about 2.4 seconds instead of 24), and the list of the
+   records it changes, `_frame`.
+3. ✅ [step 3b] **`insert_fixup` performs `insFix`.** Its loop invariant is `Located h head cur t path`, `p`
    being `cur`'s parent or `head`, plus the colours `insFix` assumes. As built
    (`insertFixupLoop_refines`, `insertFixup_refines`): the invariant is `Located` alone, with `cur`
    a real node, and the colours are read through it (`Rep.red_eq`), so the theorem holds for every
@@ -179,19 +185,34 @@ Each step uses the ones before it.
    depth plus one. The proof's tools: `Located.up_left`/`_right` and `down_left`/`_right` (moving
    along the path), `Located.paint` (`set_colour`), `rotateAt_red` and `Tree.makeBlack_root` (the
    final `make_black` is the zipper's `setBlack`).
-4. **`erase_fixup` performs `delFix`.** The loop invariant adds a **hole invariant**: when `cur`
-   is `head`, `head`'s scratch parent and side are the hole's. The proof shows the scratch is
-   read only in the first iteration, and that no write reaches it before that read. Case 1's
-   rotation would clobber it only if `w.child(s)` were the sentinel, which
-   `hpha_sibling_after_case1_not_sentinel_*` rules out. Later writes come after the last read.
-5. **The cached root (§6).** `erase_fixup` with the root read once produces the same heap and
-   the same rotation count as with HPHA's re-reads.
-6. **`insert_counted` and `erase_counted`, whole.** The descent loops perform `zoom`. The `Node`
-   branches then perform `Oris.RB.insert` and `Oris.RB.erase`. The `Chain`, `Link` and `Promote`
-   branches leave the tree of keys unchanged and update `Groups` as described in §1.
-7. **The transfer theorems.** `insert_spec` and `erase_spec` restated for the heap operations, so
-   that "valid, ordered, the right elements, at most two or three rotations" becomes a statement
-   about `rbtree.rs`'s pointer code itself.
+4. [step 3c] **`erase_fixup` performs `delFix`.** The loop invariant adds a **hole invariant**:
+   when `cur` is `head`, `head`'s scratch parent and side are the hole's. The loop reads `cur`'s
+   `parent` word only at the top of an iteration, before any write, and every iteration after the
+   first starts from a real node (case 2 climbs to `p`, a path node; case 4 ends the loop). So the
+   scratch is read once, at the top of the first iteration, and the writes that can reach it
+   later (case 1's or case 4's rotation, when the child it moves across is the sentinel) do not
+   matter. The loop test `cur != root` also needs the root's address, a path address whenever
+   the path is not empty.
+
+   **Unlike theorem 3, this one cannot hold for every located input** (found by the audit of
+   2026-11-21, readiness R1). On an unbalanced tree where a black `cur` has an empty sibling,
+   the heap model, like the Rust, takes the sentinel as the sibling `w` and its second case paints
+   it red, which `Tree` forbids; `delFix` takes its documented departure there (`stage2L`/`stage2R`
+   return `none` on a `nil` sibling). **Decided** (2026-11-21): `Fixup.lean` defines a predicate
+   `DelFixClean path x`, by the same recursion as `delFix`, true when `delFix` never reaches its
+   nil-sibling departure, and proves it from the invariant of `delFix_balanced_aux` (reusing
+   `hpha_sibling_not_sentinel_*` and `hpha_sibling_after_case1_not_sentinel_*`). The heap theorem
+   takes `DelFixClean path x` as a hypothesis, which keeps black heights out of `Heap.lean`, and
+   the step-4 spec theorem supplies it from `Path.Balanced`.
+5. [step 3d] **The cached root (§6).** `erase_fixup` with the root read once produces the same
+   heap and the same rotation count as with HPHA's re-reads, **given a black root**: on a red
+   root the two readings differ (§6).
+6. [step 4] **`insert_counted` and `erase_counted`, whole.** The descent loops perform `zoom`.
+   The `Node` branches then perform `Oris.RB.insert` and `Oris.RB.erase`. The `Chain`, `Link` and
+   `Promote` branches leave the tree of keys unchanged and update `Groups` as described in §1.
+7. [step 4] **The transfer theorems.** `insert_spec` and `erase_spec` restated for the heap
+   operations, so that "valid, ordered, the right elements, at most two or three rotations"
+   becomes a statement about `rbtree.rs`'s pointer code itself.
 
 ## 5. Plan and checkpoints
 
@@ -201,8 +222,11 @@ Each step uses the ones before it.
 | 1 ✅ | `Heap.lean`: `NodeRec`, the primitives, executable transcriptions of `rotate`, `attach_to`, `substitute_with`, `switch_with`, both fix-ups (in two variants: cached root and re-read root), and both counted operations | Each definition's doc names its Rust function, and its writes follow the Rust's order |
 | 1b ✅ | Extend `lake exe xcheck` to replay the trace through the heap model too, comparing with the Rust's shapes and with the zipper model, and running both root variants. Time the replay | 20,000 operations, 0 mismatches, before any proof is attempted. This also tests the cached-root expectation at heap level, for free |
 | 2 ✅ | `Repr`, `ReprPath`, `Repr.nodup`, the frame lemma, `rotateAt_refines` (as built: `Rep`, `RepPath`, `Rep.nodup`, `Rep.frame`, `RepPath.retarget`, `rotateAt_refines_left` and `_right`; §3, §4) | The first refinement theorem; if the encoding is clumsy, it shows here, cheaply |
-| 3 | Steps 2–5 of §4 (steps 2 and 3 ✅, 2026-11-21) | `insert_fixup` and `erase_fixup` performing `insFix` and `delFix`; the cached-root theorem |
-| 4 | Steps 6–7 of §4, chains included | `insert_spec` and `erase_spec` hold for the pointer code |
+| 3a ✅ | §4, theorem 2: `attach_to`, `substitute_with`, `switch_with` (2026-11-21) | Each performs its zipper step |
+| 3b ✅ | §4, theorem 3: `insert_fixup` (2026-11-21) | `insert_fixup` performs `insFix`; the first fuel theorem |
+| 3c | §4, theorem 4: `erase_fixup`, the hole invariant, `DelFixClean` | `erase_fixup` performs `delFix`; the second fuel theorem |
+| 3d | §4, theorem 5: the cached root (§6) | The two root readings agree on a black root |
+| 4 | §4, theorems 6 and 7, chains included | `insert_spec` and `erase_spec` hold for the pointer code |
 
 At every step, the build, the audit, the kernel replay and the cross-check stay green
 (`../CLAUDE.md`).
@@ -237,14 +261,18 @@ The general argument follows the same pattern. The root changes only through a r
 `p == root`, which means case 1 or case 4 at the root:
 - After case 1 at the root, case 2 stops the loop on `red(p)` before `root₀` is compared.
 - After case 4, the loop ends at once, and both final `make_black`s land on a node that is
-  already black.
+  already black, **given a black root**: the new root, the old `w`, takes `p`'s colour. When case 4
+  rotates at a red root with no case 1 before it, the Rust's write lands on the old `p` (just made
+  black: no change) and HPHA's on the new root, which is red, so the heaps differ (found by the
+  audit of 2026-11-21, readiness D1; Lean/docs/audits/2026-11-21-fresh-eyes/scratch/redroot.lean).
+  The Rust's tree root is always black, so the cross-check's identical heaps are unaffected.
 
 The theorem to prove:
 
 ```lean
 -- Sketch.
 theorem eraseFixup_cached_eq (hl : Located h head cur t path) (hb : …)
-    (hhole : HoleInv h head cur path) :
+    (hroot : rootColour path ≠ some .red) (hhole : HoleInv h head cur path) :
     eraseFixupRust fuel h head cur = eraseFixupHpha fuel h head cur
 ```
 
