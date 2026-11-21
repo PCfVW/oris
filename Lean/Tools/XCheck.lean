@@ -22,15 +22,16 @@ same operations, from an empty tree, through two models, and compares every line
 - **The heap model**, `Oris.RB.Heap.insertCounted` and `eraseCounted` (`Oris/RB/Heap.lean`), on a
   heap where null is `0`, the sentinel is at address `1` and the node of id `i` at `i + 2`: it
   must reproduce the whole line, so also every node's tagged `parent` word (pointer and side bit)
-  and its equal-key chain in both directions, and the sentinel's `parent` word and colour. On
+  and its equal-key chain in both directions, and the sentinel's `parent` word and colour, right
+  child link and neighbour links. On
   every erase it also runs `eraseCountedHpha`, which re-reads `erase_fixup`'s root as HPHA does,
   and requires the same rotation count and the same heap, every field of every address the erase
   could reach, as the Rust's reading.
 
 The run fails (exit 1) on any mismatch, on a line it cannot parse or replay, on a missing,
 misplaced or inconsistent `XC-END` line (so a truncated trace fails), and when the trace does not
-exercise every operation kind and every rotation count, or never empties the tree or changes the
-root during a fix-up.
+exercise every operation kind and every rotation count, or never empties the tree or rotates at
+the root during a fix-up (an erase of a node other than the root that changes the root).
 
 Run from `Lean/` (the CI job `lean-ci.yml` does exactly this):
 
@@ -124,13 +125,14 @@ def heapNode (h : Heap) (a : Addr) : String :=
     | .right => "R"
   s!"{ref a} {ref n.parent} {side} [{chain h a true}|{chain h a false}]"
 
-/-- The sentinel's `parent` word and colour, in the trace's notation. -/
+/-- The sentinel's `parent` word and colour, then its right child and neighbour links (which no
+operation writes: each reads `h`), in the trace's notation. -/
 def headInfo (h : Heap) : String :=
   let n := h headAddr
   let side := match n.side with
     | .left => "L"
     | .right => "R"
-  s!"{ref n.parent} {side}{if n.red then "R" else "B"}"
+  s!"{ref n.parent} {side}{if n.red then "R" else "B"} {ref n.right} {ref n.prev} {ref n.next}"
 
 /-- Two heaps agree on every field of the given addresses. -/
 def sameOn (h₁ h₂ : Heap) (as : Array Addr) : Bool := as.all fun a => h₁ a == h₂ a
@@ -157,8 +159,10 @@ structure Outcome where
   heap : String
   /-- Whether `erase_fixup`'s two root readings gave the same rotations and the same heap. -/
   rootsAgree : Bool
-  /-- Whether the root's address changed (an erase that rebalanced only). -/
-  rootChanged : Bool
+  /-- Whether a fix-up rotated at the root: a `Node` erase of a node other than the root that
+  changed the root's address (erasing the root itself changes it through `substitute_with` or
+  `switch_with`, with or without a rotation, so it does not count). -/
+  rootRotated : Bool
 
 /-- Replays one line; `none` if it cannot be parsed or replayed (an unknown operation, an id
 already used, an erase of a node not live, fuel running out). -/
@@ -203,13 +207,14 @@ def replay (s : State) (op : String) (id : Nat) (key : Int) (kind : String) : Op
       pure (h₁, eraseLetter k, r₁, r₁ == r₂ && sameOn h₁ h₂ reach)
   let heap := s!"XC {op} {id} {key} {rot} {letter} {tree h' (fun x => toString (keyOf x))} | \
     {tree h' (heapNode h')} | {headInfo h'}"
-  let rootChanged := !isInsert && letter == "N" && (h' headAddr).left != rootBefore
+  let rootRotated := !isInsert && letter == "N" && a != rootBefore &&
+    (h' headAddr).left != rootBefore
   -- Copy the addresses the operation could reach into the table.
   let updates := reach.map fun x => (x, h' x)
   let table := updates.foldl (fun tb (x, r) => tb.set! x r) table0
   let live := if isInsert then s.live.push a else s.live.filter (· != a)
   let counts := s.counts.insert key (if isInsert then count + 1 else count - 1)
-  return { state := { t := t', counts, table, keys, live }, zipper, heap, rootsAgree, rootChanged }
+  return { state := { t := t', counts, table, keys, live }, zipper, heap, rootsAgree, rootRotated }
 
 end Oris.XCheck
 
@@ -272,12 +277,12 @@ def main : IO UInt32 := do
       seen := note seen s!"{op}{kind}"
       seen := note seen s!"{op} rot {(ws[4]?).getD "?"}"
       if op == "E" && s.live.isEmpty then seen := note seen "emptied"
-      if o.rootChanged then seen := note seen "root changed"
+      if o.rootRotated then seen := note seen "root rotated"
   IO.println s!"{lines} operations compared, {bad} mismatches \
     (zipper model {zipperBad}, heap model {heapBad})"
   IO.println s!"erase_fixup's root, read once or re-read: {rootDiffer} of {erases} erases differ"
   let required := ["IN", "IC", "EN", "EL", "EP", "I rot 0", "I rot 1", "I rot 2", "E rot 0",
-    "E rot 1", "E rot 2", "E rot 3", "emptied", "root changed"]
+    "E rot 1", "E rot 2", "E rot 3", "emptied", "root rotated"]
   IO.println s!"coverage: {", ".intercalate (required.map fun k => s!"{k} {seen.getD k 0}")}"
   let mut failed := bad != 0
   for k in required do

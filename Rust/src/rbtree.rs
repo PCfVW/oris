@@ -1956,7 +1956,9 @@ mod tests {
     ///   equal-key chain (`write_heap_shape`), which the heap model (`Oris/RB/Heap.lean`)
     ///   must reproduce;
     /// - the sentinel's own `parent` word: its pointer, side and colour bit (the scratch
-    ///   fields `substitute_with`, `switch_with` and `rotate` write).
+    ///   fields `substitute_with`, `switch_with` and `rotate` write), then its right child
+    ///   link and its two neighbour links, which no operation should write (each must
+    ///   print as the sentinel itself).
     ///
     /// The last line is `XC-END <steps> <erases>`, so a truncated trace fails the check.
     ///
@@ -1965,8 +1967,8 @@ mod tests {
     ///   every `Chain`, `Link` and `Promote` branch runs;
     /// - the tree's size goes through phases, growing to a random target of up to 150
     ///   nodes and shrinking, every other time down to empty, so the fix-ups also run on
-    ///   small trees, where they reach the root (the loop ending at the root, rotations at
-    ///   the root, the root changing during `erase_fixup`);
+    ///   small trees, where they reach the root (the loop ending at the root, and rotations
+    ///   at the root during `erase_fixup`, which the consumer counts and requires);
     /// - no node is freed before the end and ids are never reused, so every pointer the
     ///   trace prints, the sentinel's scratch `parent` included (it can name a node erased
     ///   long before), names one allocated node.
@@ -2067,6 +2069,20 @@ mod tests {
             // SAFETY: the sentinel is live; reads its colour bit.
             let head_red = unsafe { NodeBase::red(head) };
             trace_line.push_str(if head_red { "R" } else { "B" });
+            // The sentinel's right child and neighbour links, which `write_ref` prints without
+            // dereferencing them unless they name a test node.
+            let head_links = [
+                // SAFETY: the sentinel is live; reads its right child link.
+                unsafe { NodeBase::child(head, Side::Right) },
+                // SAFETY: the sentinel is live; reads its left neighbour link.
+                unsafe { NodeBase::neighbour(head, Side::Left) },
+                // SAFETY: the sentinel is live; reads its right neighbour link.
+                unsafe { NodeBase::neighbour(head, Side::Right) },
+            ];
+            for link in head_links {
+                trace_line.push(' ');
+                write_ref(head, link, &mut trace_line);
+            }
             println!("{trace_line}");
         }
         println!("XC-END {STEPS} {erases}");
