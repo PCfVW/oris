@@ -1338,6 +1338,127 @@ theorem attachTo_refines {h : Heap} {head this p : Addr} {s : Side} {path : Path
     · intro _
       cases s <;> simp [AT, childAt, Side.other, Ne.symm htp, NodeRec.withChild]
 
+/-- **`substituteWith`, address by address**: `child` takes `this`'s slot (`this`'s parent and
+side, read before any write), and that parent's link takes `child`; every other record is kept,
+`this`'s included. `child` and the parent may coincide: both are the sentinel when the root, with
+no children, is erased. -/
+theorem substituteWith_apply (h : Heap) (this child : Addr) (x : Addr) :
+    substituteWith h this child x =
+      if x = child then
+        { (if x = parent h this then (h x).withChild (parentSide h this) child else h x) with
+          parent := parent h this, side := parentSide h this }
+      else if x = parent h this then (h x).withChild (parentSide h this) child
+      else h x := by
+  generalize hP : parent h this = P
+  generalize hps : parentSide h this = ps
+  simp only [substituteWith, setChild_eq, setParentPtr, setParentSide, Heap.modify, hP, hps]
+  by_cases e₁ : x = child
+  · subst e₁
+    by_cases e₂ : x = P
+    · subst e₂; simp; cases ps <;> rfl
+    · simp [e₂]
+  by_cases e₂ : x = P
+  · subst e₂; simp [e₁]
+  · simp [e₁, e₂]
+
+/-- **`substituteWith` touches two addresses**: `child` and `this`'s parent. -/
+theorem substituteWith_frame (h : Heap) (this child : Addr) {x : Addr} (h₁ : x ≠ child)
+    (h₂ : x ≠ parent h this) : substituteWith h this child x = h x := by
+  simp [substituteWith_apply, h₁, h₂]
+
+/-- The common part of `substituteWith_refines_left` and `_right`: `this` is the first node of the
+located subtree `t`, and its side-`σ` child `k` represents `u`, a subtree of `t`. After
+`substituteWith h this k`, the heap represents `u` at `this`'s slot and path, and `k`'s `parent`
+word names the slot, also when `k` is the sentinel (the empty hole). -/
+theorem substituteWith_refines_core {h : Heap} {head this p k : Addr} {s σ : Side}
+    {t u : RBNode Addr} {path : Path Addr}
+    (hl : Located h head this p s t path) (hthis : this ∈ t.toList)
+    (hu : Rep h head k this σ u) (hut : ∀ x ∈ u.toList, x ∈ t.toList) :
+    Located (substituteWith h this k) head k p s u path ∧
+      (substituteWith h this k k).parent = p ∧ (substituteWith h this k k).side = s := by
+  have hout := hl.outside
+  have hpt := hl.slot_not_mem
+  have hk : k ≠ head → k ∈ u.toList := hu.root_mem
+  obtain ⟨hr, hp⟩ := hl
+  have hpa : parent h this = p := (hr.root_fields hthis).1
+  have hsa : parentSide h this = s := (hr.root_fields hthis).2
+  have SU := substituteWith_apply h this k
+  simp only [hpa, hsa] at SU
+  have hs : p = head → s = .left := fun e => by rw [e] at hp; exact hp.head_side
+  -- `k` is the sentinel or an address of `u`, inside `t`; `p` is the sentinel or on the path.
+  have hkp₀ : p ≠ head → k ≠ p := fun hph e => by
+    by_cases hkh : k = head
+    · exact hph (e ▸ hkh)
+    · exact hpt (e ▸ hut k (hk hkh))
+  have FK : (substituteWith h this k k).parent = p ∧ (substituteWith h this k k).side = s := by
+    simp [SU]
+  refine ⟨⟨?_, ?_⟩, FK⟩
+  · refine hu.reroot (fun hkh => ?_) (fun x hx hxk => ?_)
+    · have hkp : k ≠ p := fun e => by
+        by_cases hph : p = head
+        · exact hkh (e.trans hph)
+        · exact hkp₀ hph e
+      simp [SU, hkp]
+    · have hxp : x ≠ p := fun e => hpt (e ▸ hut x hx)
+      simp [SU, hxk, hxp]
+  · have hkk : ∀ x ∈ path.listL ++ path.listR, x ≠ k := fun x hx e => by
+      by_cases hkh : k = head
+      · exact (hout x hx).2 (e.trans hkh)
+      · exact (hout x hx).1 (e ▸ hut k (hk hkh))
+    have HH : (substituteWith h this k head).right = (h head).right ∧
+        (substituteWith h this k head).red = (h head).red ∧
+        (p ≠ head → (substituteWith h this k head).left = (h head).left) := by
+      by_cases hph : p = head
+      · subst hph; obtain rfl := hs rfl
+        by_cases hkh : p = k
+        · subst hkh; simp [SU, NodeRec.withChild]
+        · simp [SU, hkh, NodeRec.withChild]
+      · have hhp : head ≠ p := Ne.symm hph
+        by_cases hkh : head = k
+        · subst hkh; simp [SU, hhp]
+        · simp [SU, hkh, hhp]
+    refine hp.retarget hr (fun x hx hxp => substituteWith_frame h this k (hkk x hx)
+        (by rw [hpa]; exact hxp)) HH.1 HH.2.1 HH.2.2 ?_ ?_
+    · by_cases hph : p = head
+      · subst hph; obtain rfl := hs rfl
+        by_cases hkh : p = k
+        · subst hkh; simp [SU, childAt, NodeRec.withChild]
+        · simp [SU, childAt, hkh, NodeRec.withChild]
+      · have hpk := Ne.symm (hkp₀ hph)
+        cases s <;> simp [SU, childAt, hpk, NodeRec.withChild]
+    · intro hph
+      have hpk := Ne.symm (hkp₀ hph)
+      cases s <;> simp [SU, childAt, Side.other, hpk, NodeRec.withChild]
+
+/-- **`NodeBase::substitute_with` splices out a node with no right child** (the note's §4, step 2;
+`erase_counted`'s `right == end` case). If the heap represents the located subtree
+`node c l this nil`, then after `substituteWith h this (h this).left` it represents `l` at the same
+slot and path: the zipper's `path.fill l` in `eraseAt`. And the left child's `parent` word names
+that slot. When `l` is empty, that child is the sentinel, and these are its scratch fields: how
+`erase_fixup` finds an empty hole's parent and side (unless `switch_with` then overwrites them,
+`switchWith_refines`). `this` is detached, its record unchanged. -/
+theorem substituteWith_refines_left {h : Heap} {head this p : Addr} {s : Side} {c : RBColor}
+    {l : RBNode Addr} {path : Path Addr}
+    (hl : Located h head this p s (.node c l this .nil) path) :
+    Located (substituteWith h this (h this).left) head (h this).left p s l path ∧
+      (substituteWith h this (h this).left (h this).left).parent = p ∧
+      (substituteWith h this (h this).left (h this).left).side = s := by
+  obtain ⟨-, -, -, -, -, -, hll, -⟩ := hl.1.node_inv
+  exact substituteWith_refines_core hl (by simp) hll (fun x hx => by simp [hx])
+
+/-- **`NodeBase::substitute_with` splices out a node with no left child**, the mirror image of
+`substituteWith_refines_left` (`erase_counted`'s case `left == end`, and its two-child case, where
+the in-order successor, which has no left child, is spliced out): `node c nil this r` gives `r`,
+with the right child's `parent` word naming the slot. -/
+theorem substituteWith_refines_right {h : Heap} {head this p : Addr} {s : Side} {c : RBColor}
+    {r : RBNode Addr} {path : Path Addr}
+    (hl : Located h head this p s (.node c .nil this r) path) :
+    Located (substituteWith h this (h this).right) head (h this).right p s r path ∧
+      (substituteWith h this (h this).right (h this).right).parent = p ∧
+      (substituteWith h this (h this).right (h this).right).side = s := by
+  obtain ⟨-, -, -, -, -, -, -, hrr⟩ := hl.1.node_inv
+  exact substituteWith_refines_core hl (by simp) hrr (fun x hx => by simp [hx])
+
 end Heap
 
 end Oris.RB
