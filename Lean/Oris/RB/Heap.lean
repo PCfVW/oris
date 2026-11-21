@@ -1689,6 +1689,151 @@ theorem switchWith_refines {h : Heap} {head this node p : Addr} {s : Side} {c : 
       have e₂ : p ≠ L := fun e => hLp (fun h' => hph (e.trans h')) e.symm
       cases s <;> simp [SW, childAt, Side.other, Ne.symm htp, e₁, e₂, NodeRec.withChild]
 
+/-! ## Step 3b, the tools: colours, climbing the path, the final `make_black`
+
+What `insert_fixup`'s refinement proof needs besides the structural operations of step 3a: how a
+heap's colour bits read back through `Rep`, how a located subtree moves up and down its path,
+what a colour write does to a located subtree, and what the final `make_black` of the root does
+to a whole tree. -/
+
+/-- A path's relation keeps the sentinel black: `RepPath`'s root case requires it, and every
+other case carries it up. -/
+theorem RepPath.head_red {h : Heap} {head a p : Addr} {s : Side} {path : Path Addr}
+    (hp : RepPath h head a p s path) : (h head).red = false := by
+  induction hp with
+  | root _ _ e => exact e
+  | left _ _ _ _ _ _ ih => exact ih
+  | right _ _ _ _ _ _ ih => exact ih
+
+/-- **Colour bits read back.** The `red` bit at a subtree's starting address is the zipper's
+`red?` of the subtree, for the sentinel too (black, as `NodeBase::red` reads it), provided the
+sentinel's bit is clear. -/
+theorem Rep.red_eq {h : Heap} {head a p : Addr} {s : Side} {u : RBNode Addr}
+    (hr : Rep h head a p s u) (hh : (h head).red = false) : red h a = red? u := by
+  cases hr with
+  | nil => exact hh
+  | @node _ _ _ c _ _ _ _ _ _ hc _ _ => cases c <;> exact hc
+
+/-- A slot on a left path step is that step's node's left link. -/
+theorem RepPath.left_inv {h : Heap} {head a p y : Addr} {s : Side} {c : RBColor}
+    {pp : Path Addr} {b : RBNode Addr} (hp : RepPath h head a p s (.left c pp y b)) :
+    p = y ∧ s = .left := by
+  cases hp; exact ⟨rfl, rfl⟩
+
+/-- A slot on a right path step is that step's node's right link. -/
+theorem RepPath.right_inv {h : Heap} {head a p y : Addr} {s : Side} {c : RBColor}
+    {pp : Path Addr} {b : RBNode Addr} (hp : RepPath h head a p s (.right c b y pp)) :
+    p = y ∧ s = .right := by
+  cases hp; exact ⟨rfl, rfl⟩
+
+namespace Located
+
+variable {h : Heap} {head a y P : Addr} {S : Side} {c : RBColor} {t l r b : RBNode Addr}
+  {pp : Path Addr}
+
+/-- **Climbing a left step**: a subtree located as `y`'s left child is part of `y`'s subtree,
+located at `y`'s own slot, read from `y`'s `parent` word, one step up the path. -/
+theorem up_left (hl : Located h head a y .left t (.left c pp y b)) :
+    Located h head y (h y).parent (h y).side (.node c t y b) pp := by
+  obtain ⟨hr, hp⟩ := hl
+  cases hp with
+  | left hy hn ha hc hb hpp => exact ⟨.node hy hn rfl rfl hc (ha ▸ hr) hb, hpp⟩
+
+/-- **Climbing a right step**, the mirror image of `up_left`. -/
+theorem up_right (hl : Located h head a y .right t (.right c b y pp)) :
+    Located h head y (h y).parent (h y).side (.node c b y t) pp := by
+  obtain ⟨hr, hp⟩ := hl
+  cases hp with
+  | right hy hn ha hc hb hpp => exact ⟨.node hy hn rfl rfl hc hb (ha ▸ hr), hpp⟩
+
+/-- **Descending to the left child**: the converse of `up_left`. -/
+theorem down_left (hl : Located h head y P S (.node c l y r) pp) :
+    Located h head (h y).left y .left l (.left c pp y r) := by
+  obtain ⟨hr, hp⟩ := hl
+  obtain ⟨-, hy, hn, hpa, hsa, hc, hll, hrr⟩ := hr.node_inv
+  exact ⟨hll, .left hy hn rfl hc hrr (hpa ▸ hsa ▸ hp)⟩
+
+/-- **Descending to the right child**: the converse of `up_right`. -/
+theorem down_right (hl : Located h head y P S (.node c l y r) pp) :
+    Located h head (h y).right y .right r (.right c l y pp) := by
+  obtain ⟨hr, hp⟩ := hl
+  obtain ⟨-, hy, hn, hpa, hsa, hc, hll, hrr⟩ := hr.node_inv
+  exact ⟨hrr, .right hy hn rfl hc hll (hpa ▸ hsa ▸ hp)⟩
+
+/-- **`NodeBase::set_colour` on a located subtree's first node** gives it the new colour and
+changes nothing else the relation reads: the zipper's `paint` at the hole. (`makeBlack` and
+`makeRed` are `setColour` with `colourBit .black` and `colourBit .red`.) -/
+theorem paint (hl : Located h head y P S (.node c l y r) pp) (c' : RBColor) :
+    Located (setColour h y (colourBit c')) head y P S (.node c' l y r) pp := by
+  have hout := hl.outside
+  obtain ⟨hr, hp⟩ := hl
+  obtain ⟨-, hy, hn, hpa, hsa, -, hll, hrr⟩ := hr.node_inv
+  obtain ⟨-, -, hyl, hyr, -⟩ := nodup_node hr.nodup
+  have F : ∀ x, x ≠ y → setColour h y (colourBit c') x = h x := fun x hx => by
+    simp [setColour, Heap.modify, hx]
+  have Y : setColour h y (colourBit c') y = { h y with red := colourBit c' } := by
+    simp [setColour, Heap.modify]
+  refine ⟨.node hy hn (by rw [Y]; exact hpa) (by rw [Y]; exact hsa) (by rw [Y]) ?_ ?_, ?_⟩
+  · rw [Y]; exact hll.frame fun x hx => F x (fun e => hyl (e ▸ hx))
+  · rw [Y]; exact hrr.frame fun x hx => F x (fun e => hyr (e ▸ hx))
+  · have hyh : head ≠ y := Ne.symm hy
+    exact hp.frame (fun x hx => F x (fun e => (hout x hx).1 (by simp [e])))
+      (by rw [F head hyh]) (by rw [F head hyh]) (by rw [F head hyh])
+
+end Located
+
+/-- `setColour` changes no `parent` pointer. -/
+theorem setColour_parent (h : Heap) (a : Addr) (b : Bool) (x : Addr) :
+    (setColour h a b x).parent = (h x).parent := by
+  by_cases e : x = a <;> simp [setColour, Heap.modify, e]
+
+/-- `setColour` changes no other address's colour. -/
+theorem setColour_red_ne (h : Heap) (a : Addr) (b : Bool) {x : Addr} (hx : x ≠ a) :
+    (setColour h a b x).red = (h x).red := by
+  simp [setColour, Heap.modify, hx]
+
+/-- `setColour` sets the colour it writes. -/
+theorem setColour_red_eq (h : Heap) (a : Addr) (b : Bool) : (setColour h a b a).red = b := by
+  simp [setColour, Heap.modify]
+
+/-- A write that keeps colours keeps every address's colour. -/
+theorem modify_red (h : Heap) (a : Addr) (f : NodeRec → NodeRec) (hf : ∀ n, (f n).red = n.red)
+    (x : Addr) : (h.modify a f x).red = (h x).red := by
+  by_cases e : x = a <;> simp [Heap.modify, e, hf]
+
+/-- **`rotateAt` changes no colour**: its nine writes are child links and `parent` words. -/
+theorem rotateAt_red (h : Heap) (this : Addr) (s : Side) (x : Addr) :
+    (rotateAt h this s x).red = (h x).red := by
+  simp only [rotateAt, setChild_eq, setParentPtr, setParentSide]
+  repeat rw [modify_red _ _ _ (fun _ => by simp)]
+
+/-- **`insert_fixup`'s final `make_black(head.child(Left))`** blackens the represented tree's root:
+the zipper's `setBlack` of the whole tree. On an empty tree it writes the sentinel's colour bit,
+black over black. -/
+theorem Tree.makeBlack_root {h : Heap} {head : Addr} {T : RBNode Addr} (ht : Tree h head T) :
+    Tree (makeBlack h (childAt h head .left)) head T.setBlack := by
+  cases T with
+  | nil =>
+    obtain ⟨hr, e₂, e₃⟩ := ht
+    have hroot : (h head).left = head := hr.nil_inv
+    have H : makeBlack h (childAt h head .left) head = { h head with red := false } := by
+      simp [makeBlack, setColour, Heap.modify, childAt, hroot]
+    refine ⟨?_, by rw [H]; exact e₂, by rw [H]⟩
+    rw [H]; show Rep _ head (h head).left head .left .nil; rw [hroot]; exact .nil
+  | node c l v r =>
+    obtain ⟨hv, hvh, -⟩ := ht.1.node_inv
+    have hl : Located h head v head .left (.node c l v r) .root := by
+      have := tree_iff_located.1 ht; rw [hv] at this; exact this
+    have hl' := hl.paint .black
+    have E : setColour h v (colourBit .black) head = h head := by
+      simp [setColour, Heap.modify, Ne.symm hvh]
+    apply tree_iff_located.2
+    have e : childAt h head .left = v := hv
+    simp only [makeBlack, e]
+    rw [show (setColour h v false head).left = v by
+      rw [show false = colourBit .black from rfl, E, hv]]
+    exact hl'
+
 end Heap
 
 end Oris.RB
