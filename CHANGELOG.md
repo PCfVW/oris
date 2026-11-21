@@ -12,6 +12,11 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Added
 
+- **Lean: `insert_fixup` performs `insFix`** (step 3b of the heap layer, `Lean/docs/heap-layer.md`
+  §4). `insertFixupLoop_refines` and `insertFixup_refines`: from any located subtree whose tree
+  has a black root, `insert_fixup`'s pointer code leaves a heap representing `insFix`'s tree, after
+  `insFix`'s number of rotations. `insertFixup_refines_depth`, the first fuel theorem: fuel at
+  least the tree's depth suffices, so the heap model's fuel never runs out there.
 - **Lean: `attach_to`, `substitute_with` and `switch_with` perform their zipper steps** (step 3a
   of the heap layer, `Lean/docs/heap-layer.md` §4). `attachTo_refines`: from an empty hole, the
   red leaf `insert` hands to `insFix`. `substituteWith_refines_left` and `_right`: a node with at

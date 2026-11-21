@@ -4,7 +4,7 @@ import Oris.RB.Fixup
 /-!
 # `rbtree.rs`'s pointer code, on a model heap
 
-Steps 1, 2 and the first part of 3 of the heap layer, as numbered in the plan of
+Steps 1, 2 and the first parts of 3 of the heap layer, as numbered in the plan of
 `Lean/docs/heap-layer.md` (§5; §4 numbers the theorems, `rotateAt_refines` being its first).
 
 - **Step 1, the definitions.** Every function below transcribes one function of
@@ -21,7 +21,11 @@ Steps 1, 2 and the first part of 3 of the heap layer, as numbered in the plan of
   operation, `rotateAt` included, also has a per-address description of its result (`_apply`)
   and the list of records it changes (`_frame`).
 
-That the fix-ups and the counted operations perform their zipper steps is the rest of the plan's
+- **Step 3b, `insert_fixup`.** `insertFixupLoop_refines` and `insertFixup_refines` prove that
+  `insert_fixup` performs `insFix`: the same tree and the same rotation count, from any located
+  subtree whose tree has a black root. `insertFixup_refines_depth` is the first fuel theorem.
+
+That `erase_fixup` and the counted operations perform their zipper steps is the rest of the plan's
 step 3, and its step 4.
 
 ## The model (the note's §2)
@@ -41,11 +45,13 @@ step 3, and its step 4.
 - Keys: the descent of `insert_counted` compares nodes with the Rust's `T::cmp`; here, with
   `cmp (key a) (key b)` for a fixed `key : Addr → α`.
 - The loops (`insert_fixup`, `erase_fixup` and the two descents) take explicit fuel and return
-  `none` when it runs out. That is this file's one departure from the Rust's behaviour, and it
-  is not yet proven unreachable: the Rust loops until the tree's structure stops them. Each loop
-  spends one unit of fuel on its final, failing test, so the plan's steps 3 and 4 will prove
-  that fuel at least the tree's height **plus one** (its size plus one, for the descents)
-  always suffices. Each loop's doc repeats this.
+  `none` when it runs out. That is this file's one departure from the Rust's behaviour: the Rust
+  loops until the tree's structure stops them. Each loop spends one unit of fuel on its final,
+  failing test, so fuel at least the tree's height **plus one** (its size plus one, for the
+  descents) suffices. For `insert_fixup` this is proven (`insertFixup_refines_depth`: fuel at
+  least `RBNode.depth`, the number of nodes on the longest branch, which is the height in edges
+  plus one); for `erase_fixup` and the descents it is the plan's steps 3c and 4. Each loop's doc
+  repeats this.
 - `erase_fixup`'s root comes in two readings: `eraseFixup` reads it once on entry, as the Rust
   does, and `eraseFixupHpha` re-reads it, as `Cpp/hpha.cpp` does. The note's §6 plans the theorem
   that they agree.
@@ -274,7 +280,7 @@ def linkIntoChain (h : Heap) (this node : Addr) : Heap :=
 so far. The first branch is the red uncle (recolour and climb); the second rotates once or twice and
 leaves `p` black, so the next test ends the loop. On exit: `make_black(head.child(Left))`, the root
 as it is then. The fuel is this file's one departure from the Rust (see the module doc): `none` when
-it runs out. -/
+it runs out, which fuel at least the tree's depth rules out (`insertFixup_refines_depth`). -/
 def insertFixupLoop (head : Addr) : Nat → Heap → Addr → Addr → Nat → Option (Heap × Nat)
   | 0, _, _, _, _ => none
   | fuel + 1, h, cur, p, rotations =>
@@ -310,7 +316,8 @@ def insertFixupLoop (head : Addr) : Nat → Heap → Addr → Addr → Nat → O
 
 /-- `rbtree.rs` `insert_fixup`: rebalances after `attach_to` attached `node` as a red leaf, and
 returns the rotations performed. The fuel is this file's one departure from the Rust (see the module
-doc): `none` when it runs out. -/
+doc): `none` when it runs out, which fuel at least the tree's depth rules out
+(`insertFixup_refines_depth`). -/
 def insertFixup (fuel : Nat) (h : Heap) (head node : Addr) : Option (Heap × Nat) :=
   insertFixupLoop head fuel h node (parent h node) 0
 

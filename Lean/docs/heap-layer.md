@@ -1,8 +1,8 @@
 # Design note — the heap layer (`Oris/RB/Heap.lean`)
 
-*Status: agreed, 2026-11-14. Steps 1, 1b and 2 are done (§5), and so is the first part of
-step 3 (§4, step 2, done 2026-11-21); the rest of step 3, and step 4, are not yet written.
-Decisions taken are recorded in §7.*
+*Status: agreed, 2026-11-14. Steps 1, 1b and 2 are done (§5), and so are the first two parts of
+step 3 (§4, steps 2 and 3, done 2026-11-21); the rest of step 3, and step 4, are not yet
+written. Decisions taken are recorded in §7.*
 
 `Oris/RB/Fixup.lean` proves `rbtree.rs`'s red-black algorithm correct **on zippers**: a node
 together with its chain of parents is a `(subtree, path)` pair, and the fix-ups are functions on
@@ -167,8 +167,18 @@ Each step uses the ones before it.
    `_apply` (for `rotate` too: `rotateAt_apply`, which shortened the rotation proofs, Heap.lean
    then elaborating in about 2.4 seconds instead of 24), and the list of the records it changes,
    `_frame`.
-3. **`insert_fixup` performs `insFix`.** Its loop invariant is `Located h head cur t path`, `p`
-   being `cur`'s parent or `head`, plus the colours `insFix` assumes.
+3. ✅ **`insert_fixup` performs `insFix`.** Its loop invariant is `Located h head cur t path`, `p`
+   being `cur`'s parent or `head`, plus the colours `insFix` assumes. As built
+   (`insertFixupLoop_refines`, `insertFixup_refines`): the invariant is `Located` alone, with `cur`
+   a real node, and the colours are read through it (`Rep.red_eq`), so the theorem holds for every
+   located input, valid red-black tree or not, with one more hypothesis: the tree's root is black
+   (`rootColour path ≠ some .red`). Without it, a red parent at the root sends the Rust into its
+   black-uncle branch at the sentinel, where `insFix` stops (`Fixup.lean`'s red-root departure).
+   The first fuel theorem, `insertFixup_refines_depth`, asks for fuel at least the starting tree's
+   `RBNode.depth` (its height in edges plus one, as §2 planned); the proof needs only the hole's
+   depth plus one. The proof's tools: `Located.up_left`/`_right` and `down_left`/`_right` (moving
+   along the path), `Located.paint` (`set_colour`), `rotateAt_red` and `Tree.makeBlack_root` (the
+   final `make_black` is the zipper's `setBlack`).
 4. **`erase_fixup` performs `delFix`.** The loop invariant adds a **hole invariant**: when `cur`
    is `head`, `head`'s scratch parent and side are the hole's. The proof shows the scratch is
    read only in the first iteration, and that no write reaches it before that read. Case 1's
@@ -191,7 +201,7 @@ Each step uses the ones before it.
 | 1 ✅ | `Heap.lean`: `NodeRec`, the primitives, executable transcriptions of `rotate`, `attach_to`, `substitute_with`, `switch_with`, both fix-ups (in two variants: cached root and re-read root), and both counted operations | Each definition's doc names its Rust function, and its writes follow the Rust's order |
 | 1b ✅ | Extend `lake exe xcheck` to replay the trace through the heap model too, comparing with the Rust's shapes and with the zipper model, and running both root variants. Time the replay | 20,000 operations, 0 mismatches, before any proof is attempted. This also tests the cached-root expectation at heap level, for free |
 | 2 ✅ | `Repr`, `ReprPath`, `Repr.nodup`, the frame lemma, `rotateAt_refines` (as built: `Rep`, `RepPath`, `Rep.nodup`, `Rep.frame`, `RepPath.retarget`, `rotateAt_refines_left` and `_right`; §3, §4) | The first refinement theorem; if the encoding is clumsy, it shows here, cheaply |
-| 3 | Steps 2–5 of §4 (step 2 ✅, 2026-11-21) | `insert_fixup` and `erase_fixup` performing `insFix` and `delFix`; the cached-root theorem |
+| 3 | Steps 2–5 of §4 (steps 2 and 3 ✅, 2026-11-21) | `insert_fixup` and `erase_fixup` performing `insFix` and `delFix`; the cached-root theorem |
 | 4 | Steps 6–7 of §4, chains included | `insert_spec` and `erase_spec` hold for the pointer code |
 
 At every step, the build, the audit, the kernel replay and the cross-check stay green
