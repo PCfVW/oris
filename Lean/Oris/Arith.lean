@@ -321,7 +321,9 @@ theorem bucketSpacingInverse_toNat (i : Usize) (h : i.toNat < 32) :
   refine ⟨by omega, by omega, ?_⟩
   unfold bucketSpacingInverse
   simp only [BitVec.toNat_shiftLeft, BitVec.toNat_add, Nat.shiftLeft_eq]
-  simp; omega
+  simp only [BitVec.ofNat_eq_ofNat, BitVec.toNat_ofNat, Nat.reducePow, Nat.one_mod,
+    Nat.mod_mul_mod, Nat.mod_succ_eq_iff_lt, Nat.succ_eq_add_one, Nat.reduceAdd]
+  omega
 
 /-- Every `bucket_spacing_function` input in `[1, 256]` maps to one of the 32 buckets, and that
 bucket's element size is the **smallest** size class that fits it: at least the input, less than
@@ -358,7 +360,7 @@ theorem bucketSpacingAligned_eq (s : Usize) (h8 : s.toNat % 8 = 0) :
   have b : (8 : Usize).toNat = 8 := rfl
   simp only [BitVec.toNat_sub, BitVec.toNat_ushiftRight, BitVec.toNat_add,
     Nat.shiftRight_eq_div_pow, a, b]
-  simp
+  simp only [Nat.reducePow, Nat.add_one_sub_one, Nat.reduceAdd, Nat.reduceMod]
   omega
 
 /-- `clamp_small_allocation` is `max(size, MIN_ALLOCATION - guard)`, on every input and for
@@ -389,7 +391,11 @@ theorem isSmall_iff (guard size : Usize) :
   split
   · rename_i h; simp only [decide_eq_true_eq, BitVec.le_def, BitVec.toNat_add]
     rw [Nat.mod_eq_of_lt h]; simp
-  · rename_i h; simp only [decide_eq_true_eq, BitVec.le_def]; simp; omega
+  · rename_i h
+    simp only [decide_eq_true_eq, BitVec.le_def, BitVec.reduceAllOnes, BitVec.toNat_ofNat,
+      Nat.reducePow, Nat.mod_succ, BitVec.ofNat_eq_ofNat, Nat.reduceMod, Nat.reduceLeDiff,
+      false_iff, Nat.not_le]
+    omega
 
 /-- **The plain small-allocation path lands in the smallest bucket that fits.** `orisnik.rs`
 `alloc` sends a request `s` with `is_small_allocation(s)` to the bucket

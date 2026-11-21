@@ -513,37 +513,33 @@ theorem stage2R_rotations {pc : RBColor} {pp : Path α} {y : α} {w x : RBNode �
 the tree with `cur` in its hole. -/
 theorem delFix_toList (path : Path α) (x : RBNode α) :
     (delFix path x).1.toList = (path.fill x).toList := by
-  fun_induction delFix path x with
-  | case1 => simp
-  | case2 => simp
-  | case3 _ _ _ _ _ _ _ _ _ h => rw [stage2L_toList h]; simp [Path.fill]
-  | case4 => simp_all (config := { zetaDelta := true }) [Path.fill]
-  | case5 _ _ _ _ _ _ _ _ h => rw [stage2L_toList h]; rfl
-  | case6 => simp_all [Path.fill]
-  | case7 _ _ _ _ _ _ _ _ _ h => rw [stage2R_toList h]; simp [Path.fill]
-  | case8 => simp_all (config := { zetaDelta := true }) [Path.fill]
-  | case9 _ _ _ _ _ _ _ _ h => rw [stage2R_toList h]; rfl
-  | case10 => simp_all [Path.fill]
+  -- No `caseN` names: `fun_induction` generates them from the definition's arms, so they change
+  -- with the arms or the toolchain. Each goal is closed by the first tactic fitting its shape: a
+  -- finishing `stage2L`/`stage2R` (by its `_toList` lemma), else the others (by the induction
+  -- hypothesis, for the recursive arms).
+  fun_induction delFix path x
+  all_goals try dsimp only
+  all_goals first
+    | (rw [stage2L_toList ‹stage2L _ _ _ _ _ = some _›]; simp [Path.fill]; done)
+    | (rw [stage2R_toList ‹stage2R _ _ _ _ _ = some _›]; simp [Path.fill]; done)
+    | simp_all (config := { zetaDelta := true }) [Path.fill]
 
 /-- **At most three rotations per erase**, as `erase_fixup`'s doc claims: one for the first
 case, then at most two for the third and fourth; after the first case a second-case step lands on
 a red `p` and stops without rotating. -/
 theorem delFix_rotations (path : Path α) (x : RBNode α) : (delFix path x).2 ≤ 3 := by
-  fun_induction delFix path x with
-  | case1 => simp
-  | case2 => simp
-  | case3 _ _ _ _ _ _ _ _ _ h => have := stage2L_rotations h; simp; omega
-  | case4 =>
-    show (delFix (Path.left black _ _ _) (node red _ _ _)).2 + 1 ≤ 3
-    rw [delFix_red] <;> simp
-  | case5 _ _ _ _ _ _ _ _ h => exact Nat.le_trans (stage2L_rotations h) (by decide)
-  | case6 => simp_all
-  | case7 _ _ _ _ _ _ _ _ _ h => have := stage2R_rotations h; simp; omega
-  | case8 =>
-    show (delFix (Path.right black _ _ _) (node red _ _ _)).2 + 1 ≤ 3
-    rw [delFix_red] <;> simp
-  | case9 _ _ _ _ _ _ _ _ h => exact Nat.le_trans (stage2R_rotations h) (by decide)
-  | case10 => simp_all
+  -- No `caseN` names (see `delFix_toList`). The goals, in the order the tactics try them: no
+  -- rotation; a finishing `stage2L`/`stage2R` after the first case (at most two, plus one); a
+  -- recursive arm without the first case (the induction hypothesis); and the second case after
+  -- the first, which lands on a red `p` and stops at once (`delFix_red`: one rotation in all).
+  fun_induction delFix path x
+  all_goals try dsimp (config := { zetaDelta := true }) only
+  all_goals first
+    | (simp only [Nat.zero_le]; done)
+    | (have := stage2L_rotations ‹stage2L _ _ _ _ _ = some _›; omega)
+    | (have := stage2R_rotations ‹stage2R _ _ _ _ _ = some _›; omega)
+    | assumption
+    | (rw [delFix_red]; exact (by decide : 0 + 1 ≤ 3); rfl)
 
 /-! ### `erase_fixup` restores the red-black invariant -/
 
@@ -868,13 +864,22 @@ theorem delFix_balanced_aux : ∀ (k : Nat) {path : Path α} {x : RBNode α} {c 
           cases hp with
           | redL hw hpp =>
             exact key hw hpp fun _ _ hl hr' =>
-              delFix_balanced_aux k (by simp at hk; omega) hpp (.redred trivial hxb (.red hl hr'))
+              delFix_balanced_aux k
+                (by
+                  simp only [Path.left.sizeOf_spec, red.sizeOf_spec, Nat.reduceAdd, sizeOf_default,
+                    Nat.add_zero, node.sizeOf_spec, black.sizeOf_spec] at hk
+                  omega)
+                hpp (.redred trivial hxb (.red hl hr'))
           | blackL hw hpp =>
             cases hw with
             | black hwl hwr =>
             exact key (.black hwl hwr) hpp fun _ _ hl hr' =>
-              delFix_balanced_aux k (by simp at hk; omega) hpp
-                (.balanced (.black hxb (.red hl hr')))
+              delFix_balanced_aux k
+                (by
+                  simp only [Path.left.sizeOf_spec, black.sizeOf_spec, Nat.reduceAdd,
+                    sizeOf_default, Nat.add_zero, node.sizeOf_spec] at hk
+                  omega)
+                hpp (.balanced (.black hxb (.red hl hr')))
     | right pc w y pp =>
       cases w with
       | nil => cases hp with
@@ -923,13 +928,22 @@ theorem delFix_balanced_aux : ∀ (k : Nat) {path : Path α} {x : RBNode α} {c 
           cases hp with
           | redR hw hpp =>
             exact key hw hpp fun _ _ hl hr' =>
-              delFix_balanced_aux k (by simp at hk; omega) hpp (.redred trivial (.red hl hr') hxb)
+              delFix_balanced_aux k
+                (by
+                  simp only [Path.right.sizeOf_spec, red.sizeOf_spec, Nat.reduceAdd,
+                    node.sizeOf_spec, black.sizeOf_spec, sizeOf_default, Nat.add_zero] at hk
+                  omega)
+                hpp (.redred trivial (.red hl hr') hxb)
           | blackR hw hpp =>
             cases hw with
             | black hwl hwr =>
             exact key (.black hwl hwr) hpp fun _ _ hl hr' =>
-              delFix_balanced_aux k (by simp at hk; omega) hpp
-                (.balanced (.black (.red hl hr') hxb))
+              delFix_balanced_aux k
+                (by
+                  simp only [Path.right.sizeOf_spec, black.sizeOf_spec, Nat.reduceAdd,
+                    node.sizeOf_spec, sizeOf_default, Nat.add_zero] at hk
+                  omega)
+                hpp (.balanced (.black (.red hl hr') hxb))
 
 /-- **The erase fix-up restores the red-black invariant** (see `delFix_balanced_aux`, which
 carries the size bound its recursion needs). -/
@@ -959,15 +973,12 @@ theorem leftmost_fill (t : RBNode α) (p : Path α) :
   fun_induction leftmost t p <;> simp_all [Path.fill]
 
 theorem leftmost_fst (t : RBNode α) (p q : Path α) : (leftmost t p).1 = (leftmost t q).1 := by
-  fun_induction leftmost t p generalizing q with
-  | case1 c cl ll lv lr v r p ih => rw [ih (.left c q v r)]; simp [leftmost]
-  | case2 t p h =>
-    cases t with
-    | nil => simp [leftmost]
-    | node c l v r =>
-      cases l with
-      | nil => simp [leftmost]
-      | node => exact absurd rfl (h _ _ _ _ _ _ _)
+  induction t generalizing p q with
+  | nil => rfl
+  | node c l v r ihl _ =>
+    cases l with
+    | nil => rfl
+    | node cl ll lv lr => simp only [leftmost]; exact ihl _ _
 
 /-- Going down-left never adds to the elements before the hole. -/
 theorem leftmost_listL (t : RBNode α) (p : Path α) : (leftmost t p).2.listL = p.listL := by

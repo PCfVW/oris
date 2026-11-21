@@ -167,6 +167,7 @@ case analysis on its argument may recurse on an explicit size bound instead
 | Kind | Form | Examples |
 |---|---|---|
 | Model of a Rust function | short camel case after the Rust name | `insFix` (`insert_fixup`), `delFix`, `eraseAt`, `normalizeSize` |
+| Heap-level model whose zipper-level model has the same name | the same, suffixed `At` (it acts at an address) | `childAt` (`NodeBase::child`), `rotateAt` (`NodeBase::rotate`) |
 | Mirror-image definitions | suffix `L` / `R` (the side `cur` is on) | `stage2L`, `stage2R` |
 | Lemma about a definition | `<def>_<property>` | `insFix_toList`, `delFix_rotations`, `stage2L_balanced` |
 | Mirror-image standalone theorems | suffix `_left` / `_right` | `hpha_sibling_not_sentinel_left` |
