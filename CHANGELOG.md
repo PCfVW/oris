@@ -10,6 +10,18 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ## [Unreleased]
 
+### Added
+
+- **Lean: `attach_to`, `substitute_with` and `switch_with` perform their zipper steps** (step 3a
+  of the heap layer, `Lean/docs/heap-layer.md` §4). `attachTo_refines`: from an empty hole, the
+  red leaf `insert` hands to `insFix`. `substituteWith_refines_left` and `_right`: a node with at
+  most one child gives way to it, and the child's `parent` word names the slot, also when it is
+  the sentinel (the scratch fields `erase_fixup` reads). `switchWith_refines`: another address
+  takes a node's tree position, subtrees and colour, as the successor does in a two-child erase
+  and the next chain member in `Promote`. Each operation, `rotate` included (`rotateAt_apply`),
+  also has a per-address description of its result and a frame theorem listing the records it
+  changes.
+
 ### Changed
 
 - **Lean: the heap model's `child` and `rotate` are now `childAt` and `rotateAt`**, and the

@@ -137,10 +137,12 @@ wrong way in `link_into_chain`. (A wrong side bit in `rotateAt` no longer builds
   in `rbtree.rs` implements it is the next layer (design note:
   [`docs/heap-layer.md`](docs/heap-layer.md)). Its definitions are written
   (`Oris/RB/Heap.lean`, run against the Rust by the cross-check above), and so is the relation
-  saying when a heap *is* a `(subtree, path)` pair, with its frame lemmas. One pointer function
-  is proven so far: `NodeBase::rotate` performs the zipper rotation (`rotateAt_refines_left`,
-  `rotateAt_refines_right`). That the fix-ups and the counted operations perform their zipper steps
-  is not proven yet; until it is, that correspondence rests on the write-by-write transcription
+  saying when a heap *is* a `(subtree, path)` pair, with its frame lemmas. Four pointer
+  functions are proven so far: `NodeBase::rotate` performs the zipper rotation
+  (`rotateAt_refines_left`, `rotateAt_refines_right`), and `attach_to`, `substitute_with` and
+  `switch_with` perform the zipper steps of insert and erase (`attachTo_refines`,
+  `substituteWith_refines_left` and `_right`, `switchWith_refines`). That the fix-ups and the
+  counted operations perform their zipper steps is not proven yet; until it is, that correspondence rests on the write-by-write transcription
   and on the cross-check. The duplicate-key chains, the sentinel's scratch `parent` field, and
   `erase_fixup`'s cached `root` (the Rust reads it once; HPHA, and the zipper model, re-read it;
   the heap model runs both readings and finds no difference) belong to that layer.

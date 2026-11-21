@@ -4,8 +4,8 @@ import Oris.RB.Fixup
 /-!
 # `rbtree.rs`'s pointer code, on a model heap
 
-Steps 1 and 2 of the heap layer, as numbered in the plan of `Lean/docs/heap-layer.md` (§5;
-§4 numbers the theorems, `rotateAt_refines` being its first).
+Steps 1, 2 and the first part of 3 of the heap layer, as numbered in the plan of
+`Lean/docs/heap-layer.md` (§5; §4 numbers the theorems, `rotateAt_refines` being its first).
 
 - **Step 1, the definitions.** Every function below transcribes one function of
   `Rust/src/rbtree.rs`, **one heap update per Rust write, in the Rust's order**, with every read
@@ -14,8 +14,15 @@ Steps 1 and 2 of the heap layer, as numbered in the plan of `Lean/docs/heap-laye
   `Located` and `Tree` say when a heap represents a zipper state of `Oris/RB/Fixup.lean`, and
   `rotateAt_refines_left` and `rotateAt_refines_right` prove that `rotateAt` (`NodeBase::rotate`)
   performs the zipper's rotation.
+- **Step 3a, the structural operations.** `attachTo_refines`, `substituteWith_refines_left` and
+  `_right`, and `switchWith_refines` prove that `attach_to`, `substitute_with` and `switch_with`
+  perform the zipper steps `insert` and `eraseAt` take: fill an empty hole with a red leaf,
+  splice out a node with at most one child, put another address at a node's position. Each
+  operation, `rotateAt` included, also has a per-address description of its result (`_apply`)
+  and the list of records it changes (`_frame`).
 
-That the other functions perform their zipper steps is the plan's steps 3 and 4.
+That the fix-ups and the counted operations perform their zipper steps is the rest of the plan's
+step 3, and its step 4.
 
 ## The model (the note's §2)
 
