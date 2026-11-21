@@ -29,6 +29,16 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Changed
 
+- **Lean: proof robustness** (the audit of 2026-11-21; `Lean/CONVENTIONS.md` § *Proof
+  robustness*). `Rep.node_inv` and `nodup_node` return structures with named fields
+  (`Rep.NodeView`, `NodupNode`); core's `List.nodup_append` shape is unpacked in Fixup.lean only
+  (`nodup_node`, `nodup_node_intro`, `nodup_withList`); `Rep.ne_root` and `rotateAt_sentinel` state
+  once what proofs repeated; `insert_fixup`'s loop is unfolded only by three per-branch lemmas
+  (`insertFixupLoop_red_uncle`, `_black_uncle_outer`, `_black_uncle_inner`); no `simp [*]`, no
+  `simp_all` mid-proof, no `rename_i` binding a match's fields. `switchWith_apply` is stronger: it
+  takes only that `this` differs from `node`'s children and parent (no longer `this ≠ node`, nor
+  anything of `node`'s own address), thanks to `parent_setChild`, `red_setChild`,
+  `red_setParentPtr` and `red_setParentSide`. Statements are otherwise unchanged.
 - **Lean: `Oris/RB/Heap.lean` split into `Oris/RB/Heap/`** (the audit of 2026-11-21): `Model.lean`
   (the transcriptions), `Rep.lean` (the abstraction relation), `Apply.lean` (each operation
   address by address), `Structural.lean` (rotate and step 3a) and `InsertFixup.lean` (step 3b);

@@ -184,7 +184,9 @@ Each theorem uses the ones before it. The steps of §5 that prove them are given
    `RBNode.depth` (its height in edges plus one, as §2 planned); the proof needs only the hole's
    depth plus one. The proof's tools: `Located.up_left`/`_right` and `down_left`/`_right` (moving
    along the path), `Located.paint` (`set_colour`), `rotateAt_red` and `Tree.makeBlack_root` (the
-   final `make_black` is the zipper's `setBlack`).
+   final `make_black` is the zipper's `setBlack`); since the audit of 2026-11-21, also one lemma per
+   branch of the loop (`insertFixupLoop_red_uncle`, `_black_uncle_outer`, `_black_uncle_inner`,
+   for either side), `Rep.ne_root` and `rotateAt_sentinel`, which step 3c is to reuse.
 4. [step 3c] **`erase_fixup` performs `delFix`.** The loop invariant adds a **hole invariant**:
    when `cur` is `head`, `head`'s scratch parent and side are the hole's. The loop reads `cur`'s
    `parent` word only at the top of an iteration, before any write, and every iteration after the
