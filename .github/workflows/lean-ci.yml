@@ -14,7 +14,7 @@ name: Lean CI
 #   drains to empty included), the rotation count, the kind, the whole tree of keys and the
 #   whole heap (every node's parent word and equal-key chain, and the sentinel's scratch
 #   fields); lake exe xcheck replays them through the proven zipper model and through the heap
-#   model (Lean/Oris/RB/Heap.lean, the pointer code write by write), checks that erase_fixup's
+#   model (Lean/Oris/RB/Heap/Model.lean, the pointer code write by write), checks that erase_fixup's
 #   two root readings give the same heap, that the trace is complete and that it exercises
 #   every kind and rotation count, and fails on any difference.
 # - Lean CI success: the single required status check, green only if both jobs passed.

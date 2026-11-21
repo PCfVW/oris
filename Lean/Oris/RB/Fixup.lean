@@ -13,9 +13,10 @@ writes `insert_fixup` and `erase_fixup`, and the `Node` branches of `insert_coun
 and proves them correct against the vendored library's red-black invariants.
 
 What this file establishes is about the *algorithm* `rbtree.rs` runs. That the pointer code
-implements this algorithm is the next layer (`Oris/RB/Heap.lean`: the definitions, and the first
-refinement theorems); this file's definitions are written so that each case can be checked against
-the Rust line by line, and each case's doc quotes the Rust statements it performs.
+implements this algorithm is the next layer (`Oris/RB/Heap.lean` and `Oris/RB/Heap/`: the
+definitions, and the refinement theorems proven so far); this file's definitions are written so
+that each case can be checked against the Rust line by line, and each case's doc quotes the Rust
+statements it performs.
 
 ## Fidelity rules followed below
 
@@ -58,10 +59,10 @@ the Rust line by line, and each case's doc quotes the Rust statements it perform
     have no identity, so the model follows HPHA (see `delFix` for when the stale value is used,
     and why it is expected to change nothing). Of the two reachable departures, this is the one
     that could change a transition: whether the two readings ever differ is a question for the
-    heap layer, which models both (`Oris/RB/Heap.lean`, `eraseFixup` and `eraseFixupHpha`). The
-    evidence so far: on every erase of the cross-check (`Lean/README.md`), the heap model runs
-    both readings and they leave the same heap, and this model agrees with the running Rust code
-    on every rotation count, shape and colour.
+    heap layer, which models both (`Oris/RB/Heap/Model.lean`, `eraseFixup` and
+    `eraseFixupHpha`). The evidence so far: on every erase of the cross-check
+    (`Lean/README.md`), the heap model runs both readings and they leave the same heap, and this
+    model agrees with the running Rust code on every rotation count, shape and colour.
 -/
 
 open RBTree RBTree.RBNode RBTree.RBColor
@@ -75,6 +76,11 @@ inductive Side where
   | left
   | right
   deriving DecidableEq, Repr
+
+/-- `rbtree.rs` `Side::other`: the other side. -/
+def Side.other : Side → Side
+  | .left => .right
+  | .right => .left
 
 /-- `NodeBase::rotate(this, s)` applied at the root of a subtree: `this` goes down on side `s`
 and its child on the other side comes up into its place. Colours stay with their nodes. On a
@@ -1228,5 +1234,64 @@ theorem erase_unique [Std.TransCmp cmp] {t : RBNode α} {n : Nat}
     · have := hAB y hy' x (by simp); rw [cmpLT_iff] at this
       rw [Std.OrientedCmp.eq_comm.mp hxy] at this; cases this
     · have := hB y hy'; rw [cmpLT_iff, hxy] at this; cases this
+
+/-! ## Path and list facts used by the heap layer
+
+Facts about zippers and their element lists, with no heap in them, that `Oris/RB/Heap/` uses. -/
+
+/-- What `Nodup` says of a node's elements (for the heap layer, its addresses). -/
+theorem nodup_node {c : RBColor} {l r : RBNode α} {v : α}
+    (hnd : (RBNode.node c l v r).toList.Nodup) :
+    l.toList.Nodup ∧ r.toList.Nodup ∧ v ∉ l.toList ∧ v ∉ r.toList ∧
+      ∀ x ∈ l.toList, x ∉ r.toList := by
+  simp only [RBNode.toList_node, List.nodup_append, List.nodup_cons, List.mem_cons] at hnd
+  obtain ⟨hl, ⟨hvr, hr⟩, hlr⟩ := hnd
+  exact ⟨hl, hr, fun hv => hlr v hv v (.inl rfl) rfl, hvr,
+    fun x hx hxr => hlr x hx x (.inr hxr) rfl⟩
+
+/-- The depth of a path's hole: the number of nodes above it. The loop's fuel is measured against
+it (`insertFixupLoop_refines`). -/
+def pathDepth : Path α → Nat
+  | .root => 0
+  | .left _ pp _ _ => pathDepth pp + 1
+  | .right _ _ _ pp => pathDepth pp + 1
+
+/-- The colour of a path's topmost node, the whole tree's root (`none` for the empty path, where
+the hole is the root). -/
+def rootColour : Path α → Option RBColor
+  | .root => none
+  | .left c pp _ _ => (rootColour pp).getD c |> some
+  | .right c _ _ pp => (rootColour pp).getD c |> some
+
+/-- A black (or absent) root stays so when the hole climbs one step. -/
+theorem rootColour_up_left {c : RBColor} {pp : Path α} {y : α} {b : RBNode α}
+    (h : rootColour (.left c pp y b) ≠ some .red) : rootColour pp ≠ some .red := by
+  cases e : rootColour pp with
+  | none => simp
+  | some c₀ => simp only [rootColour, e, Option.getD_some] at h; exact h
+
+/-- The mirror image of `rootColour_up_left`. -/
+theorem rootColour_up_right {c : RBColor} {pp : Path α} {y : α} {b : RBNode α}
+    (h : rootColour (.right c b y pp) ≠ some .red) : rootColour pp ≠ some .red := by
+  cases e : rootColour pp with
+  | none => simp
+  | some c₀ => simp only [rootColour, e, Option.getD_some] at h; exact h
+
+/-- The hole of a path lies above the subtree in it: the depth of the filled tree is at least the
+hole's depth plus the subtree's. -/
+theorem pathDepth_add_depth_le (path : Path α) (t : RBNode α) :
+    pathDepth path + t.depth ≤ (path.fill t).depth := by
+  induction path generalizing t with
+  | root => simp [pathDepth, Path.fill]
+  | left c pp y b ih =>
+    have := ih (.node c t y b)
+    simp only [pathDepth, Path.fill, RBNode.depth] at this ⊢
+    have := Nat.le_max_left t.depth b.depth
+    omega
+  | right c b y pp ih =>
+    have := ih (.node c b y t)
+    simp only [pathDepth, Path.fill, RBNode.depth] at this ⊢
+    have := Nat.le_max_right b.depth t.depth
+    omega
 
 end Oris.RB

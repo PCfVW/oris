@@ -29,6 +29,15 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Changed
 
+- **Lean: `Oris/RB/Heap.lean` split into `Oris/RB/Heap/`** (the audit of 2026-11-21): `Model.lean`
+  (the transcriptions), `Rep.lean` (the abstraction relation), `Apply.lean` (each operation
+  address by address), `Structural.lean` (rotate and step 3a) and `InsertFixup.lean` (step 3b);
+  `Heap.lean` remains as the overview that imports them, so `import Oris.RB.Heap` still works.
+  Every declaration keeps its name. The zipper-only facts `Side.other`, `nodup_node`,
+  `pathDepth`, `rootColour` (with `rootColour_up_left`/`_right`) and `pathDepth_add_depth_le`
+  moved to `Fixup.lean`, generalised from addresses to any element type: `pathDepth`,
+  `rootColour` and their lemmas are now `Oris.RB.*` rather than `Oris.RB.Heap.*`. The pointer-code
+  rule of the cross-port invariant now points to `Heap/Model.lean`.
 - **Lean: the checking tools tightened** (the audit of 2026-11-21). `lake exe audit`'s lint now
   rejects every `#` command (`#eval!` got past it) and every name with a `Lean` component
   (`_root_.Lean...` did), and enforces the 100-column rule. The cross-check's trace prints the

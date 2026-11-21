@@ -4,3 +4,8 @@
 import Oris.Arith
 import Oris.RB.Fixup
 import Oris.RB.Heap
+import Oris.RB.Heap.Model
+import Oris.RB.Heap.Rep
+import Oris.RB.Heap.Apply
+import Oris.RB.Heap.Structural
+import Oris.RB.Heap.InsertFixup

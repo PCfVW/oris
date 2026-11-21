@@ -1953,7 +1953,7 @@ mod tests {
     /// - the whole tree of keys with every node's colour (`write_shape`), which the
     ///   zipper model (`Oris/RB/Fixup.lean`) must reproduce;
     /// - the whole tree again, by node id, with every node's tagged `parent` word and
-    ///   equal-key chain (`write_heap_shape`), which the heap model (`Oris/RB/Heap.lean`)
+    ///   equal-key chain (`write_heap_shape`), which the heap model (`Oris/RB/Heap/Model.lean`)
     ///   must reproduce;
     /// - the sentinel's own `parent` word: its pointer, side and colour bit (the scratch
     ///   fields `substitute_with`, `switch_with` and `rotate` write), then its right child

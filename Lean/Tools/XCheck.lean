@@ -19,14 +19,13 @@ same operations, from an empty tree, through two models, and compares every line
   that other live nodes share is a chain operation (`Link` or `Promote`), which leaves the tree of
   keys unchanged; the zipper model is then not run, and the line must report a chain kind and no
   rotation.
-- **The heap model**, `Oris.RB.Heap.insertCounted` and `eraseCounted` (`Oris/RB/Heap.lean`), on a
-  heap where null is `0`, the sentinel is at address `1` and the node of id `i` at `i + 2`: it
+- **The heap model**, `Oris.RB.Heap.insertCounted` and `eraseCounted` (`Oris/RB/Heap/Model.lean`),
+  on a heap where null is `0`, the sentinel is at address `1` and the node of id `i` at `i + 2`: it
   must reproduce the whole line, so also every node's tagged `parent` word (pointer and side bit)
   and its equal-key chain in both directions, and the sentinel's `parent` word and colour, right
-  child link and neighbour links. On
-  every erase it also runs `eraseCountedHpha`, which re-reads `erase_fixup`'s root as HPHA does,
-  and requires the same rotation count and the same heap, every field of every address the erase
-  could reach, as the Rust's reading.
+  child link and neighbour links. On every erase it also runs `eraseCountedHpha`, which re-reads
+  `erase_fixup`'s root as HPHA does, and requires the same rotation count and the same heap, every
+  field of every address the erase could reach, as the Rust's reading.
 
 The run fails (exit 1) on any mismatch, on a line it cannot parse or replay, on a missing,
 misplaced or inconsistent `XC-END` line (so a truncated trace fails), and when the trace does not
