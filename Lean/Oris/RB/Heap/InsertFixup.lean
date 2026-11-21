@@ -25,6 +25,46 @@ private theorem insertFixupLoop_exit {head : Addr} {fuel : Nat} {h : Heap} {cur 
       some (makeBlack h (childAt h head .left), rot) := by
   simp [insertFixupLoop, hp]
 
+/-- **One iteration of `insert_fixup`'s loop, red uncle** (for `p` on either side `s` of `pp`):
+`make_black(p); make_black(pp_right); make_red(pp); cur = pp`, and the loop goes on from `pp`.
+The three step lemmas are the only places that unfold the loop's definition. -/
+theorem insertFixupLoop_red_uncle {head : Addr} {fuel : Nat} {h : Heap} {cur p pp : Addr}
+    {s : Side} {rot : Nat} (hp : red h p = true) (hpp : parent h p = pp)
+    (hs : parentSide h p = s) (hu : red h (childAt h pp s.other) = true) :
+    insertFixupLoop head (fuel + 1) h cur p rot =
+      insertFixupLoop head fuel
+        (makeRed (makeBlack (makeBlack h p) (childAt h pp s.other)) pp) pp (parent h pp) rot := by
+  rw [insertFixupLoop]
+  subst hpp hs
+  simp only [hp, hu, ite_true]
+  simp only [makeRed, makeBlack, parent, setColour_parent]
+
+/-- **One iteration of `insert_fixup`'s loop, black uncle, `cur` outer**: `make_black(p);
+make_red(pp); rotate(pp, o)`, one rotation, and the loop goes on from the same `cur` and `p`. -/
+theorem insertFixupLoop_black_uncle_outer {head : Addr} {fuel : Nat} {h : Heap} {cur p pp : Addr}
+    {s : Side} {rot : Nat} (hp : red h p = true) (hpp : parent h p = pp)
+    (hs : parentSide h p = s) (hu : red h (childAt h pp s.other) = false)
+    (hc : cur ≠ childAt h p s.other) :
+    insertFixupLoop head (fuel + 1) h cur p rot =
+      insertFixupLoop head fuel (rotateAt (makeRed (makeBlack h p) pp) pp s.other) cur p
+        (rot + 1) := by
+  rw [insertFixupLoop]
+  simp only [hp, hpp, hs, hu, hc, ite_true, ite_false, Bool.false_eq_true]
+
+/-- **One iteration of `insert_fixup`'s loop, black uncle, `cur` inner**: `cur = p; rotate(cur,
+s)`, then `make_black(p); make_red(pp); rotate(pp, o)` with `p` re-read (the old `cur`), two
+rotations, and the loop goes on from the old `p` and its new parent. -/
+theorem insertFixupLoop_black_uncle_inner {head : Addr} {fuel : Nat} {h : Heap} {cur p pp : Addr}
+    {s : Side} {rot : Nat} (hp : red h p = true) (hpp : parent h p = pp)
+    (hs : parentSide h p = s) (hu : red h (childAt h pp s.other) = false)
+    (hc : cur = childAt h p s.other) :
+    insertFixupLoop head (fuel + 1) h cur p rot =
+      insertFixupLoop head fuel
+        (rotateAt (makeRed (makeBlack (rotateAt h p s) (parent (rotateAt h p s) p)) pp) pp s.other)
+        p (parent (rotateAt h p s) p) (rot + 2) := by
+  rw [insertFixupLoop]
+  simp only [hp, hpp, hs, hu, hc, ite_true, ite_false, Bool.false_eq_true]
+
 /-- **`insert_fixup`'s loop performs `insFix`** (step 3b; the note's §4, theorem 3). If the heap
 represents the located subtree `t` at `path`, `cur` (its first node) is a real node, the tree's root
 is black (`rootColour path ≠ some .red`, vacuous when `cur` is the root) and the fuel is at least
@@ -95,22 +135,21 @@ theorem insertFixupLoop_refines (head : Addr) : ∀ (fuel : Nat) {h : Heap} {cur
         obtain ⟨H, hH, hT⟩ := insertFixupLoop_refines head fuel rot Lz3 hzh hroot' (by omega)
         have hz : insFix (.left .red (.left c' gp z (.node .red ul uv ur)) y b) t =
             insFix gp (.node .red (.node .black t y b) z (.node .black ul uv ur)) := by
-          rfl
+          simp only [insFix, red?, ite_true, RBNode.setBlack]
         rw [hz]
         refine ⟨H, ?_, hT⟩
-        rw [← hH]
-        simp only [insertFixupLoop, red, hyr, parent, parentSide, hyz, hys, Side.other, childAt,
-          huv, hcol, makeBlack, makeRed, setColour_parent, colourBit, ite_true]
+        rw [insertFixupLoop_red_uncle hyr hyz hys
+          (by simpa only [red, childAt, Side.other, huv] using hcol)]
+        simp only [childAt, Side.other, huv]
+        simp only [setColour_parent] at hH
+        exact hH
       · -- Black uncle, `cur` outer: `make_black(p); make_red(pp); rotate(pp, o)`; then the loop
         -- exits, `p` being black.
         have hcol : (h (h z).right).red = false := by
           have := hur; simp only [red] at this; rw [this]; simpa using hu
         obtain ⟨-, -, -, -, -, -, -, hrb⟩ := Ly.1.node_inv
         obtain ⟨-, -, -, -, htb⟩ := nodup_node Ly.1.nodup
-        have hcy : cur ≠ (h y).right := fun e => by
-          by_cases hrh : (h y).right = head
-          · exact hcur (e.trans hrh)
-          · exact htb cur hcm (e ▸ hrb.root_mem hrh)
+        have hcy : cur ≠ (h y).right := hrb.ne_root hcur (htb cur hcm)
         obtain ⟨f, rfl⟩ : ∃ f, fuel = f + 1 := ⟨fuel - 1, by omega⟩
         have L2 := ((Ly.paint .black).up_left).paint .red
         have L3 := rotateAt_refines_right L2
@@ -120,12 +159,11 @@ theorem insertFixupLoop_refines (head : Addr) : ∀ (fuel : Nat) {h : Heap} {cur
           rw [insFix, ite_eq_right hu]
         rw [hz]
         refine ⟨_, ?_, hT⟩
-        have hy3 : red (rotateAt (setColour (setColour h y false) z true) z .right) y = false := by
-          simp only [red, rotateAt_red, setColour_red_ne _ _ _ hyz', setColour_red_eq]
-        rw [insertFixupLoop]
-        simp only [red, hyr, parent, parentSide, hyz, hys, Side.other, childAt, hcol,
-          Bool.false_eq_true, ite_true, ite_false, hcy, makeBlack, makeRed]
-        rw [insertFixupLoop_exit hy3]; rfl
+        have hy3 : red (rotateAt (makeRed (makeBlack h y) z) z Side.left.other) y = false := by
+          simp only [red, rotateAt_red, makeRed, makeBlack, setColour_red_ne _ _ _ hyz',
+            setColour_red_eq]
+        rw [insertFixupLoop_black_uncle_outer hyr hyz hys hcol hcy, insertFixupLoop_exit hy3]
+        rfl
     -- `p` is `pp`'s right child, `cur` is `p`'s right child (outer).
     | .right .red a y (.right c' u z gp), hl, hroot, hf =>
       obtain ⟨e₁, e₂⟩ := hl.2.right_inv; subst P S
@@ -154,22 +192,21 @@ theorem insertFixupLoop_refines (head : Addr) : ∀ (fuel : Nat) {h : Heap} {cur
         obtain ⟨H, hH, hT⟩ := insertFixupLoop_refines head fuel rot Lz3 hzh hroot' (by omega)
         have hz : insFix (.right .red a y (.right c' (.node .red ul uv ur) z gp)) t =
             insFix gp (.node .red (.node .black ul uv ur) z (.node .black a y t)) := by
-          rfl
+          simp only [insFix, red?, ite_true, RBNode.setBlack]
         rw [hz]
         refine ⟨H, ?_, hT⟩
-        rw [← hH]
-        simp only [insertFixupLoop, red, hyr, parent, parentSide, hyz, hys, Side.other, childAt,
-          huv, hcol, makeBlack, makeRed, setColour_parent, colourBit, ite_true]
+        rw [insertFixupLoop_red_uncle hyr hyz hys
+          (by simpa only [red, childAt, Side.other, huv] using hcol)]
+        simp only [childAt, Side.other, huv]
+        simp only [setColour_parent] at hH
+        exact hH
       · -- Black uncle, `cur` outer: `make_black(p); make_red(pp); rotate(pp, o)`; then the loop
         -- exits, `p` being black.
         have hcol : (h (h z).left).red = false := by
           have := hur; simp only [red] at this; rw [this]; simpa using hu
         obtain ⟨-, -, -, -, -, -, hla, -⟩ := Ly.1.node_inv
         obtain ⟨-, -, -, -, hat⟩ := nodup_node Ly.1.nodup
-        have hcy : cur ≠ (h y).left := fun e => by
-          by_cases hlh : (h y).left = head
-          · exact hcur (e.trans hlh)
-          · exact hat _ (hla.root_mem hlh) (e ▸ hcm)
+        have hcy : cur ≠ (h y).left := hla.ne_root hcur fun hx => hat _ hx hcm
         obtain ⟨f, rfl⟩ : ∃ f, fuel = f + 1 := ⟨fuel - 1, by omega⟩
         have L2 := ((Ly.paint .black).up_right).paint .red
         have L3 := rotateAt_refines_left L2
@@ -179,12 +216,11 @@ theorem insertFixupLoop_refines (head : Addr) : ∀ (fuel : Nat) {h : Heap} {cur
           rw [insFix, ite_eq_right hu]
         rw [hz]
         refine ⟨_, ?_, hT⟩
-        have hy3 : red (rotateAt (setColour (setColour h y false) z true) z .left) y = false := by
-          simp only [red, rotateAt_red, setColour_red_ne _ _ _ hyz', setColour_red_eq]
-        rw [insertFixupLoop]
-        simp only [red, hyr, parent, parentSide, hyz, hys, Side.other, childAt, hcol,
-          Bool.false_eq_true, ite_true, ite_false, hcy, makeBlack, makeRed]
-        rw [insertFixupLoop_exit hy3]; rfl
+        have hy3 : red (rotateAt (makeRed (makeBlack h y) z) z Side.right.other) y = false := by
+          simp only [red, rotateAt_red, makeRed, makeBlack, setColour_red_ne _ _ _ hyz',
+            setColour_red_eq]
+        rw [insertFixupLoop_black_uncle_outer hyr hyz hys hcol hcy, insertFixupLoop_exit hy3]
+        rfl
     -- `p` is `pp`'s left child, `cur` is `p`'s right child (inner): `rotate(p, Left)` first.
     | .right .red a y (.left c' gp z u), hl, hroot, hf =>
       obtain ⟨e₁, e₂⟩ := hl.2.right_inv; subst P S
@@ -212,12 +248,14 @@ theorem insertFixupLoop_refines (head : Addr) : ∀ (fuel : Nat) {h : Heap} {cur
         obtain ⟨H, hH, hT⟩ := insertFixupLoop_refines head fuel rot Lz3 hzh hroot' (by omega)
         have hz : insFix (.right .red a y (.left c' gp z (.node .red ul uv ur))) t =
             insFix gp (.node .red (.node .black a y t) z (.node .black ul uv ur)) := by
-          rfl
+          simp only [insFix, red?, ite_true, RBNode.setBlack]
         rw [hz]
         refine ⟨H, ?_, hT⟩
-        rw [← hH]
-        simp only [insertFixupLoop, red, hyr, parent, parentSide, hyz, hys, Side.other, childAt,
-          huv, hcol, makeBlack, makeRed, setColour_parent, colourBit, ite_true]
+        rw [insertFixupLoop_red_uncle hyr hyz hys
+          (by simpa only [red, childAt, Side.other, huv] using hcol)]
+        simp only [childAt, Side.other, huv]
+        simp only [setColour_parent] at hH
+        exact hH
       · -- Black uncle, `cur` inner: `cur = p; rotate(cur, s)`, then `make_black(p); make_red(pp);
         -- rotate(pp, o)` with `p` now the old `cur`; then the loop exits.
         have hcol : (h (h z).right).red = false := by
@@ -244,13 +282,14 @@ theorem insertFixupLoop_refines (head : Addr) : ∀ (fuel : Nat) {h : Heap} {cur
           rw [insFix, ite_eq_right hu]; rfl
         rw [hz]
         refine ⟨_, ?_, hT⟩
-        have hx4 : red (rotateAt (setColour (setColour (rotateAt h y .left) cur false) z true)
-            z .right) cur = false := by
-          simp only [red, rotateAt_red, setColour_red_ne _ _ _ hxz, setColour_red_eq]
-        rw [insertFixupLoop]
-        simp only [red, hyr, parent, parentSide, hyz, hys, Side.other, childAt, hcol,
-          Bool.false_eq_true, ite_true, ite_false, hyc, makeBlack, makeRed, hyx]
-        rw [insertFixupLoop_exit hx4]; rfl
+        have hyx' : parent (rotateAt h y .left) y = cur := hyx
+        have hx4 : red (rotateAt (makeRed (makeBlack (rotateAt h y .left) cur) z) z
+            Side.left.other) cur = false := by
+          simp only [red, rotateAt_red, makeRed, makeBlack, setColour_red_ne _ _ _ hxz,
+            setColour_red_eq]
+        rw [insertFixupLoop_black_uncle_inner hyr hyz hys hcol hyc.symm, hyx',
+          insertFixupLoop_exit hx4]
+        rfl
     -- `p` is `pp`'s right child, `cur` is `p`'s left child (inner): `rotate(p, Right)` first.
     | .left .red (.right c' u z gp) y b, hl, hroot, hf =>
       obtain ⟨e₁, e₂⟩ := hl.2.left_inv; subst P S
@@ -278,12 +317,14 @@ theorem insertFixupLoop_refines (head : Addr) : ∀ (fuel : Nat) {h : Heap} {cur
         obtain ⟨H, hH, hT⟩ := insertFixupLoop_refines head fuel rot Lz3 hzh hroot' (by omega)
         have hz : insFix (.left .red (.right c' (.node .red ul uv ur) z gp) y b) t =
             insFix gp (.node .red (.node .black ul uv ur) z (.node .black t y b)) := by
-          rfl
+          simp only [insFix, red?, ite_true, RBNode.setBlack]
         rw [hz]
         refine ⟨H, ?_, hT⟩
-        rw [← hH]
-        simp only [insertFixupLoop, red, hyr, parent, parentSide, hyz, hys, Side.other, childAt,
-          huv, hcol, makeBlack, makeRed, setColour_parent, colourBit, ite_true]
+        rw [insertFixupLoop_red_uncle hyr hyz hys
+          (by simpa only [red, childAt, Side.other, huv] using hcol)]
+        simp only [childAt, Side.other, huv]
+        simp only [setColour_parent] at hH
+        exact hH
       · -- Black uncle, `cur` inner: `cur = p; rotate(cur, s)`, then `make_black(p); make_red(pp);
         -- rotate(pp, o)` with `p` now the old `cur`; then the loop exits.
         have hcol : (h (h z).left).red = false := by
@@ -310,13 +351,14 @@ theorem insertFixupLoop_refines (head : Addr) : ∀ (fuel : Nat) {h : Heap} {cur
           rw [insFix, ite_eq_right hu]; rfl
         rw [hz]
         refine ⟨_, ?_, hT⟩
-        have hx4 : red (rotateAt (setColour (setColour (rotateAt h y .right) cur false) z true)
-            z .left) cur = false := by
-          simp only [red, rotateAt_red, setColour_red_ne _ _ _ hxz, setColour_red_eq]
-        rw [insertFixupLoop]
-        simp only [red, hyr, parent, parentSide, hyz, hys, Side.other, childAt, hcol,
-          Bool.false_eq_true, ite_true, ite_false, hyc, makeBlack, makeRed, hyx]
-        rw [insertFixupLoop_exit hx4]; rfl
+        have hyx' : parent (rotateAt h y .right) y = cur := hyx
+        have hx4 : red (rotateAt (makeRed (makeBlack (rotateAt h y .right) cur) z) z
+            Side.right.other) cur = false := by
+          simp only [red, rotateAt_red, makeRed, makeBlack, setColour_red_ne _ _ _ hxz,
+            setColour_red_eq]
+        rw [insertFixupLoop_black_uncle_inner hyr hyz hys hcol hyc.symm, hyx',
+          insertFixupLoop_exit hx4]
+        rfl
 
 /-- **The heap-level `insert_fixup` performs `insFix`**: `insertFixupLoop_refines` from the
 Rust's entry, `insert_fixup(node)` with `p = parent(node)` and no rotation counted yet. -/

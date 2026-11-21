@@ -80,16 +80,18 @@ theorem rotateAt_parent_fields (h : Heap) (this : Addr) (s : Side)
       (parent h this ≠ childAt h (childAt h this s.other) s →
         (rotateAt h this s (parent h this)).parent = (h (parent h this)).parent ∧
         (rotateAt h this s (parent h this)).side = (h (parent h this)).side) := by
-  by_cases h₃ : parent h this = childAt h (childAt h this s.other) s
-  · refine ⟨?_, ?_, ?_, fun h₄ => absurd h₃ h₄⟩ <;>
-      simp only [parent, parentSide, childAt] at h₁ h₂ h₃ ⊢ <;>
-      cases s <;> cases hps : (h this).side <;>
-      simp_all [rotateAt, parent, parentSide, childAt, Side.other, setChild, setParentPtr,
-        setParentSide, Heap.modify]
-  · simp only [parent, parentSide, childAt] at h₁ h₂ h₃ ⊢
-    cases s <;> cases hps : (h this).side <;>
-      simp_all [rotateAt, parent, parentSide, childAt, Side.other, setChild, setParentPtr,
-        setParentSide, Heap.modify]
+  generalize ht : childAt h this s.other = top at *
+  generalize hm : childAt h top s = m at *
+  generalize hP : parent h this = P at *
+  generalize hps : parentSide h this = ps
+  by_cases h₃ : P = m
+  · subst h₃
+    cases s <;> cases ps <;> simp only [childAt, Side.other] at ht hm ⊢ <;>
+      simp [rotateAt, setChild_eq, setParentPtr, setParentSide, Heap.modify, childAt, Side.other,
+        ht, hm, hP, hps, h₁, h₂, NodeRec.withChild]
+  · cases s <;> cases ps <;> simp only [childAt, Side.other] at ht hm ⊢ <;>
+      simp [rotateAt, setChild_eq, setParentPtr, setParentSide, Heap.modify, childAt, Side.other,
+        ht, hm, hP, hps, h₁, h₂, h₃, NodeRec.withChild]
 
 /-- **`rotateAt`, address by address.** With `top` `this`'s side-`o` child (`o = s.other`), `m`
 `top`'s side-`s` child and `P` `this`'s parent, where `this`, `top` and `P` are distinct and
@@ -125,13 +127,11 @@ theorem rotateAt_apply (h : Heap) (this : Addr) (s : Side)
     · subst e; simp [h₁, h₄]
     · simp [h₁, h₄, e]
   by_cases e₂ : x = top
-  · subst e₂; simp [e₁, h₃, h₅]
-    cases s <;> rfl
+  · subst e₂; cases s <;> simp [e₁, h₃, h₅, NodeRec.withChild]
   by_cases e₃ : x = m
   · subst e₃
     by_cases e₄ : x = P
-    · subst e₄; simp [e₁, e₂]
-      cases s <;> cases ps <;> rfl
+    · subst e₄; cases s <;> cases ps <;> simp [e₁, e₂, NodeRec.withChild]
     · simp [e₁, e₂, e₄]
   by_cases e₄ : x = P
   · subst e₄; simp [e₁, e₂, e₃]
@@ -183,7 +183,7 @@ theorem substituteWith_apply (h : Heap) (this child : Addr) (x : Addr) :
   by_cases e₁ : x = child
   · subst e₁
     by_cases e₂ : x = P
-    · subst e₂; simp; cases ps <;> rfl
+    · subst e₂; cases ps <;> simp [NodeRec.withChild]
     · simp [e₂]
   by_cases e₂ : x = P
   · subst e₂; simp [e₁]
@@ -194,15 +194,34 @@ theorem substituteWith_frame (h : Heap) (this child : Addr) {x : Addr} (h₁ : x
     (h₂ : x ≠ parent h this) : substituteWith h this child x = h x := by
   simp [substituteWith_apply, h₁, h₂]
 
+/-- `setChild` changes no `parent` pointer. -/
+theorem parent_setChild (h : Heap) (a : Addr) (s : Side) (v x : Addr) :
+    parent (setChild h a s v) x = parent h x := by
+  by_cases e : x = a <;> cases s <;> simp [parent, setChild, Heap.modify, e]
+
+/-- `setChild` changes no colour. -/
+theorem red_setChild (h : Heap) (a : Addr) (s : Side) (v x : Addr) :
+    red (setChild h a s v) x = red h x := by
+  by_cases e : x = a <;> cases s <;> simp [red, setChild, Heap.modify, e]
+
+/-- `setParentPtr` changes no colour. -/
+theorem red_setParentPtr (h : Heap) (a v x : Addr) : red (setParentPtr h a v) x = red h x := by
+  by_cases e : x = a <;> simp [red, setParentPtr, Heap.modify, e]
+
+/-- `setParentSide` changes no colour. -/
+theorem red_setParentSide (h : Heap) (a : Addr) (s : Side) (x : Addr) :
+    red (setParentSide h a s) x = red h x := by
+  by_cases e : x = a <;> simp [red, setParentSide, Heap.modify, e]
+
 /-- **`switchWith`, address by address**: `this` takes `node`'s children, slot and colour; `node`'s
 right child, then its left child, take the slot `(this, right)` and `(this, left)`; `node`'s parent
 takes `this` in the link that held `node`; every other record is kept, `node`'s included (it is
 detached). `node`'s children and parent may coincide, only at the sentinel: its `parent` word ends
 as the right child's when both children are the sentinel, and its link is written when it is also
-the parent. -/
-theorem switchWith_apply (h : Heap) (this node : Addr) (h₁ : this ≠ node)
-    (h₂ : node ≠ childAt h node .left) (h₃ : node ≠ childAt h node .right)
-    (h₄ : node ≠ parent h node) (h₅ : this ≠ childAt h node .left)
+the parent. The only hypotheses are that `this` is none of those three: the two reads the Rust
+makes after a write, `node`'s parent and colour, read fields that no earlier write changes, so
+nothing is required of `node` itself (not even `this ≠ node`, the Rust's `debug_assert!`). -/
+theorem switchWith_apply (h : Heap) (this node : Addr) (h₅ : this ≠ childAt h node .left)
     (h₆ : this ≠ childAt h node .right) (h₇ : this ≠ parent h node) (x : Addr) :
     switchWith h this node x =
       if x = this then
@@ -220,35 +239,33 @@ theorem switchWith_apply (h : Heap) (this node : Addr) (h₁ : this ≠ node)
           parent := this, side := .left }
       else if x = parent h node then (h x).withChild (parentSide h node) this
       else h x := by
-  generalize hL : childAt h node .left = L at *
-  generalize hR : childAt h node .right = R at *
-  generalize hP : parent h node = P at *
-  generalize hps : parentSide h node = ps
-  generalize hc : red h node = c
-  simp only [childAt, parent, parentSide, red] at hL hR hP hps hc
-  have hn1 : node ≠ this := Ne.symm h₁
-  simp only [switchWith, setChild_eq, setParentPtr, setParentSide, setColour, Heap.modify,
-    childAt, parent, parentSide, red, hL, hR, hps, hn1, h₂, h₃]
-  have hn5 := Ne.symm h₅
-  have hn6 := Ne.symm h₆
-  have hn7 := Ne.symm h₇
+  -- The two reads made after a write, `node`'s parent and colour, read fields no earlier write
+  -- changes.
+  simp only [switchWith, parent_setChild, red_setChild, red_setParentPtr, red_setParentSide]
+  generalize childAt h node .left = L at *
+  generalize childAt h node .right = R at *
+  generalize parent h node = P at *
+  generalize parentSide h node = ps
+  generalize red h node = c
+  simp only [setChild_eq, setParentPtr, setParentSide, setColour, Heap.modify]
   by_cases e₁ : x = this
-  · subst e₁; simp [*]
+  · subst e₁
+    simp [h₅, h₆, h₇]
   by_cases e₂ : x = R
   · subst e₂
     by_cases e₃ : x = P <;> by_cases e₅ : x = L
-    · subst e₃; subst e₅; simp [*]; cases ps <;> rfl
-    · subst e₃; simp [*]; cases ps <;> rfl
-    · subst e₅; simp [*]
-    · simp [*]
+    · subst e₃; subst e₅; cases ps <;> simp [e₁, NodeRec.withChild]
+    · subst e₃; cases ps <;> simp [e₁, e₅, NodeRec.withChild]
+    · subst e₅; simp [e₁, e₃]
+    · simp [e₁, e₃, e₅]
   by_cases e₃ : x = L
   · subst e₃
     by_cases e₄ : x = P
-    · subst e₄; simp [*]; cases ps <;> rfl
-    · simp [*]
+    · subst e₄; cases ps <;> simp [e₁, e₂, NodeRec.withChild]
+    · simp [e₁, e₂, e₄]
   by_cases e₄ : x = P
-  · subst e₄; simp [*]
-  · simp [*]
+  · subst e₄; simp [e₁, e₂, e₃]
+  · simp [e₁, e₂, e₃, e₄]
 
 /-- **`switchWith` touches four addresses**: `this`, `node`'s two children and `node`'s parent. -/
 theorem switchWith_frame (h : Heap) (this node : Addr) {x : Addr}

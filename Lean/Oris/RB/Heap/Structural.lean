@@ -91,10 +91,11 @@ theorem rotateAt_refines_left {h : Heap} {head a b p : Addr} {s : Side} {c c' : 
       (by simpa [childAt, Side.other, hab] using Ne.symm hb)
       (fun e => by simp only [parent, parentSide, hpa, hsa] at e ⊢; exact hs e)
     simp only [parent, hpa] at HH
+    obtain ⟨HHr, HHc, HHl⟩ := HH
     refine hp.retarget hr (fun x hx hxp => rfr x
         (fun e => (hout x hx).1 (by simp [e])) (fun e => (hout x hx).1 (by simp [e]))
         (hbl.ne_root (hout x hx).2 fun h' => (hout x hx).1 (by simp [h'])) hxp)
-      HH.1 HH.2.1 HH.2.2 ?_ ?_
+      HHr HHc HHl ?_ ?_
     · by_cases hpm' : p = m
       · subst hpm'; cases s <;> simp [RL, childAt, Ne.symm hap, Ne.symm hbp, NodeRec.withChild]
       · cases s <;> simp [RL, childAt, Ne.symm hap, Ne.symm hbp, hpm', NodeRec.withChild]
@@ -182,10 +183,11 @@ theorem rotateAt_refines_right {h : Heap} {head a b p : Addr} {s : Side} {c c' :
       (by simpa [childAt, Side.other, hab] using Ne.symm hb)
       (fun e => by simp only [parent, parentSide, hpa, hsa] at e ⊢; exact hs e)
     simp only [parent, hpa] at HH
+    obtain ⟨HHr, HHc, HHl⟩ := HH
     refine hp.retarget hr (fun x hx hxp => rfr x
         (fun e => (hout x hx).1 (by simp [e])) (fun e => (hout x hx).1 (by simp [e]))
         (hbr.ne_root (hout x hx).2 fun h' => (hout x hx).1 (by simp [h'])) hxp)
-      HH.1 HH.2.1 HH.2.2 ?_ ?_
+      HHr HHc HHl ?_ ?_
     · by_cases hpm' : p = m
       · subst hpm'; cases s <;> simp [RL, childAt, Ne.symm hap, Ne.symm hbp, NodeRec.withChild]
       · cases s <;> simp [RL, childAt, Ne.symm hap, Ne.symm hbp, hpm', NodeRec.withChild]
@@ -268,26 +270,18 @@ theorem substituteWith_refines_core {h : Heap} {head this p k : Addr} {s σ : Si
   simp only [hpa, hsa] at SU
   have hs : p = head → s = .left := fun e => by rw [e] at hp; exact hp.head_side
   -- `k` is the sentinel or an address of `u`, inside `t`; `p` is the sentinel or on the path.
-  have hkp₀ : p ≠ head → k ≠ p := fun hph e => by
-    by_cases hkh : k = head
-    · exact hph (e ▸ hkh)
-    · exact hpt (e ▸ hut k (hk hkh))
+  have hkp₀ : p ≠ head → k ≠ p := fun hph => Ne.symm (hu.ne_root hph fun h' => hpt (hut p h'))
   have FK : (substituteWith h this k k).parent = p ∧ (substituteWith h this k k).side = s := by
     simp [SU]
   refine ⟨⟨?_, ?_⟩, FK⟩
   · refine hu.reroot (fun hkh => ?_) (fun x hx hxk => ?_)
-    · have hkp : k ≠ p := fun e => by
-        by_cases hph : p = head
-        · exact hkh (e.trans hph)
-        · exact hkp₀ hph e
+    · have hkp : k ≠ p := fun e => hpt (e ▸ hut k (hk hkh))
       simp [SU, hkp]
     · have hxp : x ≠ p := fun e => hpt (e ▸ hut x hx)
       simp [SU, hxk, hxp]
-  · have hkk : ∀ x ∈ path.listL ++ path.listR, x ≠ k := fun x hx e => by
-      by_cases hkh : k = head
-      · exact (hout x hx).2 (e.trans hkh)
-      · exact (hout x hx).1 (e ▸ hut k (hk hkh))
-    have HH : (substituteWith h this k head).right = (h head).right ∧
+  · have hkk : ∀ x ∈ path.listL ++ path.listR, x ≠ k := fun x hx =>
+      hu.ne_root (hout x hx).2 fun h' => (hout x hx).1 (hut x h')
+    obtain ⟨HHr, HHc, HHl⟩ : (substituteWith h this k head).right = (h head).right ∧
         (substituteWith h this k head).red = (h head).red ∧
         (p ≠ head → (substituteWith h this k head).left = (h head).left) := by
       by_cases hph : p = head
@@ -300,7 +294,7 @@ theorem substituteWith_refines_core {h : Heap} {head this p k : Addr} {s σ : Si
         · subst hkh; simp [SU, hhp]
         · simp [SU, hkh, hhp]
     refine hp.retarget hr (fun x hx hxp => substituteWith_frame h this k (hkk x hx)
-        (by rw [hpa]; exact hxp)) HH.1 HH.2.1 HH.2.2 ?_ ?_
+        (by rw [hpa]; exact hxp)) HHr HHc HHl ?_ ?_
     · by_cases hph : p = head
       · subst hph; obtain rfl := hs rfl
         by_cases hkh : p = k
@@ -369,46 +363,22 @@ theorem switchWith_refines {h : Heap} {head this node p : Addr} {s : Side} {c : 
   have hout := hl.outside
   have hpt := hl.slot_not_mem
   obtain ⟨hr, hp⟩ := hl
-  obtain ⟨-, hnh, -, hpa, hsa, hca, hL, hR⟩ := hr.node_inv
+  obtain ⟨-, -, -, hpa, hsa, hca, hL, hR⟩ := hr.node_inv
   generalize hLe : (h node).left = L at hL
   generalize hRe : (h node).right = R at hR
-  obtain ⟨-, -, hnl, hnr, hlr⟩ := nodup_node hr.nodup
-  simp only [RBNode.toList_node, List.mem_append, List.mem_cons, not_or] at htree hpt
-  have hLm : L ≠ head → L ∈ l.toList := hL.root_mem
-  have hRm : R ≠ head → R ∈ r.toList := hR.root_mem
+  obtain ⟨-, -, -, -, hlr⟩ := nodup_node hr.nodup
   -- Distinctness, the sentinel being the only address `L`, `R` and `p` can share.
-  have hnL : node ≠ L := fun e => by
-    by_cases hLh : L = head
-    · exact hnh (e.trans hLh)
-    · exact hnl (e ▸ hLm hLh)
-  have hnR : node ≠ R := fun e => by
-    by_cases hRh : R = head
-    · exact hnh (e.trans hRh)
-    · exact hnr (e ▸ hRm hRh)
-  have hnp : node ≠ p := fun e => hpt.2.1 e.symm
-  have htn : this ≠ node := htree.2.1
-  have htL : this ≠ L := fun e => by
-    by_cases hLh : L = head
-    · exact hn (e.trans hLh)
-    · exact htree.1 (e ▸ hLm hLh)
-  have htR : this ≠ R := fun e => by
-    by_cases hRh : R = head
-    · exact hn (e.trans hRh)
-    · exact htree.2.2 (e ▸ hRm hRh)
+  have htL : this ≠ L := hL.ne_root hn fun hx => htree (by simp [hx])
+  have htR : this ≠ R := hR.ne_root hn fun hx => htree (by simp [hx])
   have htp : this ≠ p := fun e => by
     rcases hp.slot with hph | hpm
     · exact hn (e.trans hph)
     · exact hpath (e ▸ hpm)
-  have hLR : L ≠ head → L ≠ R := fun hLh e => by
-    by_cases hRh : R = head
-    · exact hLh (e.trans hRh)
-    · exact hlr L (hLm hLh) (e ▸ hRm hRh)
-  have hLp : L ≠ head → L ≠ p := fun hLh e => hpt.1 (e ▸ hLm hLh)
-  have hRp : R ≠ head → R ≠ p := fun hRh e => hpt.2.2 (e ▸ hRm hRh)
-  have SW := switchWith_apply h this node htn (by simpa [childAt, hLe] using hnL)
-    (by simpa [childAt, hRe] using hnR) (by simpa [parent, hpa] using hnp)
-    (by simpa [childAt, hLe] using htL) (by simpa [childAt, hRe] using htR)
-    (by simpa [parent, hpa] using htp)
+  have hLR : L ≠ head → L ≠ R := fun hLh => hR.ne_root hLh (hlr L (hL.root_mem hLh))
+  have hLp : L ≠ head → L ≠ p := fun hLh e => hpt (by simp [← e, hL.root_mem hLh])
+  have hRp : R ≠ head → R ≠ p := fun hRh e => hpt (by simp [← e, hR.root_mem hRh])
+  have SW := switchWith_apply h this node (by simpa [childAt, hLe] using htL)
+    (by simpa [childAt, hRe] using htR) (by simpa [parent, hpa] using htp)
   simp only [childAt, parent, parentSide, red, hLe, hRe, hpa, hsa, hca] at SW
   have hs : p = head → s = .left := fun e => by rw [e] at hp; exact hp.head_side
   have FR : (switchWith h this node R).parent = this ∧ (switchWith h this node R).side = .right :=
@@ -423,40 +393,24 @@ theorem switchWith_refines {h : Heap} {head this node p : Addr} {s : Side} {c : 
     · have h1 := hLR hLh
       have h2 := hLp hLh
       simp [SW, Ne.symm htL, h1, h2]
-    · have h1 : x ≠ this := fun e => htree.1 (e ▸ hx)
-      have h2 : x ≠ R := fun e => by
-        by_cases hRh : R = head
-        · exact (hL.mem_ne hx).1 (e.trans hRh)
-        · exact hlr x hx (e ▸ hRm hRh)
-      have h3 : x ≠ p := fun e => hpt.1 (e ▸ hx)
+    · have h1 : x ≠ this := fun e => htree (by simp [← e, hx])
+      have h2 : x ≠ R := hR.ne_root (hL.mem_ne hx).1 (hlr x hx)
+      have h3 : x ≠ p := fun e => hpt (by simp [← e, hx])
       simp [SW, h1, h2, hxL, h3]
   · have e : (switchWith h this node this).right = R := by simp [SW]
     rw [e]
     refine hR.reroot (fun hRh => ?_) (fun x hx hxR => ?_)
     · have h2 := hRp hRh
       simp [SW, Ne.symm htR, h2]
-    · have h1 : x ≠ this := fun e => htree.2.2 (e ▸ hx)
-      have h2 : x ≠ L := fun e => by
-        by_cases hLh : L = head
-        · exact (hR.mem_ne hx).1 (e.trans hLh)
-        · exact hlr L (hLm hLh) (e ▸ hx)
-      have h3 : x ≠ p := fun e => hpt.2.2 (e ▸ hx)
+    · have h1 : x ≠ this := fun e => htree (by simp [← e, hx])
+      have h2 : x ≠ L := hL.ne_root (hR.mem_ne hx).1 fun h' => hlr x h' hx
+      have h3 : x ≠ p := fun e => hpt (by simp [← e, hx])
       simp [SW, h1, h2, hxR, h3]
   · have hfr : ∀ x ∈ path.listL ++ path.listR, x ≠ p → switchWith h this node x = h x :=
       fun x hx hxp => by
         have h1 : x ≠ this := fun e => hpath (e ▸ hx)
-        have h2 : x ≠ L := fun e => by
-          by_cases hLh : L = head
-          · exact (hout x hx).2 (e.trans hLh)
-          · exact (hout x hx).1 (by
-              simp only [RBNode.toList_node, List.mem_append, List.mem_cons]
-              exact .inl (e ▸ hLm hLh))
-        have h3 : x ≠ R := fun e => by
-          by_cases hRh : R = head
-          · exact (hout x hx).2 (e.trans hRh)
-          · exact (hout x hx).1 (by
-              simp only [RBNode.toList_node, List.mem_append, List.mem_cons]
-              exact .inr (.inr (e ▸ hRm hRh)))
+        have h2 : x ≠ L := hL.ne_root (hout x hx).2 fun h' => (hout x hx).1 (by simp [h'])
+        have h3 : x ≠ R := hR.ne_root (hout x hx).2 fun h' => (hout x hx).1 (by simp [h'])
         simp [SW, h1, h2, h3, hxp]
     -- Off `this`, a record keeps its right link and colour (its left link too, off the slot's
     -- node), and the slot's node gets `this` in the slot: whichever of `L`, `R` and `p` coincide.
@@ -482,12 +436,12 @@ theorem switchWith_refines {h : Heap} {head this node p : Addr} {s : Side} {c : 
           by_cases e₃ : x = p
           · rw [ite_eq_left e₃]; obtain rfl := hxs e₃; simp [e₃]
           · rw [ite_eq_right e₃]; simp [e₃]
-    have HH := GEN head (Ne.symm hn) (fun e => hs e.symm)
-    refine hp.retarget hr hfr HH.1 HH.2.1 (fun hph => HH.2.2.1 (Ne.symm hph)) ?_ ?_
+    obtain ⟨HHr, HHc, HHl, -⟩ := GEN head (Ne.symm hn) (fun e => hs e.symm)
+    refine hp.retarget hr hfr HHr HHc (fun hph => HHl (Ne.symm hph)) ?_ ?_
     · by_cases hph : p = head
-      · have G := GEN p (Ne.symm htp) (fun _ => hs hph)
+      · obtain ⟨-, -, -, Gslot⟩ := GEN p (Ne.symm htp) (fun _ => hs hph)
         obtain rfl := hs hph
-        exact G.2.2.2 rfl
+        exact Gslot rfl
       · have e₁ : p ≠ R := fun e => hRp (fun h' => hph (e.trans h')) e.symm
         have e₂ : p ≠ L := fun e => hLp (fun h' => hph (e.trans h')) e.symm
         cases s <;> simp [SW, childAt, Ne.symm htp, e₁, e₂, NodeRec.withChild]

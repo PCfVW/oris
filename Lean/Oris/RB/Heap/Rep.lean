@@ -396,8 +396,7 @@ theorem RepPath.retarget {h H : Heap} {head a b p : Addr} {s : Side} {path : Pat
     · rw [e₃, e₄]
       refine hpp.frame (fun x hx => ?_) (hleft hy) hright hred
       obtain ⟨hxt, -⟩ := hup.outside x hx
-      simp only [RBNode.toList_node, List.mem_append, List.mem_cons, not_or] at hxt
-      refine hfr x ?_ hxt.2.1
+      refine hfr x ?_ fun e => hxt (by simp [e])
       simp only [Path.listL, Path.listR, List.mem_append, List.mem_cons] at hx ⊢
       rcases hx with hx | hx <;> simp [hx]
   | @right _ _ c₀ pp sib hy hny eA ec hsib hpp =>
@@ -411,8 +410,7 @@ theorem RepPath.retarget {h H : Heap} {head a b p : Addr} {s : Side} {path : Pat
     · rw [e₃, e₄]
       refine hpp.frame (fun x hx => ?_) (hleft hy) hright hred
       obtain ⟨hxt, -⟩ := hup.outside x hx
-      simp only [RBNode.toList_node, List.mem_append, List.mem_cons, not_or] at hxt
-      refine hfr x ?_ hxt.2.1
+      refine hfr x ?_ fun e => hxt (by simp [e])
       simp only [Path.listL, Path.listR, List.mem_append, List.mem_cons] at hx ⊢
       rcases hx with hx | hx <;> simp [hx]
 
