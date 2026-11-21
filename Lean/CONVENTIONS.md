@@ -117,7 +117,8 @@ module doc's complete list of departures. A departure that is *not* about a stat
 unreachable must be called out as such, with what settles it. Today: in `Fixup.lean`, the cached
 `root` of `erase_fixup` (settled by the heap layer's planned cached-root theorem) and `setBlack`
 leaving the sentinel alone where the Rust writes black over black (harmless); in `Heap.lean`, the
-loops' fuel (to be proven sufficient by the heap layer's steps 3 and 4).
+loops' fuel (proven sufficient for `insert_fixup` by `insertFixup_refines_depth`; for `erase_fixup`
+and the descents, to be proven by the heap layer's steps 3c and 4).
 
 Lean's unused-variable linter does not see instance arguments: check by hand, by deleting it in
 a scratch copy, that every `[Std.TransCmp cmp]` a theorem takes is needed.

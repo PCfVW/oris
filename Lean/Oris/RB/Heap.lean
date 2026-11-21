@@ -4,7 +4,7 @@ import Oris.RB.Fixup
 /-!
 # `rbtree.rs`'s pointer code, on a model heap
 
-Steps 1, 2 and the first part of 3 of the heap layer, as numbered in the plan of
+Steps 1, 2 and the first parts of 3 of the heap layer, as numbered in the plan of
 `Lean/docs/heap-layer.md` (§5; §4 numbers the theorems, `rotateAt_refines` being its first).
 
 - **Step 1, the definitions.** Every function below transcribes one function of
@@ -21,7 +21,11 @@ Steps 1, 2 and the first part of 3 of the heap layer, as numbered in the plan of
   operation, `rotateAt` included, also has a per-address description of its result (`_apply`)
   and the list of records it changes (`_frame`).
 
-That the fix-ups and the counted operations perform their zipper steps is the rest of the plan's
+- **Step 3b, `insert_fixup`.** `insertFixupLoop_refines` and `insertFixup_refines` prove that
+  `insert_fixup` performs `insFix`: the same tree and the same rotation count, from any located
+  subtree whose tree has a black root. `insertFixup_refines_depth` is the first fuel theorem.
+
+That `erase_fixup` and the counted operations perform their zipper steps is the rest of the plan's
 step 3, and its step 4.
 
 ## The model (the note's §2)
@@ -41,11 +45,13 @@ step 3, and its step 4.
 - Keys: the descent of `insert_counted` compares nodes with the Rust's `T::cmp`; here, with
   `cmp (key a) (key b)` for a fixed `key : Addr → α`.
 - The loops (`insert_fixup`, `erase_fixup` and the two descents) take explicit fuel and return
-  `none` when it runs out. That is this file's one departure from the Rust's behaviour, and it
-  is not yet proven unreachable: the Rust loops until the tree's structure stops them. Each loop
-  spends one unit of fuel on its final, failing test, so the plan's steps 3 and 4 will prove
-  that fuel at least the tree's height **plus one** (its size plus one, for the descents)
-  always suffices. Each loop's doc repeats this.
+  `none` when it runs out. That is this file's one departure from the Rust's behaviour: the Rust
+  loops until the tree's structure stops them. Each loop spends one unit of fuel on its final,
+  failing test, so fuel at least the tree's height **plus one** (its size plus one, for the
+  descents) suffices. For `insert_fixup` this is proven (`insertFixup_refines_depth`: fuel at
+  least `RBNode.depth`, the number of nodes on the longest branch, which is the height in edges
+  plus one); for `erase_fixup` and the descents it is the plan's steps 3c and 4. Each loop's doc
+  repeats this.
 - `erase_fixup`'s root comes in two readings: `eraseFixup` reads it once on entry, as the Rust
   does, and `eraseFixupHpha` re-reads it, as `Cpp/hpha.cpp` does. The note's §6 plans the theorem
   that they agree.
@@ -274,7 +280,7 @@ def linkIntoChain (h : Heap) (this node : Addr) : Heap :=
 so far. The first branch is the red uncle (recolour and climb); the second rotates once or twice and
 leaves `p` black, so the next test ends the loop. On exit: `make_black(head.child(Left))`, the root
 as it is then. The fuel is this file's one departure from the Rust (see the module doc): `none` when
-it runs out. -/
+it runs out, which fuel at least the tree's depth rules out (`insertFixup_refines_depth`). -/
 def insertFixupLoop (head : Addr) : Nat → Heap → Addr → Addr → Nat → Option (Heap × Nat)
   | 0, _, _, _, _ => none
   | fuel + 1, h, cur, p, rotations =>
@@ -310,7 +316,8 @@ def insertFixupLoop (head : Addr) : Nat → Heap → Addr → Addr → Nat → O
 
 /-- `rbtree.rs` `insert_fixup`: rebalances after `attach_to` attached `node` as a red leaf, and
 returns the rotations performed. The fuel is this file's one departure from the Rust (see the module
-doc): `none` when it runs out. -/
+doc): `none` when it runs out, which fuel at least the tree's depth rules out
+(`insertFixup_refines_depth`). -/
 def insertFixup (fuel : Nat) (h : Heap) (head node : Addr) : Option (Heap × Nat) :=
   insertFixupLoop head fuel h node (parent h node) 0
 
@@ -1688,6 +1695,533 @@ theorem switchWith_refines {h : Heap} {head this node p : Addr} {s : Side} {c : 
       have e₁ : p ≠ R := fun e => hRp (fun h' => hph (e.trans h')) e.symm
       have e₂ : p ≠ L := fun e => hLp (fun h' => hph (e.trans h')) e.symm
       cases s <;> simp [SW, childAt, Side.other, Ne.symm htp, e₁, e₂, NodeRec.withChild]
+
+/-! ## Step 3b, the tools: colours, climbing the path, the final `make_black`
+
+What `insert_fixup`'s refinement proof needs besides the structural operations of step 3a: how a
+heap's colour bits read back through `Rep`, how a located subtree moves up and down its path,
+what a colour write does to a located subtree, and what the final `make_black` of the root does
+to a whole tree. -/
+
+/-- A path's relation keeps the sentinel black: `RepPath`'s root case requires it, and every
+other case carries it up. -/
+theorem RepPath.head_red {h : Heap} {head a p : Addr} {s : Side} {path : Path Addr}
+    (hp : RepPath h head a p s path) : (h head).red = false := by
+  induction hp with
+  | root _ _ e => exact e
+  | left _ _ _ _ _ _ ih => exact ih
+  | right _ _ _ _ _ _ ih => exact ih
+
+/-- **Colour bits read back.** The `red` bit at a subtree's starting address is the zipper's
+`red?` of the subtree, for the sentinel too (black, as `NodeBase::red` reads it), provided the
+sentinel's bit is clear. -/
+theorem Rep.red_eq {h : Heap} {head a p : Addr} {s : Side} {u : RBNode Addr}
+    (hr : Rep h head a p s u) (hh : (h head).red = false) : red h a = red? u := by
+  cases hr with
+  | nil => exact hh
+  | @node _ _ _ c _ _ _ _ _ _ hc _ _ => cases c <;> exact hc
+
+/-- A slot on a left path step is that step's node's left link. -/
+theorem RepPath.left_inv {h : Heap} {head a p y : Addr} {s : Side} {c : RBColor}
+    {pp : Path Addr} {b : RBNode Addr} (hp : RepPath h head a p s (.left c pp y b)) :
+    p = y ∧ s = .left := by
+  cases hp; exact ⟨rfl, rfl⟩
+
+/-- A slot on a right path step is that step's node's right link. -/
+theorem RepPath.right_inv {h : Heap} {head a p y : Addr} {s : Side} {c : RBColor}
+    {pp : Path Addr} {b : RBNode Addr} (hp : RepPath h head a p s (.right c b y pp)) :
+    p = y ∧ s = .right := by
+  cases hp; exact ⟨rfl, rfl⟩
+
+namespace Located
+
+variable {h : Heap} {head a y P : Addr} {S : Side} {c : RBColor} {t l r b : RBNode Addr}
+  {pp : Path Addr}
+
+/-- **Climbing a left step**: a subtree located as `y`'s left child is part of `y`'s subtree,
+located at `y`'s own slot, read from `y`'s `parent` word, one step up the path. -/
+theorem up_left (hl : Located h head a y .left t (.left c pp y b)) :
+    Located h head y (h y).parent (h y).side (.node c t y b) pp := by
+  obtain ⟨hr, hp⟩ := hl
+  cases hp with
+  | left hy hn ha hc hb hpp => exact ⟨.node hy hn rfl rfl hc (ha ▸ hr) hb, hpp⟩
+
+/-- **Climbing a right step**, the mirror image of `up_left`. -/
+theorem up_right (hl : Located h head a y .right t (.right c b y pp)) :
+    Located h head y (h y).parent (h y).side (.node c b y t) pp := by
+  obtain ⟨hr, hp⟩ := hl
+  cases hp with
+  | right hy hn ha hc hb hpp => exact ⟨.node hy hn rfl rfl hc hb (ha ▸ hr), hpp⟩
+
+/-- **Descending to the left child**: the converse of `up_left`. -/
+theorem down_left (hl : Located h head y P S (.node c l y r) pp) :
+    Located h head (h y).left y .left l (.left c pp y r) := by
+  obtain ⟨hr, hp⟩ := hl
+  obtain ⟨-, hy, hn, hpa, hsa, hc, hll, hrr⟩ := hr.node_inv
+  exact ⟨hll, .left hy hn rfl hc hrr (hpa ▸ hsa ▸ hp)⟩
+
+/-- **Descending to the right child**: the converse of `up_right`. -/
+theorem down_right (hl : Located h head y P S (.node c l y r) pp) :
+    Located h head (h y).right y .right r (.right c l y pp) := by
+  obtain ⟨hr, hp⟩ := hl
+  obtain ⟨-, hy, hn, hpa, hsa, hc, hll, hrr⟩ := hr.node_inv
+  exact ⟨hrr, .right hy hn rfl hc hll (hpa ▸ hsa ▸ hp)⟩
+
+/-- **`NodeBase::set_colour` on a located subtree's first node** gives it the new colour and
+changes nothing else the relation reads: the zipper's `paint` at the hole. (`makeBlack` and
+`makeRed` are `setColour` with `colourBit .black` and `colourBit .red`.) -/
+theorem paint (hl : Located h head y P S (.node c l y r) pp) (c' : RBColor) :
+    Located (setColour h y (colourBit c')) head y P S (.node c' l y r) pp := by
+  have hout := hl.outside
+  obtain ⟨hr, hp⟩ := hl
+  obtain ⟨-, hy, hn, hpa, hsa, -, hll, hrr⟩ := hr.node_inv
+  obtain ⟨-, -, hyl, hyr, -⟩ := nodup_node hr.nodup
+  have F : ∀ x, x ≠ y → setColour h y (colourBit c') x = h x := fun x hx => by
+    simp [setColour, Heap.modify, hx]
+  have Y : setColour h y (colourBit c') y = { h y with red := colourBit c' } := by
+    simp [setColour, Heap.modify]
+  refine ⟨.node hy hn (by rw [Y]; exact hpa) (by rw [Y]; exact hsa) (by rw [Y]) ?_ ?_, ?_⟩
+  · rw [Y]; exact hll.frame fun x hx => F x (fun e => hyl (e ▸ hx))
+  · rw [Y]; exact hrr.frame fun x hx => F x (fun e => hyr (e ▸ hx))
+  · have hyh : head ≠ y := Ne.symm hy
+    exact hp.frame (fun x hx => F x (fun e => (hout x hx).1 (by simp [e])))
+      (by rw [F head hyh]) (by rw [F head hyh]) (by rw [F head hyh])
+
+end Located
+
+/-- `setColour` changes no `parent` pointer. -/
+theorem setColour_parent (h : Heap) (a : Addr) (b : Bool) (x : Addr) :
+    (setColour h a b x).parent = (h x).parent := by
+  by_cases e : x = a <;> simp [setColour, Heap.modify, e]
+
+/-- `setColour` changes no other address's colour. -/
+theorem setColour_red_ne (h : Heap) (a : Addr) (b : Bool) {x : Addr} (hx : x ≠ a) :
+    (setColour h a b x).red = (h x).red := by
+  simp [setColour, Heap.modify, hx]
+
+/-- `setColour` sets the colour it writes. -/
+theorem setColour_red_eq (h : Heap) (a : Addr) (b : Bool) : (setColour h a b a).red = b := by
+  simp [setColour, Heap.modify]
+
+/-- A write that keeps colours keeps every address's colour. -/
+theorem modify_red (h : Heap) (a : Addr) (f : NodeRec → NodeRec) (hf : ∀ n, (f n).red = n.red)
+    (x : Addr) : (h.modify a f x).red = (h x).red := by
+  by_cases e : x = a <;> simp [Heap.modify, e, hf]
+
+/-- **`rotateAt` changes no colour**: its nine writes are child links and `parent` words. -/
+theorem rotateAt_red (h : Heap) (this : Addr) (s : Side) (x : Addr) :
+    (rotateAt h this s x).red = (h x).red := by
+  simp only [rotateAt, setChild_eq, setParentPtr, setParentSide]
+  repeat rw [modify_red _ _ _ (fun _ => by simp)]
+
+/-- **`insert_fixup`'s final `make_black(head.child(Left))`** blackens the represented tree's root:
+the zipper's `setBlack` of the whole tree. On an empty tree it writes the sentinel's colour bit,
+black over black. -/
+theorem Tree.makeBlack_root {h : Heap} {head : Addr} {T : RBNode Addr} (ht : Tree h head T) :
+    Tree (makeBlack h (childAt h head .left)) head T.setBlack := by
+  cases T with
+  | nil =>
+    obtain ⟨hr, e₂, e₃⟩ := ht
+    have hroot : (h head).left = head := hr.nil_inv
+    have H : makeBlack h (childAt h head .left) head = { h head with red := false } := by
+      simp [makeBlack, setColour, Heap.modify, childAt, hroot]
+    refine ⟨?_, by rw [H]; exact e₂, by rw [H]⟩
+    rw [H]; show Rep _ head (h head).left head .left .nil; rw [hroot]; exact .nil
+  | node c l v r =>
+    obtain ⟨hv, hvh, -⟩ := ht.1.node_inv
+    have hl : Located h head v head .left (.node c l v r) .root := by
+      have := tree_iff_located.1 ht; rw [hv] at this; exact this
+    have hl' := hl.paint .black
+    have E : setColour h v (colourBit .black) head = h head := by
+      simp [setColour, Heap.modify, Ne.symm hvh]
+    apply tree_iff_located.2
+    have e : childAt h head .left = v := hv
+    simp only [makeBlack, e]
+    rw [show (setColour h v false head).left = v by
+      rw [show false = colourBit .black from rfl, E, hv]]
+    exact hl'
+
+/-! ## Step 3b: `insert_fixup` performs `insFix`
+
+The loop invariant is a located subtree (`Located h head cur p s t path`, `cur` a real node), with
+`p`, the slot's node, as the loop's `p`: its colour, and the sentinel's, are read through `Rep` and
+`RepPath`. One more hypothesis: the tree's root is black (`rootColour`). On a path whose top node
+is red and is `cur`'s parent, the Rust's loop would find a red parent with no grandparent and run
+its black-uncle branch at the sentinel, where `insFix` stops (Fixup.lean's "unreachable red-root
+shape"); the Rust's callers never reach it, the tree's root being black. -/
+
+/-- The depth of a path's hole: the number of nodes above it. The loop's fuel is measured against
+it (`insertFixupLoop_refines`). -/
+def pathDepth : Path Addr → Nat
+  | .root => 0
+  | .left _ pp _ _ => pathDepth pp + 1
+  | .right _ _ _ pp => pathDepth pp + 1
+
+/-- The colour of a path's topmost node, the whole tree's root (`none` for the empty path, where
+the hole is the root). -/
+def rootColour : Path Addr → Option RBColor
+  | .root => none
+  | .left c pp _ _ => (rootColour pp).getD c |> some
+  | .right c _ _ pp => (rootColour pp).getD c |> some
+
+/-- A black (or absent) root stays so one step down the path. -/
+theorem rootColour_up_left {c : RBColor} {pp : Path Addr} {y : Addr} {b : RBNode Addr}
+    (h : rootColour (.left c pp y b) ≠ some .red) : rootColour pp ≠ some .red := by
+  cases e : rootColour pp with
+  | none => simp
+  | some c₀ => simp only [rootColour, e, Option.getD_some] at h; exact h
+
+/-- The mirror image of `rootColour_up_left`. -/
+theorem rootColour_up_right {c : RBColor} {pp : Path Addr} {y : Addr} {b : RBNode Addr}
+    (h : rootColour (.right c b y pp) ≠ some .red) : rootColour pp ≠ some .red := by
+  cases e : rootColour pp with
+  | none => simp
+  | some c₀ => simp only [rootColour, e, Option.getD_some] at h; exact h
+
+/-- The loop's exit: a black `p` ends it with the final `make_black` of the root. -/
+theorem insertFixupLoop_exit {head : Addr} {fuel : Nat} {h : Heap} {cur p : Addr} {rot : Nat}
+    (hp : red h p = false) :
+    insertFixupLoop head (fuel + 1) h cur p rot =
+      some (makeBlack h (childAt h head .left), rot) := by
+  simp [insertFixupLoop, hp]
+
+/-- **`insert_fixup`'s loop performs `insFix`** (the note's §4, step 3). If the heap represents the
+located subtree `t` at `path`, `cur` (its first node) is a real node, the tree's root is black
+(`rootColour path ≠ some .red`, vacuous when `cur` is the root) and the fuel is at least the depth
+of the hole plus one, then the loop, started from `cur` and its parent `P` with `rot` rotations
+counted, returns a heap representing the whole tree `(insFix path t).1`, with
+`rot + (insFix path t).2` rotations: the zipper's result and rotation count, for every input of
+these shapes, valid red-black tree or not.
+
+The proof follows `insFix` case by case: the root and a black parent (the loop's exit), and for a
+red parent the eight combinations of `p`'s side, `cur`'s side and the uncle's colour. A red uncle
+recolours three nodes and climbs two levels (the induction hypothesis, with one unit of fuel
+less); a black uncle rotates once (`cur` outer) or twice (`cur` inner), and the next test ends the
+loop, `p` being black. -/
+theorem insertFixupLoop_refines (head : Addr) : ∀ (fuel : Nat) {h : Heap} {cur P : Addr}
+    {S : Side} {t : RBNode Addr} {path : Path Addr} (rot : Nat),
+    Located h head cur P S t path → cur ≠ head → rootColour path ≠ some .red →
+    pathDepth path + 1 ≤ fuel →
+    ∃ H, insertFixupLoop head fuel h cur P rot = some (H, rot + (insFix path t).2) ∧
+      Tree H head (insFix path t).1
+  | 0, _, _, _, _, _, _, _, _, _, _, hf => absurd hf (by omega)
+  | fuel + 1, h, cur, P, S, t, path, rot, hl, hcur, hroot, hf => by
+    have hhead := hl.2.head_red
+    have exit : red h P = false → insFix path t = ((path.fill t).setBlack, 0) →
+        ∃ H, insertFixupLoop head (fuel + 1) h cur P rot = some (H, rot + (insFix path t).2) ∧
+          Tree H head (insFix path t).1 := fun hp hz =>
+      ⟨_, by rw [insertFixupLoop_exit hp, hz]; rfl,
+        by rw [hz]; exact (hl.2.fill hl.1).makeBlack_root⟩
+    have hcm : cur ∈ t.toList := hl.1.root_mem hcur
+    match path, hl, hroot, hf with
+    | .root, hl, _, _ =>
+      cases hl.2
+      exact exit hhead (by simp [insFix])
+    | .left .black pp y b, hl, _, _ =>
+      obtain ⟨e₁, e₂⟩ := hl.2.left_inv; subst P S
+      have hy := hl.up_left.1.node_inv.2.2.2.2.2.1
+      exact exit hy (by cases pp <;> simp [insFix])
+    | .right .black b y pp, hl, _, _ =>
+      obtain ⟨e₁, e₂⟩ := hl.2.right_inv; subst P S
+      have hy := hl.up_right.1.node_inv.2.2.2.2.2.1
+      exact exit hy (by cases pp <;> simp [insFix])
+    | .left .red .root y b, _, hroot, _ => exact absurd (by simp [rootColour]) hroot
+    | .right .red b y .root, _, hroot, _ => exact absurd (by simp [rootColour]) hroot
+    -- `p` is `pp`'s left child, `cur` is `p`'s left child (outer).
+    | .left .red (.left c' gp z u) y b, hl, hroot, hf =>
+      obtain ⟨e₁, e₂⟩ := hl.2.left_inv; subst P S
+      have Ly := hl.up_left
+      obtain ⟨hyz, hys⟩ := Ly.2.left_inv
+      rw [hyz, hys] at Ly
+      have hyr : (h y).red = true := Ly.1.node_inv.2.2.2.2.2.1
+      have Lz := Ly.up_left
+      have hzh : z ≠ head := Lz.1.node_inv.2.1
+      have hyz' : y ≠ z := fun e => (nodup_node Lz.1.nodup).2.2.1 (by simp [e])
+      have Lu := Lz.down_right
+      have hur : red h (h z).right = red? u := Lu.1.red_eq hhead
+      have hroot' := rootColour_up_left (rootColour_up_left hroot)
+      simp only [pathDepth] at hf
+      by_cases hu : red? u = true
+      · -- Red uncle: recolour, climb two levels.
+        obtain ⟨ul, uv, ur, rfl⟩ : ∃ ul uv ur, u = .node .red ul uv ur := by
+          match u, hu with
+          | .node .red ul uv ur, _ => exact ⟨ul, uv, ur, rfl⟩
+        have huv : (h z).right = uv := Lu.1.node_inv.1
+        have hcol : (h uv).red = true := by rw [← huv]; exact hur.trans hu
+        have Lz1 := (Ly.paint .black).up_left
+        have Lu1 := Lz1.down_right
+        rw [Lu1.1.node_inv.1] at Lu1
+        have Lz3 := ((Lu1.paint .black).up_right).paint .red
+        obtain ⟨H, hH, hT⟩ := insertFixupLoop_refines head fuel rot Lz3 hzh hroot' (by omega)
+        have hz : insFix (.left .red (.left c' gp z (.node .red ul uv ur)) y b) t =
+            insFix gp (.node .red (.node .black t y b) z (.node .black ul uv ur)) := by
+          rfl
+        rw [hz]
+        refine ⟨H, ?_, hT⟩
+        rw [← hH]
+        simp only [insertFixupLoop, red, hyr, parent, parentSide, hyz, hys, Side.other, childAt,
+          huv, hcol, makeBlack, makeRed, setColour_parent, colourBit, ite_true]
+      · -- Black uncle, `cur` outer: `make_black(p); make_red(pp); rotate(pp, o)`; then the loop
+        -- exits, `p` being black.
+        have hcol : (h (h z).right).red = false := by
+          have := hur; simp only [red] at this; rw [this]; simpa using hu
+        obtain ⟨-, -, -, -, -, -, -, hrb⟩ := Ly.1.node_inv
+        obtain ⟨-, -, -, -, htb⟩ := nodup_node Ly.1.nodup
+        have hcy : cur ≠ (h y).right := fun e => by
+          by_cases hrh : (h y).right = head
+          · exact hcur (e.trans hrh)
+          · exact htb cur hcm (e ▸ hrb.root_mem hrh)
+        obtain ⟨f, rfl⟩ : ∃ f, fuel = f + 1 := ⟨fuel - 1, by omega⟩
+        have L2 := ((Ly.paint .black).up_left).paint .red
+        have L3 := rotateAt_refines_right L2
+        have hT := (L3.2.fill L3.1).makeBlack_root
+        have hz : insFix (.left .red (.left c' gp z u) y b) t =
+            ((gp.fill (rotate .right (.node .red (.node .black t y b) z u))).setBlack, 1) := by
+          rw [insFix, ite_eq_right hu]
+        rw [hz]
+        refine ⟨_, ?_, hT⟩
+        have hy3 : red (rotateAt (setColour (setColour h y false) z true) z .right) y = false := by
+          simp only [red, rotateAt_red, setColour_red_ne _ _ _ hyz', setColour_red_eq]
+        rw [insertFixupLoop]
+        simp only [red, hyr, parent, parentSide, hyz, hys, Side.other, childAt, hcol,
+          Bool.false_eq_true, ite_true, ite_false, hcy, makeBlack, makeRed]
+        rw [insertFixupLoop_exit hy3]; rfl
+    -- `p` is `pp`'s right child, `cur` is `p`'s right child (outer).
+    | .right .red a y (.right c' u z gp), hl, hroot, hf =>
+      obtain ⟨e₁, e₂⟩ := hl.2.right_inv; subst P S
+      have Ly := hl.up_right
+      obtain ⟨hyz, hys⟩ := Ly.2.right_inv
+      rw [hyz, hys] at Ly
+      have hyr : (h y).red = true := Ly.1.node_inv.2.2.2.2.2.1
+      have Lz := Ly.up_right
+      have hzh : z ≠ head := Lz.1.node_inv.2.1
+      have hyz' : y ≠ z := fun e => (nodup_node Lz.1.nodup).2.2.2.1 (by simp [e])
+      have Lu := Lz.down_left
+      have hur : red h (h z).left = red? u := Lu.1.red_eq hhead
+      have hroot' := rootColour_up_right (rootColour_up_right hroot)
+      simp only [pathDepth] at hf
+      by_cases hu : red? u = true
+      · -- Red uncle: recolour, climb two levels.
+        obtain ⟨ul, uv, ur, rfl⟩ : ∃ ul uv ur, u = .node .red ul uv ur := by
+          match u, hu with
+          | .node .red ul uv ur, _ => exact ⟨ul, uv, ur, rfl⟩
+        have huv : (h z).left = uv := Lu.1.node_inv.1
+        have hcol : (h uv).red = true := by rw [← huv]; exact hur.trans hu
+        have Lz1 := (Ly.paint .black).up_right
+        have Lu1 := Lz1.down_left
+        rw [Lu1.1.node_inv.1] at Lu1
+        have Lz3 := ((Lu1.paint .black).up_left).paint .red
+        obtain ⟨H, hH, hT⟩ := insertFixupLoop_refines head fuel rot Lz3 hzh hroot' (by omega)
+        have hz : insFix (.right .red a y (.right c' (.node .red ul uv ur) z gp)) t =
+            insFix gp (.node .red (.node .black ul uv ur) z (.node .black a y t)) := by
+          rfl
+        rw [hz]
+        refine ⟨H, ?_, hT⟩
+        rw [← hH]
+        simp only [insertFixupLoop, red, hyr, parent, parentSide, hyz, hys, Side.other, childAt,
+          huv, hcol, makeBlack, makeRed, setColour_parent, colourBit, ite_true]
+      · -- Black uncle, `cur` outer: `make_black(p); make_red(pp); rotate(pp, o)`; then the loop
+        -- exits, `p` being black.
+        have hcol : (h (h z).left).red = false := by
+          have := hur; simp only [red] at this; rw [this]; simpa using hu
+        obtain ⟨-, -, -, -, -, -, hla, -⟩ := Ly.1.node_inv
+        obtain ⟨-, -, -, -, hat⟩ := nodup_node Ly.1.nodup
+        have hcy : cur ≠ (h y).left := fun e => by
+          by_cases hlh : (h y).left = head
+          · exact hcur (e.trans hlh)
+          · exact hat _ (hla.root_mem hlh) (e ▸ hcm)
+        obtain ⟨f, rfl⟩ : ∃ f, fuel = f + 1 := ⟨fuel - 1, by omega⟩
+        have L2 := ((Ly.paint .black).up_right).paint .red
+        have L3 := rotateAt_refines_left L2
+        have hT := (L3.2.fill L3.1).makeBlack_root
+        have hz : insFix (.right .red a y (.right c' u z gp)) t =
+            ((gp.fill (rotate .left (.node .red u z (.node .black a y t)))).setBlack, 1) := by
+          rw [insFix, ite_eq_right hu]
+        rw [hz]
+        refine ⟨_, ?_, hT⟩
+        have hy3 : red (rotateAt (setColour (setColour h y false) z true) z .left) y = false := by
+          simp only [red, rotateAt_red, setColour_red_ne _ _ _ hyz', setColour_red_eq]
+        rw [insertFixupLoop]
+        simp only [red, hyr, parent, parentSide, hyz, hys, Side.other, childAt, hcol,
+          Bool.false_eq_true, ite_true, ite_false, hcy, makeBlack, makeRed]
+        rw [insertFixupLoop_exit hy3]; rfl
+    -- `p` is `pp`'s left child, `cur` is `p`'s right child (inner): `rotate(p, Left)` first.
+    | .right .red a y (.left c' gp z u), hl, hroot, hf =>
+      obtain ⟨e₁, e₂⟩ := hl.2.right_inv; subst P S
+      have Ly := hl.up_right
+      obtain ⟨hyz, hys⟩ := Ly.2.left_inv
+      rw [hyz, hys] at Ly
+      have hyr : (h y).red = true := Ly.1.node_inv.2.2.2.2.2.1
+      have Lz := Ly.up_left
+      have hzh : z ≠ head := Lz.1.node_inv.2.1
+      have Lu := Lz.down_right
+      have hur : red h (h z).right = red? u := Lu.1.red_eq hhead
+      have hroot' := rootColour_up_left (rootColour_up_right hroot)
+      simp only [pathDepth] at hf
+      by_cases hu : red? u = true
+      · -- Red uncle: recolour, climb two levels.
+        obtain ⟨ul, uv, ur, rfl⟩ : ∃ ul uv ur, u = .node .red ul uv ur := by
+          match u, hu with
+          | .node .red ul uv ur, _ => exact ⟨ul, uv, ur, rfl⟩
+        have huv : (h z).right = uv := Lu.1.node_inv.1
+        have hcol : (h uv).red = true := by rw [← huv]; exact hur.trans hu
+        have Lz1 := (Ly.paint .black).up_left
+        have Lu1 := Lz1.down_right
+        rw [Lu1.1.node_inv.1] at Lu1
+        have Lz3 := ((Lu1.paint .black).up_right).paint .red
+        obtain ⟨H, hH, hT⟩ := insertFixupLoop_refines head fuel rot Lz3 hzh hroot' (by omega)
+        have hz : insFix (.right .red a y (.left c' gp z (.node .red ul uv ur))) t =
+            insFix gp (.node .red (.node .black a y t) z (.node .black ul uv ur)) := by
+          rfl
+        rw [hz]
+        refine ⟨H, ?_, hT⟩
+        rw [← hH]
+        simp only [insertFixupLoop, red, hyr, parent, parentSide, hyz, hys, Side.other, childAt,
+          huv, hcol, makeBlack, makeRed, setColour_parent, colourBit, ite_true]
+      · -- Black uncle, `cur` inner: `cur = p; rotate(cur, s)`, then `make_black(p); make_red(pp);
+        -- rotate(pp, o)` with `p` now the old `cur`; then the loop exits.
+        have hcol : (h (h z).right).red = false := by
+          have := hur; simp only [red] at this; rw [this]; simpa using hu
+        obtain ⟨ct, tl, x, tr, rfl⟩ : ∃ ct tl x tr, t = .node ct tl x tr := by
+          match t, hcm with
+          | .node ct tl x tr, _ => exact ⟨ct, tl, x, tr, rfl⟩
+        have hcx : cur = x := hl.1.node_inv.1
+        subst hcx
+        have hyc : (h y).right = cur := Ly.1.node_inv.2.2.2.2.2.2.2.node_inv.1
+        obtain ⟨f, rfl⟩ : ∃ f, fuel = f + 1 := ⟨fuel - 1, by omega⟩
+        have L1 : Located (rotateAt h y .left) head cur z .left
+            (.node ct (.node .red a y tl) cur tr) (.left c' gp z u) := rotateAt_refines_left Ly
+        have hyx : (rotateAt h y .left y).parent = cur := by
+          obtain ⟨-, -, -, -, -, -, hlx, -⟩ := L1.1.node_inv
+          exact hlx.node_inv.2.2.2.1
+        have hxz : cur ≠ z := fun e => (nodup_node L1.up_left.1.nodup).2.2.1 (by simp [e])
+        have L3 := ((L1.paint .black).up_left).paint .red
+        have L4 := rotateAt_refines_right L3
+        have hT := (L4.2.fill L4.1).makeBlack_root
+        have hz : insFix (.right .red a y (.left c' gp z u)) (.node ct tl cur tr) =
+            ((gp.fill (rotate .right (.node .red (.node .black (.node .red a y tl) cur tr) z u))
+              ).setBlack, 2) := by
+          rw [insFix, ite_eq_right hu]; rfl
+        rw [hz]
+        refine ⟨_, ?_, hT⟩
+        have hx4 : red (rotateAt (setColour (setColour (rotateAt h y .left) cur false) z true)
+            z .right) cur = false := by
+          simp only [red, rotateAt_red, setColour_red_ne _ _ _ hxz, setColour_red_eq]
+        rw [insertFixupLoop]
+        simp only [red, hyr, parent, parentSide, hyz, hys, Side.other, childAt, hcol,
+          Bool.false_eq_true, ite_true, ite_false, hyc, makeBlack, makeRed, hyx]
+        rw [insertFixupLoop_exit hx4]; rfl
+    -- `p` is `pp`'s right child, `cur` is `p`'s left child (inner): `rotate(p, Right)` first.
+    | .left .red (.right c' u z gp) y b, hl, hroot, hf =>
+      obtain ⟨e₁, e₂⟩ := hl.2.left_inv; subst P S
+      have Ly := hl.up_left
+      obtain ⟨hyz, hys⟩ := Ly.2.right_inv
+      rw [hyz, hys] at Ly
+      have hyr : (h y).red = true := Ly.1.node_inv.2.2.2.2.2.1
+      have Lz := Ly.up_right
+      have hzh : z ≠ head := Lz.1.node_inv.2.1
+      have Lu := Lz.down_left
+      have hur : red h (h z).left = red? u := Lu.1.red_eq hhead
+      have hroot' := rootColour_up_right (rootColour_up_left hroot)
+      simp only [pathDepth] at hf
+      by_cases hu : red? u = true
+      · -- Red uncle: recolour, climb two levels.
+        obtain ⟨ul, uv, ur, rfl⟩ : ∃ ul uv ur, u = .node .red ul uv ur := by
+          match u, hu with
+          | .node .red ul uv ur, _ => exact ⟨ul, uv, ur, rfl⟩
+        have huv : (h z).left = uv := Lu.1.node_inv.1
+        have hcol : (h uv).red = true := by rw [← huv]; exact hur.trans hu
+        have Lz1 := (Ly.paint .black).up_right
+        have Lu1 := Lz1.down_left
+        rw [Lu1.1.node_inv.1] at Lu1
+        have Lz3 := ((Lu1.paint .black).up_left).paint .red
+        obtain ⟨H, hH, hT⟩ := insertFixupLoop_refines head fuel rot Lz3 hzh hroot' (by omega)
+        have hz : insFix (.left .red (.right c' (.node .red ul uv ur) z gp) y b) t =
+            insFix gp (.node .red (.node .black ul uv ur) z (.node .black t y b)) := by
+          rfl
+        rw [hz]
+        refine ⟨H, ?_, hT⟩
+        rw [← hH]
+        simp only [insertFixupLoop, red, hyr, parent, parentSide, hyz, hys, Side.other, childAt,
+          huv, hcol, makeBlack, makeRed, setColour_parent, colourBit, ite_true]
+      · -- Black uncle, `cur` inner: `cur = p; rotate(cur, s)`, then `make_black(p); make_red(pp);
+        -- rotate(pp, o)` with `p` now the old `cur`; then the loop exits.
+        have hcol : (h (h z).left).red = false := by
+          have := hur; simp only [red] at this; rw [this]; simpa using hu
+        obtain ⟨ct, tl, x, tr, rfl⟩ : ∃ ct tl x tr, t = .node ct tl x tr := by
+          match t, hcm with
+          | .node ct tl x tr, _ => exact ⟨ct, tl, x, tr, rfl⟩
+        have hcx : cur = x := hl.1.node_inv.1
+        subst hcx
+        have hyc : (h y).left = cur := Ly.1.node_inv.2.2.2.2.2.2.1.node_inv.1
+        obtain ⟨f, rfl⟩ : ∃ f, fuel = f + 1 := ⟨fuel - 1, by omega⟩
+        have L1 : Located (rotateAt h y .right) head cur z .right
+            (.node ct tl cur (.node .red tr y b)) (.right c' u z gp) := rotateAt_refines_right Ly
+        have hyx : (rotateAt h y .right y).parent = cur := by
+          obtain ⟨-, -, -, -, -, -, -, hrx⟩ := L1.1.node_inv
+          exact hrx.node_inv.2.2.2.1
+        have hxz : cur ≠ z := fun e => (nodup_node L1.up_right.1.nodup).2.2.2.1 (by simp [e])
+        have L3 := ((L1.paint .black).up_right).paint .red
+        have L4 := rotateAt_refines_left L3
+        have hT := (L4.2.fill L4.1).makeBlack_root
+        have hz : insFix (.left .red (.right c' u z gp) y b) (.node ct tl cur tr) =
+            ((gp.fill (rotate .left (.node .red u z (.node .black tl cur (.node .red tr y b))))
+              ).setBlack, 2) := by
+          rw [insFix, ite_eq_right hu]; rfl
+        rw [hz]
+        refine ⟨_, ?_, hT⟩
+        have hx4 : red (rotateAt (setColour (setColour (rotateAt h y .right) cur false) z true)
+            z .left) cur = false := by
+          simp only [red, rotateAt_red, setColour_red_ne _ _ _ hxz, setColour_red_eq]
+        rw [insertFixupLoop]
+        simp only [red, hyr, parent, parentSide, hyz, hys, Side.other, childAt, hcol,
+          Bool.false_eq_true, ite_true, ite_false, hyc, makeBlack, makeRed, hyx]
+        rw [insertFixupLoop_exit hx4]; rfl
+
+/-- **`NodeBase`-level `insert_fixup` performs `insFix`**: `insertFixupLoop_refines` from the
+Rust's entry, `insert_fixup(node)` with `p = parent(node)` and no rotation counted yet. -/
+theorem insertFixup_refines {fuel : Nat} {h : Heap} {head node P : Addr} {S : Side}
+    {t : RBNode Addr} {path : Path Addr} (hl : Located h head node P S t path)
+    (hn : node ≠ head) (hroot : rootColour path ≠ some .red) (hf : pathDepth path + 1 ≤ fuel) :
+    ∃ H, insertFixup fuel h head node = some (H, (insFix path t).2) ∧
+      Tree H head (insFix path t).1 := by
+  have hP : parent h node = P := (hl.1.root_fields (hl.1.root_mem hn)).1
+  obtain ⟨H, hH, hT⟩ := insertFixupLoop_refines head fuel 0 hl hn hroot hf
+  refine ⟨H, ?_, hT⟩
+  rw [insertFixup, hP, hH, Nat.zero_add]
+
+/-- The hole of a path lies above the subtree in it: the depth of the filled tree is at least the
+hole's depth plus the subtree's. -/
+theorem pathDepth_add_depth_le (path : Path Addr) (t : RBNode Addr) :
+    pathDepth path + t.depth ≤ (path.fill t).depth := by
+  induction path generalizing t with
+  | root => simp [pathDepth, Path.fill]
+  | left c pp y b ih =>
+    have := ih (.node c t y b)
+    simp only [pathDepth, Path.fill, RBNode.depth] at this ⊢
+    have := Nat.le_max_left t.depth b.depth
+    omega
+  | right c b y pp ih =>
+    have := ih (.node c b y t)
+    simp only [pathDepth, Path.fill, RBNode.depth] at this ⊢
+    have := Nat.le_max_right b.depth t.depth
+    omega
+
+/-- **The first fuel theorem**: fuel at least the depth of the tree `insert_fixup` starts from
+(`RBNode.depth`, the number of nodes on its longest branch: its height in edges plus one) always
+suffices, the loop's one departure from the Rust (the module doc) then never showing. -/
+theorem insertFixup_refines_depth {fuel : Nat} {h : Heap} {head node P : Addr} {S : Side}
+    {t : RBNode Addr} {path : Path Addr} (hl : Located h head node P S t path)
+    (hn : node ≠ head) (hroot : rootColour path ≠ some .red) (hf : (path.fill t).depth ≤ fuel) :
+    ∃ H, insertFixup fuel h head node = some (H, (insFix path t).2) ∧
+      Tree H head (insFix path t).1 := by
+  refine insertFixup_refines hl hn hroot ?_
+  have h1 := pathDepth_add_depth_le path t
+  obtain ⟨c, l, v, r, rfl⟩ : ∃ c l v r, t = .node c l v r := by
+    match t, hl.1.root_mem hn with
+    | .node c l v r, _ => exact ⟨c, l, v, r, rfl⟩
+  simp only [RBNode.depth] at h1
+  omega
 
 end Heap
 
