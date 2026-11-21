@@ -29,6 +29,12 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Changed
 
+- **Lean: the checking tools tightened** (the audit of 2026-11-21). `lake exe audit`'s lint now
+  rejects every `#` command (`#eval!` got past it) and every name with a `Lean` component
+  (`_root_.Lean...` did), and enforces the 100-column rule. The cross-check's trace prints the
+  sentinel's right child and neighbour links too, so a stray write to them fails the run, and
+  its last coverage item now counts what it claims, fix-ups that rotate at the root: 82 of the
+  9,935 erases, where the old count, 447, also included erasing the root node itself.
 - **Lean: a fresh-eyes audit before step 3c** (`Lean/docs/audits/2026-11-21-fresh-eyes/`, which
   keeps its verified findings). `switchWith_frame` and `rotateAt_apply` drop a hypothesis each
   that they did not need, so they are stronger; `modify_red` is now `Heap.modify_red`. The design

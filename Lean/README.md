@@ -127,10 +127,12 @@ and nothing more unless stated:
 `print_lean_model_cross_check_trace` runs 20,000 inserts and erases and prints, after each, the
 rotation count and kind, the whole tree of keys with every node's colour, the whole tree again
 by node with every node's `parent` word and equal-key chain, and the sentinel's scratch
-`parent` word. Keys repeat, so equal-key chains form (2,770 chained inserts, 1,554 `Link` and
-1,188 `Promote` erases), and the tree's size goes through phases that drain it to empty 75 times,
-so the fix-ups also run at the root (the root changes during 447 erases; every rotation count
-from 0 to 3 occurs). `lake exe xcheck` replays the same operations through two Lean models and
+`parent` word, right child link and neighbour links. Keys repeat, so equal-key chains form (2,770
+chained inserts, 1,554 `Link` and 1,188 `Promote` erases), and the tree's size goes through
+phases that drain it to empty 75 times, so the fix-ups also run at the root (82 erases rotate at
+the root; every rotation count from 0 to 3 occurs). A chain member not attached to the tree
+appears only by id, in its group's chain: its children, side and colour, which `link_into_chain`
+writes and `switch_with` overwrites before any read, are checked by reading the model only. `lake exe xcheck` replays the same operations through two Lean models and
 fails on any difference:
 
 - the zipper model the theorems are about (`Oris/RB/Fixup.lean`), against the tree of keys;
@@ -140,10 +142,12 @@ fails on any difference:
   rotation count and the same heap.
 
 It also fails if the trace is truncated (it ends with an `XC-END` line giving its counts), or if
-it stops exercising an operation kind, a rotation count, an emptied tree or a root change. Both
+it stops exercising an operation kind, a rotation count, an emptied tree or a rotation at the
+root (an erase of a node other than the root that changes the root: erasing the root itself
+changes it without any rotation, so it does not count). Both
 models agree with the Rust on all 20,000 lines, and the two root readings give identical heaps
 on all 9,935 erases. `xcheck` was checked to fail on a flipped side bit, a changed chain member
-or a changed sentinel field in the trace; on a truncated trace, a stale `XC-END` line, lines
+or a changed sentinel field in the trace (its right link included); on a truncated trace, a stale `XC-END` line, lines
 after it, a trace missing a rotation count or never emptying the tree, and empty input; and,
 injected into the heap model, on a black new node in `attach_to` and a chain link written the
 wrong way in `link_into_chain`. (A wrong side bit in `rotateAt` no longer builds at all:
