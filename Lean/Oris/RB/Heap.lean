@@ -883,6 +883,14 @@ theorem RepPath.head_side {h : Heap} {head a : Addr} {s : Side} {path : Path Add
   | left hy => exact absurd rfl hy
   | right hy => exact absurd rfl hy
 
+/-- The slot's link holds its occupant: `RepPath`'s first field, read back. -/
+theorem RepPath.childAt_slot {h : Heap} {head a p : Addr} {s : Side} {path : Path Addr}
+    (hp : RepPath h head a p s path) : childAt h p s = a := by
+  cases hp with
+  | root e => exact e
+  | left _ _ e => exact e
+  | right _ _ e => exact e
+
 /-! ### Per-address descriptions of the structural operations
 
 Each operation's result, address by address, under the distinctness its callers guarantee: one
@@ -1257,6 +1265,78 @@ theorem rotateAt_refines_right_frame {h : Heap} {head a b p : Addr} {s : Side} {
   obtain ⟨hab, -⟩ := hal.node_inv
   exact rotateAt_frame h a .right h₁ (by simpa [childAt, Side.other, hab] using h₂)
     (by simpa [childAt, Side.other, hab] using h₃) (by simpa [parent, hpa] using h₄)
+
+/-! ## Step 3a: `attach_to`, `substitute_with` and `switch_with`
+
+Each performs the zipper step `Fixup.lean`'s `insert` or `eraseAt` takes at that point (the note's
+§4, step 2): `attach_to` fills an empty hole with a red leaf, `substitute_with` splices out a node
+with at most one child, and `switch_with` puts another address at a node's tree position. Each
+comes with its per-address description (`_apply`), the list of records it changes (`_frame`) and
+its refinement theorem (`_refines`). -/
+
+/-- **`attachTo`, address by address**: `this` becomes a red leaf hanging at `(parent, s)`, both
+children the slot's old occupant and both neighbours itself; `parent`'s side-`s` link takes
+`this`; every other record is kept. -/
+theorem attachTo_apply (h : Heap) (this parent : Addr) (s : Side) (h₁ : this ≠ parent)
+    (x : Addr) :
+    attachTo h this parent s x =
+      if x = this then
+        { left := childAt h parent s, right := childAt h parent s, prev := this, next := this,
+          parent := parent, red := true, side := s }
+      else if x = parent then (h x).withChild s this
+      else h x := by
+  by_cases e₁ : x = this
+  · subst e₁
+    cases s <;> simp [attachTo, setNeighbour, setChild, setParentPtr, setParentSide, makeRed,
+      setColour, Heap.modify, childAt, h₁, Ne.symm h₁]
+  by_cases e₂ : x = parent
+  · subst e₂
+    cases s <;> simp [attachTo, setNeighbour, setChild, setParentPtr, setParentSide, makeRed,
+      setColour, Heap.modify, NodeRec.withChild, e₁]
+  · simp [attachTo, setNeighbour, setChild_eq, setParentPtr, setParentSide, makeRed,
+      setColour, Heap.modify, e₁, e₂]
+
+/-- **`attachTo` touches two addresses**: `this` and `parent`. -/
+theorem attachTo_frame (h : Heap) (this parent : Addr) (s : Side) {x : Addr} (h₁ : x ≠ this)
+    (h₂ : x ≠ parent) : attachTo h this parent s x = h x := by
+  simp only [attachTo, setNeighbour, setChild_eq, setParentPtr, setParentSide, makeRed,
+    setColour, Heap.modify]
+  simp [h₁, h₂]
+
+/-- **`NodeBase::attach_to` fills the empty hole** (the note's §4, step 2). If the slot `(p, s)`
+holds the sentinel at `path` (the empty hole where `insert_counted`'s descent ends), and `this` is
+a real address off the path, then after `attachTo h this p s` the heap represents the red leaf
+`node red nil this nil` at that slot and path: the zipper state `Fixup.lean`'s `insert` hands to
+`insFix`. Which records change is `attachTo_frame`. -/
+theorem attachTo_refines {h : Heap} {head this p : Addr} {s : Side} {path : Path Addr}
+    (hp : RepPath h head head p s path) (hn : this ≠ head) (hn0 : this ≠ null)
+    (hfresh : this ∉ path.listL ++ path.listR) :
+    Located (attachTo h this p s) head this p s (.node .red .nil this .nil) path := by
+  have htp : this ≠ p := fun e => by
+    rcases hp.slot with hph | hpm
+    · exact hn (e.trans hph)
+    · exact hfresh (e ▸ hpm)
+  have AT := attachTo_apply h this p s htp
+  have hslot := hp.childAt_slot
+  have hs : p = head → s = .left := fun e => by rw [e] at hp; exact hp.head_side
+  refine ⟨.node hn hn0 (by simp [AT]) (by simp [AT]) (by simp [AT, colourBit]) ?_ ?_, ?_⟩
+  · have e : (attachTo h this p s this).left = head := by simp [AT, hslot]
+    rw [e]; exact .nil
+  · have e : (attachTo h this p s this).right = head := by simp [AT, hslot]
+    rw [e]; exact .nil
+  · have hht : head ≠ this := Ne.symm hn
+    refine hp.retarget .nil (fun x hx hxp => ?_) ?_ ?_ ?_ ?_ ?_
+    · exact attachTo_frame h this p s (fun e => hfresh (e ▸ hx)) hxp
+    · by_cases hph : head = p
+      · subst hph; obtain rfl := hs rfl; simp [AT, hht, NodeRec.withChild]
+      · simp [AT, hht, hph]
+    · by_cases hph : head = p
+      · subst hph; simp [AT, hht]
+      · simp [AT, hht, hph]
+    · intro hph; simp [AT, hht, Ne.symm hph]
+    · cases s <;> simp [AT, childAt, Ne.symm htp, NodeRec.withChild]
+    · intro _
+      cases s <;> simp [AT, childAt, Side.other, Ne.symm htp, NodeRec.withChild]
 
 end Heap
 
