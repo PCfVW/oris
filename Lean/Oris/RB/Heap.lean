@@ -878,6 +878,37 @@ theorem RepPath.head_side {h : Heap} {head a : Addr} {s : Side} {path : Path Add
   | left hy => exact absurd rfl hy
   | right hy => exact absurd rfl hy
 
+/-! ### Per-address descriptions of the structural operations
+
+Each operation's result, address by address, under the distinctness its callers guarantee: one
+`if` chain per operation (`rotate_apply`), so that a proof reads a field of the new heap with one
+`simp` instead of unfolding every write. -/
+
+/-- `setChild`'s write on a single record. -/
+def NodeRec.withChild (n : NodeRec) : Side → Addr → NodeRec
+  | .left, v => { n with left := v }
+  | .right, v => { n with right := v }
+
+@[simp] theorem NodeRec.withChild_parent (n : NodeRec) (s : Side) (v : Addr) :
+    (n.withChild s v).parent = n.parent := by cases s <;> rfl
+@[simp] theorem NodeRec.withChild_side (n : NodeRec) (s : Side) (v : Addr) :
+    (n.withChild s v).side = n.side := by cases s <;> rfl
+@[simp] theorem NodeRec.withChild_red (n : NodeRec) (s : Side) (v : Addr) :
+    (n.withChild s v).red = n.red := by cases s <;> rfl
+@[simp] theorem NodeRec.withChild_left_left (n : NodeRec) (v : Addr) :
+    (n.withChild .left v).left = v := rfl
+@[simp] theorem NodeRec.withChild_left_right (n : NodeRec) (v : Addr) :
+    (n.withChild .left v).right = n.right := rfl
+@[simp] theorem NodeRec.withChild_right_left (n : NodeRec) (v : Addr) :
+    (n.withChild .right v).left = n.left := rfl
+@[simp] theorem NodeRec.withChild_right_right (n : NodeRec) (v : Addr) :
+    (n.withChild .right v).right = v := rfl
+
+/-- `setChild` is `NodeRec.withChild` at one address. -/
+theorem setChild_eq (h : Heap) (a : Addr) (s : Side) (v : Addr) :
+    setChild h a s v = h.modify a (·.withChild s v) := by
+  cases s <;> rfl
+
 /-- **`rotate` touches four addresses.** On any heap, `rotate h this s` changes no record but those
 of `this`, its side-`o` child `top` (`o = s.other`), `top`'s side-`s` child, and `this`'s parent.
 -/
@@ -923,6 +954,48 @@ theorem rotate_parent_fields (h : Heap) (this : Addr) (s : Side)
       simp_all [rotate, parent, parentSide, child, Side.other, setChild, setParentPtr,
         setParentSide, Heap.modify]
 
+/-- **`rotate`, address by address.** With `top` `this`'s side-`o` child (`o = s.other`), `m`
+`top`'s side-`s` child and `P` `this`'s parent, all distinct except that `m` and `P` may coincide
+(a rotation at the root whose moving subtree is empty: both are then the sentinel), `rotate h this
+s` gives `this` the child `m` on side `o` and the slot `(top, s)`; `top` the child `this` on side
+`s` and `this`'s old slot; `m` the slot `(this, o)`; `P` the child `top` in the link that held
+`this` (on `m`'s record too when `m = P`); and every other address its old record. The writes'
+order matters only where two of them hit the same field, which the distinctness rules out. -/
+theorem rotate_apply (h : Heap) (this : Addr) (s : Side)
+    (h₁ : this ≠ child h this s.other) (h₂ : this ≠ child h (child h this s.other) s)
+    (h₃ : child h this s.other ≠ child h (child h this s.other) s)
+    (h₄ : this ≠ parent h this) (h₅ : child h this s.other ≠ parent h this) (x : Addr) :
+    rotate h this s x =
+      if x = this then
+        { (h this).withChild s.other (child h (child h this s.other) s) with
+          parent := child h this s.other, side := s }
+      else if x = child h this s.other then
+        { (h x).withChild s this with parent := parent h this, side := parentSide h this }
+      else if x = child h (child h this s.other) s then
+        { (if x = parent h this then (h x).withChild (parentSide h this) (child h this s.other)
+            else h x) with parent := this, side := s.other }
+      else if x = parent h this then (h x).withChild (parentSide h this) (child h this s.other)
+      else h x := by
+  generalize ht : child h this s.other = top at *
+  generalize hm : child h top s = m at *
+  generalize hP : parent h this = P at *
+  generalize hps : parentSide h this = ps
+  simp only [rotate, setChild_eq, setParentPtr, setParentSide, Heap.modify, ht, hm, hP, hps]
+  by_cases e₁ : x = this
+  · subst e₁; simp [h₁, h₂, h₄]
+  by_cases e₂ : x = top
+  · subst e₂; simp [e₁, h₃, h₅]
+    cases s <;> rfl
+  by_cases e₃ : x = m
+  · subst e₃
+    by_cases e₄ : x = P
+    · subst e₄; simp [e₁, e₂]
+      cases s <;> cases ps <;> rfl
+    · simp [e₁, e₂, e₄]
+  by_cases e₄ : x = P
+  · subst e₄; simp [e₁, e₂, e₃]
+  · simp [e₁, e₂, e₃, e₄]
+
 /-- **`NodeBase::rotate(this, Left)` performs the zipper rotation** (step 1 of the note's §4). If
 the heap represents the located subtree `node c l a (node c' rl b rr)`, then after
 `rotate h a .left` it represents `Oris.RB.rotate .left` of it, `node c' (node c l a rl) b rr`, at
@@ -959,25 +1032,25 @@ theorem rotate_refines_left {h : Heap} {head a b p : Addr} {s : Side} {c c' : RB
   have hap : a ≠ p := fun e => hpt.2.1 e.symm
   have hbp : b ≠ p := fun e => hpt.2.2.2.1 e.symm
   have hmp : m ≠ head → m ≠ p := fun hmh e => hpt.2.2.1 (e ▸ hmrl hmh)
+  have RL := rotate_apply h a .left (by simpa [child, Side.other, hab] using hab')
+    (by simpa [child, Side.other, hab, hm] using ham)
+    (by simpa [child, Side.other, hab, hm] using hbm) (by simpa [parent, hpa] using hap)
+    (by simpa [child, Side.other, hab, parent, hpa] using hbp)
+  simp only [child, Side.other, parent, parentSide, hab, hm, hpa, hsa] at RL
   have rfr : ∀ x, x ≠ a → x ≠ b → x ≠ m → x ≠ p → rotate h a .left x = h x :=
-    fun x h₁ h₂ h₃ h₄ => rotate_frame h a .left h₁ (by simpa [child, Side.other, hab] using h₂)
-      (by simpa [child, Side.other, hab, hm] using h₃) (by simpa [parent, hpa] using h₄)
+    fun x h₁ h₂ h₃ h₄ => by simp [RL, h₁, h₂, h₃, h₄]
   have RA : (rotate h a .left a).left = (h a).left ∧ (rotate h a .left a).right = m ∧
       (rotate h a .left a).parent = b ∧ (rotate h a .left a).side = .left ∧
       (rotate h a .left a).red = (h a).red := by
-    simp [rotate, child, parent, parentSide, Side.other, setChild, setParentPtr,
-      setParentSide, Heap.modify, hab, hm, hpa, hsa, hab', ham, hap]
+    simp [RL, NodeRec.withChild]
   have RB : (rotate h a .left b).left = a ∧ (rotate h a .left b).right = (h b).right ∧
       (rotate h a .left b).parent = p ∧ (rotate h a .left b).side = s ∧
       (rotate h a .left b).red = (h b).red := by
-    simp [rotate, child, parent, parentSide, Side.other, setChild, setParentPtr,
-      setParentSide, Heap.modify, hab, hm, hpa, hsa, hab'.symm, hbm, hbp]
+    simp [RL, hab'.symm]
   have RM : m ≠ head → (rotate h a .left m).left = (h m).left ∧
       (rotate h a .left m).right = (h m).right ∧ (rotate h a .left m).red = (h m).red ∧
       (rotate h a .left m).parent = a ∧ (rotate h a .left m).side = .right := fun hmh => by
-    have hmp' := hmp hmh
-    simp [rotate, child, parent, parentSide, Side.other, setChild, setParentPtr,
-      setParentSide, Heap.modify, hab, hm, hpa, hsa, ham.symm, hbm.symm, hmp']
+    simp [RL, ham.symm, hbm.symm, hmp hmh]
   show Located _ head b p s (.node c' (.node c l a rl) b rr) path
   refine ⟨.node hb hnb RB.2.2.1 RB.2.2.2.1 (RB.2.2.2.2.trans hcb) ?_ ?_, ?_⟩
   · rw [RB.1]
@@ -1004,21 +1077,25 @@ theorem rotate_refines_left {h : Heap} {head a b p : Addr} {s : Side} {c c' : RB
       by_cases hmh : m = head
       · exact hph (e.trans hmh)
       · exact hpt.2.2.1 (by rw [e]; exact hmrl hmh)
+    have hs : p = head → s = .left := fun e => by rw [e] at hp; exact hp.head_side
     have HH : (rotate h a .left head).right = (h head).right ∧
         (rotate h a .left head).red = (h head).red ∧
         (p ≠ head → (rotate h a .left head).left = (h head).left) := by
-      by_cases hph : p = head
-      · obtain rfl : s = .left := by rw [hph] at hp; exact hp.head_side
-        refine ⟨?_, ?_, fun hne => absurd hph hne⟩ <;> by_cases hmh : m = head
-        all_goals first
-          | (simp [hmh, rotate, child, parent, parentSide, Side.other, setChild, setParentPtr,
-          setParentSide, Heap.modify, hab, hm, hpa, hsa, hph, Ne.symm ha, Ne.symm hb]; done)
-          | simp [rotate, child, parent, parentSide, Side.other, setChild, setParentPtr,
-          setParentSide, Heap.modify, hab, hm, hpa, hsa, hph, Ne.symm ha, Ne.symm hb, Ne.symm hmh]
-      · have := rotate_links h a .left (Ne.symm ha)
-          (by simpa [child, Side.other, hab] using Ne.symm hb)
-          (by simpa [parent, hpa] using Ne.symm hph)
-        exact ⟨this.2.1, this.2.2, fun _ => this.1⟩
+      have hah := Ne.symm ha
+      have hbh := Ne.symm hb
+      cases s
+      · by_cases h1 : head = m
+        · subst h1
+          by_cases h2 : head = p
+          · subst h2; simp [RL, hah, hbh, NodeRec.withChild]
+          · simp [RL, hah, hbh, h2]
+        · by_cases h2 : head = p
+          · subst h2; simp [RL, hah, hbh, h1, NodeRec.withChild]
+          · simp [RL, hah, hbh, h1, h2]
+      · have h2 : head ≠ p := fun e => by cases hs e.symm
+        by_cases h1 : head = m
+        · subst h1; simp [RL, hah, hbh, h2]
+        · simp [RL, hah, hbh, h1, h2]
     refine hp.retarget hr (fun x hx hxp => rfr x
         (fun e => (hout x hx).1 (memt _ (.inr (.inl e))))
         (fun e => (hout x hx).1 (memt _ (.inr (.inr (.inr (.inl e))))))
@@ -1026,24 +1103,13 @@ theorem rotate_refines_left {h : Heap} {head a b p : Addr} {s : Side} {c c' : RB
           by_cases hmh : m = head
           · exact (hout x hx).2 (e.trans hmh)
           · exact (hout x hx).1 (memt _ (.inr (.inr (.inl (e ▸ hmrl hmh)))))) hxp)
-      ?_ ?_ ?_ ?_ ?_
-    · exact HH.1
-    · exact HH.2.1
-    · exact HH.2.2
-    · by_cases hph : p = head
-      · obtain rfl : s = .left := by rw [hph] at hp; exact hp.head_side
-        by_cases hmh : m = head
-        · simp [hmh, rotate, child, parent, parentSide, Side.other, setChild, setParentPtr,
-          setParentSide, Heap.modify, hab, hm, hpa, hsa, hph, Ne.symm ha, Ne.symm hb]
-        · simp [rotate, child, parent, parentSide, Side.other, setChild, setParentPtr,
-          setParentSide, Heap.modify, hab, hm, hpa, hsa, hph, Ne.symm ha, Ne.symm hb, Ne.symm hmh]
-      · have hpm' := hpm hph
-        cases s <;> simp [rotate, child, parent, parentSide, Side.other, setChild, setParentPtr,
-          setParentSide, Heap.modify, hab, hm, hpa, hsa, Ne.symm hap, Ne.symm hbp, hpm']
+      HH.1 HH.2.1 HH.2.2 ?_ ?_
+    · by_cases hpm' : p = m
+      · subst hpm'; cases s <;> simp [RL, child, Ne.symm hap, Ne.symm hbp, NodeRec.withChild]
+      · cases s <;> simp [RL, child, Ne.symm hap, Ne.symm hbp, hpm', NodeRec.withChild]
     · intro hph
       have hpm' := hpm hph
-      cases s <;> simp [rotate, child, parent, parentSide, Side.other, setChild, setParentPtr,
-          setParentSide, Heap.modify, hab, hm, hpa, hsa, Ne.symm hap, Ne.symm hbp, hpm']
+      cases s <;> simp [RL, child, Side.other, Ne.symm hap, Ne.symm hbp, hpm', NodeRec.withChild]
 
 /-- `rotate_frame` for `rotate_refines_left`, in the zipper's terms: the only records the rotation
 changes are those of `a`, `b`, `b`'s left child (the first node of `rl`, or the sentinel when `rl`
@@ -1093,25 +1159,25 @@ theorem rotate_refines_right {h : Heap} {head a b p : Addr} {s : Side} {c c' : R
   have hap : a ≠ p := fun e => hpa' e.symm
   have hbp : b ≠ p := fun e => hpb' e.symm
   have hmp : m ≠ head → m ≠ p := fun hmh e => hplr (e ▸ hmlr hmh)
+  have RL := rotate_apply h a .right (by simpa [child, Side.other, hab] using hab')
+    (by simpa [child, Side.other, hab, hm] using ham)
+    (by simpa [child, Side.other, hab, hm] using hbm) (by simpa [parent, hpa] using hap)
+    (by simpa [child, Side.other, hab, parent, hpa] using hbp)
+  simp only [child, Side.other, parent, parentSide, hab, hm, hpa, hsa] at RL
   have rfr : ∀ x, x ≠ a → x ≠ b → x ≠ m → x ≠ p → rotate h a .right x = h x :=
-    fun x h₁ h₂ h₃ h₄ => rotate_frame h a .right h₁ (by simpa [child, Side.other, hab] using h₂)
-      (by simpa [child, Side.other, hab, hm] using h₃) (by simpa [parent, hpa] using h₄)
+    fun x h₁ h₂ h₃ h₄ => by simp [RL, h₁, h₂, h₃, h₄]
   have RA : (rotate h a .right a).right = (h a).right ∧ (rotate h a .right a).left = m ∧
       (rotate h a .right a).parent = b ∧ (rotate h a .right a).side = .right ∧
       (rotate h a .right a).red = (h a).red := by
-    simp [rotate, child, parent, parentSide, Side.other, setChild, setParentPtr,
-      setParentSide, Heap.modify, hab, hm, hpa, hsa, hab', ham, hap]
+    simp [RL, NodeRec.withChild]
   have RB : (rotate h a .right b).right = a ∧ (rotate h a .right b).left = (h b).left ∧
       (rotate h a .right b).parent = p ∧ (rotate h a .right b).side = s ∧
       (rotate h a .right b).red = (h b).red := by
-    simp [rotate, child, parent, parentSide, Side.other, setChild, setParentPtr,
-      setParentSide, Heap.modify, hab, hm, hpa, hsa, hab'.symm, hbm, hbp]
+    simp [RL, hab'.symm]
   have RM : m ≠ head → (rotate h a .right m).left = (h m).left ∧
       (rotate h a .right m).right = (h m).right ∧ (rotate h a .right m).red = (h m).red ∧
       (rotate h a .right m).parent = a ∧ (rotate h a .right m).side = .left := fun hmh => by
-    have hmp' := hmp hmh
-    simp [rotate, child, parent, parentSide, Side.other, setChild, setParentPtr,
-      setParentSide, Heap.modify, hab, hm, hpa, hsa, ham.symm, hbm.symm, hmp']
+    simp [RL, ham.symm, hbm.symm, hmp hmh]
   show Located _ head b p s (.node c' ll b (.node c lr a r)) path
   refine ⟨.node hb hnb RB.2.2.1 RB.2.2.2.1 (RB.2.2.2.2.trans hcb) ?_ ?_, ?_⟩
   · rw [RB.2.1]
@@ -1141,21 +1207,25 @@ theorem rotate_refines_right {h : Heap} {head a b p : Addr} {s : Side} {c c' : R
       by_cases hmh : m = head
       · exact hph (e.trans hmh)
       · exact hplr (by rw [e]; exact hmlr hmh)
+    have hs : p = head → s = .left := fun e => by rw [e] at hp; exact hp.head_side
     have HH : (rotate h a .right head).right = (h head).right ∧
         (rotate h a .right head).red = (h head).red ∧
         (p ≠ head → (rotate h a .right head).left = (h head).left) := by
-      by_cases hph : p = head
-      · obtain rfl : s = .left := by rw [hph] at hp; exact hp.head_side
-        refine ⟨?_, ?_, fun hne => absurd hph hne⟩ <;> by_cases hmh : m = head
-        all_goals first
-          | (simp [hmh, rotate, child, parent, parentSide, Side.other, setChild, setParentPtr,
-          setParentSide, Heap.modify, hab, hm, hpa, hsa, hph, Ne.symm ha, Ne.symm hb]; done)
-          | simp [rotate, child, parent, parentSide, Side.other, setChild, setParentPtr,
-          setParentSide, Heap.modify, hab, hm, hpa, hsa, hph, Ne.symm ha, Ne.symm hb, Ne.symm hmh]
-      · have := rotate_links h a .right (Ne.symm ha)
-          (by simpa [child, Side.other, hab] using Ne.symm hb)
-          (by simpa [parent, hpa] using Ne.symm hph)
-        exact ⟨this.2.1, this.2.2, fun _ => this.1⟩
+      have hah := Ne.symm ha
+      have hbh := Ne.symm hb
+      cases s
+      · by_cases h1 : head = m
+        · subst h1
+          by_cases h2 : head = p
+          · subst h2; simp [RL, hah, hbh, NodeRec.withChild]
+          · simp [RL, hah, hbh, h2]
+        · by_cases h2 : head = p
+          · subst h2; simp [RL, hah, hbh, h1, NodeRec.withChild]
+          · simp [RL, hah, hbh, h1, h2]
+      · have h2 : head ≠ p := fun e => by cases hs e.symm
+        by_cases h1 : head = m
+        · subst h1; simp [RL, hah, hbh, h2]
+        · simp [RL, hah, hbh, h1, h2]
     refine hp.retarget hr (fun x hx hxp => rfr x
         (fun e => (hout x hx).1 (memt _ (.inr (.inr (.inr (.inl e))))))
         (fun e => (hout x hx).1 (memt _ (.inr (.inl e))))
@@ -1164,20 +1234,12 @@ theorem rotate_refines_right {h : Heap} {head a b p : Addr} {s : Side} {c c' : R
           · exact (hout x hx).2 (e.trans hmh)
           · exact (hout x hx).1 (memt _ (.inr (.inr (.inl (e ▸ hmlr hmh)))))) hxp)
       HH.1 HH.2.1 HH.2.2 ?_ ?_
-    · by_cases hph : p = head
-      · obtain rfl : s = .left := by rw [hph] at hp; exact hp.head_side
-        by_cases hmh : m = head
-        · simp [hmh, rotate, child, parent, parentSide, Side.other, setChild, setParentPtr,
-          setParentSide, Heap.modify, hab, hm, hpa, hsa, hph, Ne.symm ha, Ne.symm hb]
-        · simp [rotate, child, parent, parentSide, Side.other, setChild, setParentPtr,
-          setParentSide, Heap.modify, hab, hm, hpa, hsa, hph, Ne.symm ha, Ne.symm hb, Ne.symm hmh]
-      · have hpm' := hpm hph
-        cases s <;> simp [rotate, child, parent, parentSide, Side.other, setChild, setParentPtr,
-          setParentSide, Heap.modify, hab, hm, hpa, hsa, Ne.symm hap, Ne.symm hbp, hpm']
+    · by_cases hpm' : p = m
+      · subst hpm'; cases s <;> simp [RL, child, Ne.symm hap, Ne.symm hbp, NodeRec.withChild]
+      · cases s <;> simp [RL, child, Ne.symm hap, Ne.symm hbp, hpm', NodeRec.withChild]
     · intro hph
       have hpm' := hpm hph
-      cases s <;> simp [rotate, child, parent, parentSide, Side.other, setChild, setParentPtr,
-          setParentSide, Heap.modify, hab, hm, hpa, hsa, Ne.symm hap, Ne.symm hbp, hpm']
+      cases s <;> simp [RL, child, Side.other, Ne.symm hap, Ne.symm hbp, hpm', NodeRec.withChild]
 
 /-- `rotate_frame` for `rotate_refines_right`: the only records changed are those of `a`, `b`,
 `b`'s right child (the first node of `lr`, or the sentinel) and `p`. -/
