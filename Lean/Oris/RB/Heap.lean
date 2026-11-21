@@ -908,6 +908,10 @@ def NodeRec.withChild (n : NodeRec) : Side → Addr → NodeRec
     (n.withChild s v).side = n.side := by cases s <;> rfl
 @[simp] theorem NodeRec.withChild_red (n : NodeRec) (s : Side) (v : Addr) :
     (n.withChild s v).red = n.red := by cases s <;> rfl
+@[simp] theorem NodeRec.withChild_prev (n : NodeRec) (s : Side) (v : Addr) :
+    (n.withChild s v).prev = n.prev := by cases s <;> rfl
+@[simp] theorem NodeRec.withChild_next (n : NodeRec) (s : Side) (v : Addr) :
+    (n.withChild s v).next = n.next := by cases s <;> rfl
 @[simp] theorem NodeRec.withChild_left_left (n : NodeRec) (v : Addr) :
     (n.withChild .left v).left = v := rfl
 @[simp] theorem NodeRec.withChild_left_right (n : NodeRec) (v : Addr) :
@@ -1458,6 +1462,225 @@ theorem substituteWith_refines_right {h : Heap} {head this p : Addr} {s : Side} 
       (substituteWith h this (h this).right (h this).right).side = s := by
   obtain ⟨-, -, -, -, -, -, -, hrr⟩ := hl.1.node_inv
   exact substituteWith_refines_core hl (by simp) hrr (fun x hx => by simp [hx])
+
+/-- **`switchWith`, address by address**: `this` takes `node`'s children, slot and colour; `node`'s
+right child, then its left child, take the slot `(this, right)` and `(this, left)`; `node`'s parent
+takes `this` in the link that held `node`; every other record is kept, `node`'s included (it is
+detached). `node`'s children and parent may coincide, only at the sentinel: its `parent` word ends
+as the right child's when both children are the sentinel, and its link is written when it is also
+the parent. -/
+theorem switchWith_apply (h : Heap) (this node : Addr) (h₁ : this ≠ node)
+    (h₂ : node ≠ childAt h node .left) (h₃ : node ≠ childAt h node .right)
+    (h₄ : node ≠ parent h node) (h₅ : this ≠ childAt h node .left)
+    (h₆ : this ≠ childAt h node .right) (h₇ : this ≠ parent h node) (x : Addr) :
+    switchWith h this node x =
+      if x = this then
+        { (h this) with
+          left := childAt h node .left
+          right := childAt h node .right
+          parent := parent h node
+          side := parentSide h node
+          red := red h node }
+      else if x = childAt h node .right then
+        { (if x = parent h node then (h x).withChild (parentSide h node) this else h x) with
+          parent := this, side := .right }
+      else if x = childAt h node .left then
+        { (if x = parent h node then (h x).withChild (parentSide h node) this else h x) with
+          parent := this, side := .left }
+      else if x = parent h node then (h x).withChild (parentSide h node) this
+      else h x := by
+  generalize hL : childAt h node .left = L at *
+  generalize hR : childAt h node .right = R at *
+  generalize hP : parent h node = P at *
+  generalize hps : parentSide h node = ps
+  generalize hc : red h node = c
+  simp only [childAt, parent, parentSide, red] at hL hR hP hps hc
+  have hn1 : node ≠ this := Ne.symm h₁
+  simp only [switchWith, setChild_eq, setParentPtr, setParentSide, setColour, Heap.modify,
+    childAt, parent, parentSide, red, hL, hR, hps, hn1, h₂, h₃]
+  have hn5 := Ne.symm h₅
+  have hn6 := Ne.symm h₆
+  have hn7 := Ne.symm h₇
+  by_cases e₁ : x = this
+  · subst e₁; simp [*]
+  by_cases e₂ : x = R
+  · subst e₂
+    by_cases e₃ : x = P <;> by_cases e₅ : x = L
+    · subst e₃; subst e₅; simp [*]; cases ps <;> rfl
+    · subst e₃; simp [*]; cases ps <;> rfl
+    · subst e₅; simp [*]
+    · simp [*]
+  by_cases e₃ : x = L
+  · subst e₃
+    by_cases e₄ : x = P
+    · subst e₄; simp [*]; cases ps <;> rfl
+    · simp [*]
+  by_cases e₄ : x = P
+  · subst e₄; simp [*]
+  · simp [*]
+
+/-- **`switchWith` touches four addresses**: `this`, `node`'s two children and `node`'s parent. -/
+theorem switchWith_frame (h : Heap) (this node : Addr) (h₀ : this ≠ node) {x : Addr}
+    (h₁ : x ≠ this) (h₂ : x ≠ childAt h node .left) (h₃ : x ≠ childAt h node .right)
+    (h₄ : x ≠ parent h node) : switchWith h this node x = h x := by
+  simp only [switchWith, setChild_eq, setParentPtr, setParentSide, setColour, Heap.modify,
+    childAt, parent, parentSide, red] at h₂ h₃ h₄ ⊢
+  simp [h₁, h₂, h₃, h₄, Ne.symm h₀]
+
+/-- **`NodeBase::switch_with` puts `this` at `node`'s tree position** (the note's §4, step 2). If
+the heap represents the located subtree `node c l node r`, and `this` is a real address neither in
+it nor on its path, then after `switchWith h this node` the heap represents `node c l this r` at
+the same slot and path: the address at that position changes, the subtrees and the colour do not.
+This is `erase_counted`'s last step in its two-child `Node` case (the in-order successor, already
+spliced out by `substitute_with`, takes the erased node's place: the zipper's `.right c _ m path`
+in `eraseAt`) and its whole tree effect in the `Promote` case (the next chain member, with an
+equal key, takes the attached member's place).
+
+The other conclusions are the children's `parent` words: `node`'s right child, and its left child
+unless both are the sentinel, now name `this`. For a child that is the sentinel these are its
+scratch fields. In a two-child erase whose successor `this` was `node`'s right child and had no
+right child, `node`'s right child is the sentinel by the time of the call, so the scratch `parent`
+now names `this`, side right, which is where the hole is, overwriting what `substitute_with` wrote
+(step 3c's hole invariant). -/
+theorem switchWith_refines {h : Heap} {head this node p : Addr} {s : Side} {c : RBColor}
+    {l r : RBNode Addr} {path : Path Addr}
+    (hl : Located h head node p s (.node c l node r) path) (hn : this ≠ head) (hn0 : this ≠ null)
+    (hpath : this ∉ path.listL ++ path.listR) (htree : this ∉ (RBNode.node c l node r).toList) :
+    Located (switchWith h this node) head this p s (.node c l this r) path ∧
+      (switchWith h this node (h node).right).parent = this ∧
+      (switchWith h this node (h node).right).side = .right ∧
+      ((h node).left ≠ (h node).right →
+        (switchWith h this node (h node).left).parent = this ∧
+        (switchWith h this node (h node).left).side = .left) := by
+  have hout := hl.outside
+  have hpt := hl.slot_not_mem
+  obtain ⟨hr, hp⟩ := hl
+  obtain ⟨-, hnh, -, hpa, hsa, hca, hL, hR⟩ := hr.node_inv
+  generalize hLe : (h node).left = L at hL
+  generalize hRe : (h node).right = R at hR
+  obtain ⟨-, -, hnl, hnr, hlr⟩ := nodup_node hr.nodup
+  simp only [RBNode.toList_node, List.mem_append, List.mem_cons, not_or] at htree hpt
+  have hLm : L ≠ head → L ∈ l.toList := hL.root_mem
+  have hRm : R ≠ head → R ∈ r.toList := hR.root_mem
+  -- Distinctness, the sentinel being the only address `L`, `R` and `p` can share.
+  have hnL : node ≠ L := fun e => by
+    by_cases hLh : L = head
+    · exact hnh (e.trans hLh)
+    · exact hnl (e ▸ hLm hLh)
+  have hnR : node ≠ R := fun e => by
+    by_cases hRh : R = head
+    · exact hnh (e.trans hRh)
+    · exact hnr (e ▸ hRm hRh)
+  have hnp : node ≠ p := fun e => hpt.2.1 e.symm
+  have htn : this ≠ node := htree.2.1
+  have htL : this ≠ L := fun e => by
+    by_cases hLh : L = head
+    · exact hn (e.trans hLh)
+    · exact htree.1 (e ▸ hLm hLh)
+  have htR : this ≠ R := fun e => by
+    by_cases hRh : R = head
+    · exact hn (e.trans hRh)
+    · exact htree.2.2 (e ▸ hRm hRh)
+  have htp : this ≠ p := fun e => by
+    rcases hp.slot with hph | hpm
+    · exact hn (e.trans hph)
+    · exact hpath (e ▸ hpm)
+  have hLR : L ≠ head → L ≠ R := fun hLh e => by
+    by_cases hRh : R = head
+    · exact hLh (e.trans hRh)
+    · exact hlr L (hLm hLh) (e ▸ hRm hRh)
+  have hLp : L ≠ head → L ≠ p := fun hLh e => hpt.1 (e ▸ hLm hLh)
+  have hRp : R ≠ head → R ≠ p := fun hRh e => hpt.2.2 (e ▸ hRm hRh)
+  have SW := switchWith_apply h this node htn (by simpa [childAt, hLe] using hnL)
+    (by simpa [childAt, hRe] using hnR) (by simpa [parent, hpa] using hnp)
+    (by simpa [childAt, hLe] using htL) (by simpa [childAt, hRe] using htR)
+    (by simpa [parent, hpa] using htp)
+  simp only [childAt, parent, parentSide, red, hLe, hRe, hpa, hsa, hca] at SW
+  have hs : p = head → s = .left := fun e => by rw [e] at hp; exact hp.head_side
+  have FR : (switchWith h this node R).parent = this ∧ (switchWith h this node R).side = .right :=
+    by simp [SW, Ne.symm htR]
+  have FL : L ≠ R → (switchWith h this node L).parent = this ∧
+      (switchWith h this node L).side = .left := fun hne => by simp [SW, Ne.symm htL, hne]
+  refine ⟨⟨.node hn hn0 (by simp [SW]) (by simp [SW]) (by simp [SW]) ?_ ?_, ?_⟩, FR.1, FR.2,
+    FL⟩
+  · have e : (switchWith h this node this).left = L := by simp [SW]
+    rw [e]
+    refine hL.reroot (fun hLh => ?_) (fun x hx hxL => ?_)
+    · have h1 := hLR hLh
+      have h2 := hLp hLh
+      simp [SW, Ne.symm htL, h1, h2]
+    · have h1 : x ≠ this := fun e => htree.1 (e ▸ hx)
+      have h2 : x ≠ R := fun e => by
+        by_cases hRh : R = head
+        · exact (hL.mem_ne hx).1 (e.trans hRh)
+        · exact hlr x hx (e ▸ hRm hRh)
+      have h3 : x ≠ p := fun e => hpt.1 (e ▸ hx)
+      simp [SW, h1, h2, hxL, h3]
+  · have e : (switchWith h this node this).right = R := by simp [SW]
+    rw [e]
+    refine hR.reroot (fun hRh => ?_) (fun x hx hxR => ?_)
+    · have h2 := hRp hRh
+      simp [SW, Ne.symm htR, h2]
+    · have h1 : x ≠ this := fun e => htree.2.2 (e ▸ hx)
+      have h2 : x ≠ L := fun e => by
+        by_cases hLh : L = head
+        · exact (hR.mem_ne hx).1 (e.trans hLh)
+        · exact hlr L (hLm hLh) (e ▸ hx)
+      have h3 : x ≠ p := fun e => hpt.2.2 (e ▸ hx)
+      simp [SW, h1, h2, hxR, h3]
+  · have hfr : ∀ x ∈ path.listL ++ path.listR, x ≠ p → switchWith h this node x = h x :=
+      fun x hx hxp => by
+        have h1 : x ≠ this := fun e => hpath (e ▸ hx)
+        have h2 : x ≠ L := fun e => by
+          by_cases hLh : L = head
+          · exact (hout x hx).2 (e.trans hLh)
+          · exact (hout x hx).1 (by
+              simp only [RBNode.toList_node, List.mem_append, List.mem_cons]
+              exact .inl (e ▸ hLm hLh))
+        have h3 : x ≠ R := fun e => by
+          by_cases hRh : R = head
+          · exact (hout x hx).2 (e.trans hRh)
+          · exact (hout x hx).1 (by
+              simp only [RBNode.toList_node, List.mem_append, List.mem_cons]
+              exact .inr (.inr (e ▸ hRm hRh)))
+        simp [SW, h1, h2, h3, hxp]
+    -- Off `this`, a record keeps its right link and colour (its left link too, off the slot's
+    -- node), and the slot's node gets `this` in the slot: whichever of `L`, `R` and `p` coincide.
+    have GEN : ∀ x, x ≠ this → (x = p → s = .left) →
+        (switchWith h this node x).right = (h x).right ∧
+        (switchWith h this node x).red = (h x).red ∧
+        (x ≠ p → (switchWith h this node x).left = (h x).left) ∧
+        (x = p → (switchWith h this node x).left = this) := by
+      intro x hxt hxs
+      rw [SW, ite_eq_right hxt]
+      by_cases e₁ : x = R
+      · rw [ite_eq_left e₁]
+        by_cases e₃ : x = p
+        · rw [ite_eq_left e₃]; obtain rfl := hxs e₃; simp [e₃]
+        · rw [ite_eq_right e₃]; simp [e₃]
+      · rw [ite_eq_right e₁]
+        by_cases e₂ : x = L
+        · rw [ite_eq_left e₂]
+          by_cases e₃ : x = p
+          · rw [ite_eq_left e₃]; obtain rfl := hxs e₃; simp [e₃]
+          · rw [ite_eq_right e₃]; simp [e₃]
+        · rw [ite_eq_right e₂]
+          by_cases e₃ : x = p
+          · rw [ite_eq_left e₃]; obtain rfl := hxs e₃; simp [e₃]
+          · rw [ite_eq_right e₃]; simp [e₃]
+    have HH := GEN head (Ne.symm hn) (fun e => hs e.symm)
+    refine hp.retarget hr hfr HH.1 HH.2.1 (fun hph => HH.2.2.1 (Ne.symm hph)) ?_ ?_
+    · by_cases hph : p = head
+      · have G := GEN p (Ne.symm htp) (fun _ => hs hph)
+        obtain rfl := hs hph
+        exact G.2.2.2 rfl
+      · have e₁ : p ≠ R := fun e => hRp (fun h' => hph (e.trans h')) e.symm
+        have e₂ : p ≠ L := fun e => hLp (fun h' => hph (e.trans h')) e.symm
+        cases s <;> simp [SW, childAt, Ne.symm htp, e₁, e₂, NodeRec.withChild]
+    · intro hph
+      have e₁ : p ≠ R := fun e => hRp (fun h' => hph (e.trans h')) e.symm
+      have e₂ : p ≠ L := fun e => hLp (fun h' => hph (e.trans h')) e.symm
+      cases s <;> simp [SW, childAt, Side.other, Ne.symm htp, e₁, e₂, NodeRec.withChild]
 
 end Heap
 
