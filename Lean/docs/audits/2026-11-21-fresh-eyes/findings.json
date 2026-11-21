@@ -1,0 +1,730 @@
+[
+ {
+  "dim": "honesty",
+  "review": {
+   "summary": "The statements are in good shape. I found no theorem whose statement is weaker than its doc says in a way that misleads about the main results. Arith.lean and Fixup.lean (barely changed since the 2026-11-15 audit) are clean. In Heap.lean, every refinement theorem (rotateAt_refines_*, attachTo/substituteWith/switchWith_refines, insertFixupLoop_refines, insertFixup_refines(_depth)) states what its doc claims, and the hypotheses I examined there are all needed. The defects are in the per-address `_apply`/`_frame` lemmas: three hypotheses are provably unnecessary (tested by deleting them in a scratch file, see F1–F3). There are also a few doc sentences that disagree with the statement or the built code.",
+   "findings": [
+    {
+     "id": "F1",
+     "title": "switchWith_frame's hypothesis `h₀ : this ≠ node` is not needed",
+     "severity": "medium",
+     "file": "Lean/Oris/RB/Heap.lean",
+     "line": 1537,
+     "description": "`theorem switchWith_frame (h : Heap) (this node : Addr) (h₀ : this ≠ node) {x : Addr} (h₁ : x ≠ this) (h₂ : x ≠ childAt h node .left) (h₃ : x ≠ childAt h node .right) (h₄ : x ≠ parent h node)`. Its doc says only \"`switchWith` touches four addresses: `this`, `node`'s two children and `node`'s parent\", which holds on every heap. The write set does not depend on `this ≠ node`: the two reads made after a write (`parent h node`, `red h node`) read fields that the earlier writes to `this` never change. The proof uses `Ne.symm h₀` in its closing `simp`, so the unused-variable linter cannot flag it. CONVENTIONS.md (\"Every hypothesis must be needed\") requires dropping it.",
+     "evidence": "In the scratch file audit/t1.lean I restated the theorem without h₀ and proved it with the original `simp only [...] at h₂ h₃ h₄ ⊢`, then `by_cases h₀ : node = this; · subst h₀; simp [h₁, h₂, h₃, h₄]; · simp [h₁, h₂, h₃, h₄, h₀]`. It checks with `lake env lean` and no errors. Heap.lean has no callers of switchWith_frame, so nothing downstream breaks.",
+     "fix": "Drop `h₀` and replace the proof's last line with the case split:\n```lean\ntheorem switchWith_frame (h : Heap) (this node : Addr) {x : Addr}\n    (h₁ : x ≠ this) (h₂ : x ≠ childAt h node .left) (h₃ : x ≠ childAt h node .right)\n    (h₄ : x ≠ parent h node) : switchWith h this node x = h x := by\n  simp only [switchWith, setChild_eq, setParentPtr, setParentSide, setColour, Heap.modify,\n    childAt, parent, parentSide, red] at h₂ h₃ h₄ ⊢\n  by_cases h₀ : node = this\n  · subst h₀; simp [h₁, h₂, h₃, h₄]\n  · simp [h₁, h₂, h₃, h₄, h₀]\n```"
+    },
+    {
+     "id": "F2",
+     "title": "rotateAt_apply's `h₂ : this ≠ m` is not needed, and its doc's distinctness list is too strict",
+     "severity": "low",
+     "file": "Lean/Oris/RB/Heap.lean",
+     "line": 995,
+     "description": "The doc (lines 985-991) says: \"`top` ... `m` ... and `P` ..., all distinct except that `m` and `P` may coincide\". The statement correspondingly takes `(h₂ : this ≠ childAt h (childAt h this s.other) s)`, i.e. `this ≠ m`. That hypothesis is unnecessary. When `this = m`, the later writes `setParentPtr this top` and `setParentSide this s` overwrite the `parent` word that the `m` writes set. `this`'s `s.other` link then holds `m` (= `this`), which is exactly what the first branch of the `if` chain states. The `m` branch is shadowed by the `x = this` branch, so the stated result is unchanged. The statement is weaker than it could be, and the doc's \"all distinct except\" reflects the extra hypothesis rather than a real requirement.",
+     "evidence": "In the scratch file audit/t1.lean I restated the theorem without h₂. I kept the original proof except for the `x = this` case, which became `by_cases e : x = m; · subst e; simp [h₁, h₄]; · simp [h₁, h₄, e]`. It checks, with only an unused-simp-arg warning.",
+     "fix": "Drop `h₂` and use that case split in the `e₁` branch. In `rotateAt_refines_left`/`_right` (lines 1066, 1193), remove the corresponding argument from the `rotateAt_apply` calls. Reword the doc to \"distinct except that `m` may coincide with `P` (a rotation at the root whose moving subtree is empty) or with `this`\". Alternatively, list exactly the four disequalities the statement takes."
+    },
+    {
+     "id": "F3",
+     "title": "switchWith_apply's `h₁ : this ≠ node` is not needed",
+     "severity": "nit",
+     "file": "Lean/Oris/RB/Heap.lean",
+     "line": 1486,
+     "description": "`theorem switchWith_apply (h : Heap) (this node : Addr) (h₁ : this ≠ node) (h₂ ...) ... (h₇ ...)`. Given h₂–h₇, the case `this = node` already satisfies the stated `if` chain. `this`'s record ends as `{h this with left := L, right := R, parent := P, side := ps, red := red h node}`, the first branch. So h₁ is redundant. It is the Rust's `debug_assert!(this != node)`, which the module doc lists as not modelled. Keeping it as a hypothesis is not dishonest, but CONVENTIONS.md asks for every hypothesis to be needed.",
+     "evidence": "In the scratch file audit/t2.lean, `switchWith_apply'` without h₁ checks: `by_cases h₁ : this = node`, then the original proof body after `subst` (with `hn1` removed) in the first case, and the original theorem in the second.",
+     "fix": "Either drop h₁ (wrap the proof in `by_cases h₁ : this = node`, as in the scratch file), or keep it and say in the doc that it is the `debug_assert!(this != node)` precondition kept for readability. The current wording (\"`this` takes `node`'s children, slot and colour\") does not justify it. Callers pass `htn` and are unaffected either way."
+    },
+    {
+     "id": "F4",
+     "title": "rotateAt_parent_fields' doc reads as unconditional, but the statement takes two hypotheses",
+     "severity": "low",
+     "file": "Lean/Oris/RB/Heap.lean",
+     "line": 964,
+     "description": "The doc says: \"Of `this`'s parent, `rotateAt` writes only the child link `this` hung from, which now holds `top`: the other link and the colour are kept, and so is the `parent` word unless ...\". The statement assumes `(h₁ : parent h this ≠ this) (h₂ : parent h this ≠ childAt h this s.other)`, and h₂ is genuinely needed: if `P = top` and `parentSide h this = s`, the later write `setChild top s this` overwrites the link. The doc names the one exception it handles inside the conclusion (P = m) but not these two preconditions. Read alone, it claims the result for every heap.",
+     "evidence": "Reading the statement against `rotateAt`'s write order (lines 233-247): `setChild thisParent ps top` is followed by `setChild top s this`. With `thisParent = top` and `ps = s`, the slot ends holding `this`, not `top`.",
+     "fix": "Add to the doc: \"for a parent distinct from `this` and from `top` (which `Located` guarantees: the slot's node is outside the subtree)\"."
+    },
+    {
+     "id": "F5",
+     "title": "Design note §4 step 1 says the refinement theorem states the changed-address list; as built it does not",
+     "severity": "low",
+     "file": "Lean/docs/heap-layer.md",
+     "line": 155,
+     "description": "After its \"As built\" paragraph (lines 143-149, \"the list of changed records is a separate theorem for each side, `rotateAt_refines_left_frame` and `_right_frame`\"), step 1 still carries the plan's sentence: \"The theorem also states exactly which addresses' fields changed: `a`, `b`, `rl`'s root, the parent, and `head` when `rl` is empty. Later frame arguments need that list.\" `rotateAt_refines_left`/`_right` state only `Located` of the result. A reader of the note will look for a frame conclusion in the refinement theorem and not find it.",
+     "evidence": "Compared heap-layer.md lines 143-156 with the statements at Heap.lean lines 1038-1041 and 1148-1151.",
+     "fix": "Rewrite as \"The plan had the theorem also state which addresses changed (`a`, `b`, `rl`'s root, the parent, `head` when `rl` is empty); as built that list is `rotateAt_refines_left_frame`/`_right_frame` (`head` arising as `(h b).left` when `rl` is empty).\" Or delete the sentence, since the As-built paragraph already says it."
+    },
+    {
+     "id": "F6",
+     "title": "README's file table still says only `rotate` is proven",
+     "severity": "low",
+     "file": "Lean/README.md",
+     "line": 42,
+     "description": "The table row for `Oris/RB/Heap.lean` says: \"... the abstraction relation to zippers, and `rotate` proven to perform the zipper rotation (the other proofs are the next steps of `docs/heap-layer.md`)\". The same README's trust-base section (lines 140-146) correctly lists five pointer functions proven: rotate, attach_to, substitute_with, switch_with and insert_fixup. The table understates what is proven and contradicts the trust-base section.",
+     "evidence": "Read README.md line 42 against lines 140-147 and against Heap.lean's module doc (steps 3a, 3b).",
+     "fix": "Rewrite the row as: \"... the abstraction relation to zippers; `rotate`, `attach_to`, `substitute_with`, `switch_with` and `insert_fixup` proven to perform their zipper steps (the rest are the next steps of `docs/heap-layer.md`)\"."
+    },
+    {
+     "id": "F7",
+     "title": "`Rep.root_fields` (and `substituteWith_refines_core`) take a membership witness where they mean \"non-empty\"",
+     "severity": "nit",
+     "file": "Lean/Oris/RB/Heap.lean",
+     "line": 568,
+     "description": "`theorem root_fields (hr : Rep h head a p s t) {x : Addr} (hx : x ∈ t.toList)` uses `x` only to rule out `t = nil`. Every caller supplies it as `hr.root_mem hn` from `a ≠ head` (for example `insertFixup_refines` line 2189: `(hl.1.root_fields (hl.1.root_mem hn)).1`). `substituteWith_refines_core` likewise takes `(hthis : this ∈ t.toList)` to mean `this ≠ head`. The statements are honest but indirect: a reader must work out that an arbitrary `x` serves only as a non-emptiness witness.",
+     "evidence": "Read the proofs (`cases hr with | nil => simp at hx | node ... => ...`). `hx` is used only in the `nil` case.",
+     "fix": "State `root_fields (hr : Rep h head a p s t) (ha : a ≠ head)`, proved with `cases hr with | nil => exact absurd rfl ha | node _ _ hp hs => exact ⟨hp, hs⟩`, and let callers pass `hn` directly. Optionally take `this ≠ head` in `substituteWith_refines_core` too."
+    }
+   ],
+   "recommendations": [
+    "insertFixup_refines_depth's doc (Heap.lean lines 2210-2212) says fuel at least the depth \"always suffices\". It suffices under the theorem's other hypotheses (a located real node, black root). Consider \"suffices, under `insertFixup_refines`' other hypotheses\".",
+    "rootColour_up_left's doc (line 1867), \"A black (or absent) root stays so one step down the path\", describes the hole moving up a step, from `.left c pp y b` to `pp`. \"when the hole climbs one step\" reads more accurately.",
+    "Heap.lean module doc line 21: \"from any located subtree whose tree has a black root\". The theorem also needs the subtree non-empty (`cur ≠ head`) and the fuel bound. Consider \"from any located node, in a tree with a black root, given enough fuel\".",
+    "Checked and found needed, or honest as stated: attachTo_apply's `this ≠ parent`; rotateAt_apply's h₁, h₃, h₄, h₅; rotateAt_parent_fields' h₂; insertFixupLoop_refines' `cur ≠ head` (with `cur = head` and an empty sibling, the Rust takes the inner branch where insFix takes the outer one) and its `rootColour` hypothesis (the Rust would paint the sentinel red); attachTo_refines' and switchWith_refines' freshness and real-address hypotheses; Rep.red_eq's sentinel-black hypothesis; all of Arith.lean's hypotheses; and erase_spec's `[Std.TransCmp cmp]` (needed by the `none` branch's lookup).",
+    "Scratch files: scratch/t1.lean (F1, F2) and scratch/t2.lean (F3; its second lemma `rpf`, an attempt to drop h₂ from rotateAt_parent_fields, failed with a recursion-depth error, consistent with F4's analysis that h₂ is needed)."
+   ]
+  },
+  "verdicts": [
+   {
+    "id": "F1",
+    "verdict": "confirmed",
+    "severity": "low",
+    "reasoning": "Verified in my own scratch file scratch/v1.lean. switchWith_frame' with no h₀ checks under `lake env lean` with no errors, using the proposed case split. grep finds no callers of switchWith_frame anywhere in Lean/. CONVENTIONS.md line 133 says \"Every hypothesis must be needed\", so the hypothesis should go. I lower the severity to low: the extra hypothesis only weakens a frame lemma nobody uses. It does not mislead about what is proven, and the Rust's debug_assert!(this != node) guarantees it anyway.",
+    "corrected_fix": ""
+   },
+   {
+    "id": "F2",
+    "verdict": "confirmed",
+    "severity": "low",
+    "reasoning": "rotateAt_apply' without h₂ (this ≠ m) checks in v1.lean, with the e₁ branch split on `x = m`. The reason is the write order in rotateAt (Heap.lean lines 195-203). When this = m, the final setParentPtr this top / setParentSide this s overwrite the m writes, and this's o-link holds topSChild = this, which matches the first if-branch. The only callers are lines 1066 and 1193, which pass h₂ positionally. They need their second explicit argument removed. The doc at lines 985-991 does say \"all distinct except that m and P may coincide\", which is stricter than needed. m = this is a cycle that never occurs in a valid tree, so the fix's doc wording should say so or simply list the four disequalities.",
+    "corrected_fix": ""
+   },
+   {
+    "id": "F3",
+    "verdict": "confirmed",
+    "severity": "nit",
+    "reasoning": "switchWith_apply' without h₁ checks in v1.lean. With this = node, `subst`, then the original body (with hn1 removed) closes the goal, and the other case reuses the original theorem. The hypothesis is redundant given h₂–h₇. It does model a debug_assert precondition that the def's doc already lists as not modelled. Either fix the reviewer proposes is acceptable. Dropping it is the one that strictly follows CONVENTIONS.md line 133. The only caller (line 1608) passes htn positionally and needs adjusting if h₁ is dropped.",
+    "corrected_fix": ""
+   },
+   {
+    "id": "F4",
+    "verdict": "confirmed",
+    "severity": "nit",
+    "reasoning": "The doc at lines 964-967 reads as unconditional, while the statement at line 969 takes h₁ : parent h this ≠ this and h₂ : parent h this ≠ childAt h this s.other. The write order confirms h₂ is needed: setChild thisParent ps top (line 200) is followed by setChild top s this (line 201), so with P = top and ps = s the slot ends holding this. h₁ is needed for the parent-word conjunct, because P = this gets its parent overwritten by top. The hypotheses are visible in the signature, so this is polish rather than dishonesty. The proposed doc addition is accurate.",
+    "corrected_fix": ""
+   },
+   {
+    "id": "F5",
+    "verdict": "confirmed",
+    "severity": "low",
+    "reasoning": "heap-layer.md lines 155-156 say in the present tense \"The theorem also states exactly which addresses' fields changed ... Later frame arguments need that list.\" That sentence follows the sketch block. The As-built paragraph at lines 143-149 already says the list lives in rotateAt_refines_left_frame/_right_frame, and the statements of rotateAt_refines_left/_right conclude only Located. The sentence is stale plan text that contradicts the As-built paragraph two lines above it. Either fix works; deleting it is simplest.",
+    "corrected_fix": ""
+   },
+   {
+    "id": "F6",
+    "verdict": "confirmed",
+    "severity": "low",
+    "reasoning": "README.md line 42 does say \"`rotate` proven to perform the zipper rotation (the other proofs are the next steps ...)\". The trust-base paragraph (lines 140-147) lists five proven functions: rotate, attach_to, substitute_with, switch_with and insert_fixup. The table understates what is proven and contradicts the same file. The proposed row text is correct.",
+    "corrected_fix": ""
+   },
+   {
+    "id": "F7",
+    "verdict": "refuted",
+    "severity": "nit",
+    "reasoning": "The premise that every caller supplies the witness as hr.root_mem hn is false. Rep.climb calls hl.root_fields hx and hr.root_fields hx at lines 586 and 598, and the disjointness proof calls hl.root_fields hxl and hr.root_fields hxr at lines 655-656. Each of those passes an arbitrary member x of the subtree. There, membership is exactly the information on hand, and a ≠ head is not directly available: it would need a separate lemma (head ∉ t.toList, or root_mem's converse). Taking membership is the more general and more convenient form for those callers. Only line 2188 goes through root_mem, and substituteWith_refines_core's hthis is discharged by `by simp` at its callers. The statement is honest, and the proposed change would make the internal callers worse.",
+    "corrected_fix": ""
+   }
+  ]
+ },
+ {
+  "dim": "fidelity",
+  "review": {
+   "summary": "I checked every Rust-modelling definition in Heap.lean against rbtree.rs, write by write and read by read, and found no fidelity defect. That covers the accessors, the mutators, initHead, rotateAt, attachTo, substituteWith, switchWith, unlinkFromChain, linkIntoChain, both fix-up loops, the two descents, insertCounted and eraseCountedWith. Fixup.lean's insFix, stage2L/R, delFix, eraseAt, insert and erase, and Arith.lean's models, also match their Rust case for case, and hpha.cpp where they model HPHA. The defects are all in documentation and checking: step numbering that the departure lists cite but the design note never defines, one HPHA-side extra read missing from the module doc's list, a cross-check blind spot on four of link_into_chain's writes, and a few stale or inaccurate doc sentences.",
+   "findings": [
+    {
+     "id": "F1",
+     "title": "\"Step 3c\" is cited by the departure lists but never defined, and \"step 4\" means two things in the note",
+     "severity": "medium",
+     "file": "Lean/CONVENTIONS.md",
+     "line": 121,
+     "description": "CONVENTIONS.md:121, the required departure list, says the fuel of erase_fixup and the descents is \"to be proven by the heap layer's steps 3c and 4\". Heap.lean:53 says the same (\"it is the plan's steps 3c and 4\"), and Heap.lean:1558 calls the scratch-parent property \"step 3c's hole invariant\". docs/heap-layer.md, the plan these refer to, has no 3a/3b/3c: §5 has a single row \"3\" (\"Steps 2–5 of §4 (steps 2 and 3 ✅)\"). The note also calls the same hole invariant \"the hole invariant of step 4\" (heap-layer.md:36-37, meaning §4's theorem 4). Yet at heap-layer.md:132-136, \"Left for step 4\" and \"The step-4 theorems will add head ≠ null\" mean the plan's step 4 (§5, the counted operations). The same paragraph says \"until then, the step-3 theorems about the Node branch take `!chained h node` as a hypothesis\". No step-3 theorem concerns the Node branch: that is §4 item 6, plan step 4. And no theorem in Heap.lean mentions `chained` (grep: only lines 135, 136, 441, 449). A reader following a departure's \"settled by step 3c\" pointer into the note cannot find it.",
+     "evidence": "Read the files and grepped for 3a/3b/3c in Lean/docs, README.md, CONVENTIONS.md, Oris/ and CHANGELOG.md. Hits are only in CONVENTIONS.md:121, Heap.lean (17, 24, 53, 1287, 1558, 1699, 1701, 1844) and CHANGELOG.md (15, 20); there are none in heap-layer.md. Grepped `chained` in Heap.lean: no theorem takes it.",
+     "fix": "In heap-layer.md §5, split row 3 into named sub-steps: 3a = §4 theorem 2 (structural operations), 3b = §4 theorem 3 (insert_fixup), 3c = §4 theorem 4 (erase_fixup and the hole invariant), 3d = §4 theorem 5 (cached root). In §1, write \"the hole invariant of step 3c (§4, theorem 4)\" instead of \"of step 4\". In §3, reword to \"the step-4 theorems about the `Node` branch will take `!chained h node` as a hypothesis\". Keep the convention: \"step N\" always means a §5 plan step and \"§4, theorem N\" means a theorem."
+    },
+    {
+     "id": "F2",
+     "title": "eraseFixupHpha's extra root read is a departure from hpha.cpp listed only in the definition's doc",
+     "severity": "low",
+     "file": "Lean/Oris/RB/Heap.lean",
+     "line": 55,
+     "description": "eraseFixupLoop (Heap.lean:330-331) says: \"With `reread`, the root is read before the test's `&&`, where HPHA reads it only when `cur` is black: a read, so no field changes.\" That is a departure of eraseFixupHpha from `Cpp/hpha.cpp` `erase_fixup` (`while (!cur->red() && cur != mHead.child(LEFT))`). The module doc's list mentions eraseFixupHpha only as \"re-reads it, as `Cpp/hpha.cpp` does\" (lines 55-57). Its \"Not modelled\" section lists only reads the model omits, not one it adds. It also calls the fuel \"this file's one departure from the Rust's behaviour\" (line 48), which is true of the Rust but leaves the HPHA-side departure unlisted. CONVENTIONS.md, \"Departures are listed\", requires both places.",
+     "evidence": "Compared eraseFixupLoop (Heap.lean:337-338, `let root := if reread then childAt h head .left else root₀` before `if !red h cur && cur != root`) with hpha.cpp:41. Every other read and write of eraseFixupLoop matches hpha.cpp:41-75 and rbtree.rs:697-774. HPHA's third case reads `w->child(s)` twice where the Rust reads it once, which is value-equivalent because `make_red(w)` changes no link.",
+     "fix": "Add a bullet to the module doc, for example under \"Not modelled\" or next to the two readings: \"`eraseFixupHpha` reads the root at every loop test before testing `cur`'s colour, where `hpha.cpp` reads it only when `cur` is black (the `&&` short-circuits): an extra read, which changes no field.\""
+    },
+    {
+     "id": "F3",
+     "title": "The cross-check cannot see four of link_into_chain's writes (a chained member's children, side and colour)",
+     "severity": "low",
+     "file": "Lean/Tools/XCheck.lean",
+     "line": 120,
+     "description": "CONVENTIONS.md:227-229 says the heap model \"transcribes [the pointer code] write by write, and the cross-check runs it\". The trace prints full records only for tree nodes (write_heap_shape / heapNode). A chained, non-attached member appears only as an id inside its representative's `[next|prev]` lists. So linkIntoChain's writes `setChild this .left null`, `setChild this .right null`, `setParentSide this .left` and `makeRed this` (Heap.lean:271-275) are never compared. They are never read before being overwritten either: only `parent = null` is observed, through `isAttached` choosing Link or Promote, and a later Promote's `switch_with` overwrites children, side and colour. Dropping or changing any of these four writes passes xcheck. The README's injected-fault list (README.md:129-131) tests only the neighbour links. linkIntoChain matches rbtree.rs:592-613 today, but nothing would catch a later regression, and step 4's `Groups` relation will want these fields pinned.",
+     "evidence": "Read rbtree.rs's write_heap_shape and write_chain (around lines 1884-1945), which print member ids only, and XCheck.lean's heapNode and chain (lines 108-125). Then traced erase_counted's Promote path (rbtree.rs:961-969): switch_with writes this.left, this.right, the parent word's pointer and side, and set_colour, before anything reads them.",
+     "fix": "Extend the trace format, in both the Rust producer and Tools/XCheck.lean as CONVENTIONS.md:232 requires, to print each non-attached chain member's whole record. For example, write each chain entry as `id:parent:side:colour:left:right`, or add a fourth `|` section listing every live non-attached node's record. Then add a README fault injection such as \"a chain member left black\"."
+    },
+    {
+     "id": "F4",
+     "title": "README's file table still says only rotate is proven",
+     "severity": "low",
+     "file": "Lean/README.md",
+     "line": 42,
+     "description": "The table row for Oris/RB/Heap.lean reads: \"the abstraction relation to zippers, and `rotate` proven to perform the zipper rotation (the other proofs are the next steps of `docs/heap-layer.md`)\". The same README, at lines 137-145, correctly lists five proven pointer functions (rotate, attach_to, substitute_with, switch_with, insert_fixup), and so do Heap.lean's module doc and heap-layer.md. The row is stale and contradicts its own file.",
+     "evidence": "Read README.md:36-46 and 133-150.",
+     "fix": "Rewrite the row, for example: \"... the abstraction relation to zippers; `rotate`, `attach_to`, `substitute_with`, `switch_with` and `insert_fixup` proven to perform their zipper steps (`erase_fixup` and the counted operations are the next steps of `docs/heap-layer.md`)\"."
+    },
+    {
+     "id": "F5",
+     "title": "insFix's doc assigns the no-parent exit to the last arm; the first arm handles it",
+     "severity": "nit",
+     "file": "Lean/Oris/RB/Fixup.lean",
+     "line": 120,
+     "description": "insFix's doc says: \"The last arm is the loop's exit with `p` black (or no parent at all: `cur` is the root), plus the unreachable red-root shape\". The no-parent case is the first arm, `| .root, t => (t.setBlack, 0)` (line 123), which matches before the last arm, so the last arm never sees `.root`. Rule 2 asks each arm's doc to say which Rust case it is.",
+     "evidence": "Read insFix (Fixup.lean:122-144). Arm order makes `.root` unreachable in the catch-all arm.",
+     "fix": "\"The first arm is the exit at the root (`cur` has no parent: `p` is the black sentinel); the last arm is the exit with `p` black, plus the unreachable red-root shape discussed in the module doc.\""
+    },
+    {
+     "id": "F6",
+     "title": "Arith.lean says \"Departures: none\" but does not say that the Rust's debug_assert!s are not modelled",
+     "severity": "nit",
+     "file": "Lean/Oris/Arith.lean",
+     "line": 22,
+     "description": "The module doc says \"**Departures from the Rust: none.**\" Four Rust functions it models carry debug_assert!s that panic in debug builds: `round_up` (`align.is_power_of_two()`), `bucket_spacing_function` (`size > 0 && size <= MAX_SMALL_ALLOCATION`), `_aligned` (also `size % MIN_ALLOCATION == 0`) and `_inverse` (`index < NUM_BUCKETS`). Heap.lean lists its debug_assert!s under \"Not modelled\"; Arith.lean is silent. As a result, bucketSpacingAligned_eq's doc remark \"(at `0` both wrap to `usize::MAX`)\" (line 352-353) describes the release build only: in a debug build both functions panic on their assertion at 0. Similarly, small_alloc_bucket's doc (line 400-402) says `alloc` sends every small request to a bucket, but `orisnik.rs` `alloc` returns `None` for `size == 0` first. The theorem is merely stronger there, not wrong.",
+     "evidence": "Read align.rs:19-22, bucket.rs:95-112 and orisnik.rs:476-485, and compared with Arith.lean's docs.",
+     "fix": "Add a \"Not modelled\" sentence: \"The Rust's `debug_assert!`s (`round_up`'s power-of-two alignment; the bucket functions' range checks), which the theorems' hypotheses satisfy wherever they matter.\" Qualify line 353 as \"(in a release build; a debug build's assertion rejects 0)\" and mention `alloc`'s `size == 0` early return in small_alloc_bucket's doc."
+    }
+   ],
+   "recommendations": [
+    "I confirmed these by side-by-side reading, so they need no fix. rotateAt reads ps, then thisParent, top and topSChild, then makes the nine writes, as in rbtree.rs:364-394. attachTo reads leafChild after the two neighbour writes. switchWith reads node's parent after the two set_child writes and node's colour after all the writes. substituteWith reads parent_side before parent. insertFixupLoop, both branches and the inner rotation, matches rbtree.rs:623-677. eraseFixupLoop, all four cases including w re-read after make_red(p), matches 697-774. The descents and eraseCountedWith's branch structure, red(repl) read before child(repl, s), match 892-1013. initHead matches head_ptr's first-touch writes. The NodeRec defaults match NodeBase::UNLINKED / TaggedPtr::null.",
+    "In Fixup.lean I checked insFix's four arms (inner rotate(p, s) with s = p's side), stage2L/R's third case (rotate(w, o) brings w.child(s) up) and fourth case, and delFix's case-1 path (p painted red, sibling w.child(s), stage2 called with pc = red). eraseAt's three Rust branches, including repl being the right child itself, match rbtree.rs and hpha.cpp. Every departure in its module list also appears in the definition docs.",
+    "Arith.lean: normalizeSize, MAX_ALLOCATION, growSize, the bucket functions, clampSmall (saturating_add and wrapping_sub) and isSmall match tree.rs, bucket.rs and align.rs operator for operator. hphaRoundUp matches hpha.h:117 `(x + (a-1)) & -(int)a`.",
+    "Optional hardening for xcheck: the trace never prints head.right, head.prev or head.next. No valid-tree path writes them today, since every root write uses side Left. Printing them in the sentinel section would turn a stray write into a mismatch for free."
+   ]
+  },
+  "verdicts": [
+   {
+    "id": "F1",
+    "verdict": "confirmed",
+    "severity": "medium",
+    "reasoning": "Verified. heap-layer.md has no 3a/3b/3c anywhere. Its §5 row 3 is \"Steps 2–5 of §4 (steps 2 and 3 ✅)\", so the note itself numbers §4's items as \"steps\". That makes \"step N\" ambiguous within the note. Line 37 (\"the hole invariant of step 4\") and line 166 (\"step 4's hole invariant\") mean §4 item 4, erase_fixup, which is part of plan step 3. Lines 132-137 (\"Left for step 4\", \"The step-4 theorems will add head ≠ null\") mean §5 plan step 4. Line 137 (\"the step-3 theorems about the `Node` branch take `!chained h node`\") points to theorems that belong to §4 item 6, i.e. plan step 4. Grep confirms that no theorem in Heap.lean mentions `chained` (only lines 135, 136, 441, 449). CONVENTIONS.md:121 and Heap.lean:53 send the reader to \"steps 3c and 4\", and 3c is defined only implicitly, through CHANGELOG.md's 3a/3b. The fix is sound. Also make the status line (heap-layer.md:3-4, \"§4, steps 2 and 3\") use \"theorems\" for §4 items, so the convention holds everywhere.",
+    "corrected_fix": "As proposed. In addition, rename §4's items from \"steps\" to \"theorems\" throughout the note (status line 3-4, the §5 table's \"Steps 2–5 of §4\" becomes \"Theorems 2–5 of §4\", and lines 37 and 166). Then \"step N\" unambiguously means a §5 row and \"3a/3b/3c/3d\" its sub-rows."
+   },
+   {
+    "id": "F2",
+    "verdict": "partly",
+    "severity": "nit",
+    "reasoning": "The fact is true. eraseFixupLoop with reread=true evaluates `childAt h head .left` before the colour test, where hpha.cpp:41 short-circuits. But CONVENTIONS.md \"Departures are listed\" covers places where a model deliberately does not follow *the Rust*. eraseFixupHpha models the C++ variant, and in a pure model an extra read has no observable effect: there is no field change and no possible fault, since the heap is a total function. The definition's doc already states it explicitly (Heap.lean:330-331), and the module doc's claim of \"one departure from the Rust's behaviour\" is accurate. So nothing misleads, and the two-places rule arguably does not apply. Mirroring it in the module doc's \"Not modelled\"-style list would be a symmetry nicety, not a required fix. Note that the current section header there covers reads of the Rust that are omitted, not reads that are added, so the bullet would need its own short line.",
+    "corrected_fix": "Optional: add one line to the module doc's bullet on the two readings, e.g. \"(`eraseFixupHpha` also reads the root before testing `cur`'s colour, where HPHA's `&&` short-circuits: a read, so no field changes.)\" No CONVENTIONS violation to fix."
+   },
+   {
+    "id": "F3",
+    "verdict": "partly",
+    "severity": "low",
+    "reasoning": "Verified that the trace prints chain members only as ids (rbtree.rs write_chain/write_heap_shape; XCheck.lean chain/heapNode). So linkIntoChain's writes of the left child, right child, side and colour (Heap.lean:271-275) are never compared. Mutating them would pass xcheck, and the README's fault list does not cover them. But the finding's own analysis shows these are dead writes: nothing reads them before switch_with overwrites them on Promote, and the Link path only unlinks neighbours. So no behaviour of the model, and no theorem, depends on them. CONVENTIONS.md:227-229 says the model transcribes write by write \"and the cross-check runs it\". It does not claim the cross-check observes every write, so nothing documented is inaccurate. The \"step 4's Groups will want these pinned\" point is speculative: if Groups pins them, the proofs will catch a wrong write. The proposed fix (a trace-format change in both the Rust producer and XCheck) is heavy for a dead-write regression risk. A one-line README note on this blind spot is proportionate. The format extension is optional.",
+    "corrected_fix": "Minimal: in README.md's xcheck paragraph, say that a non-attached chain member's children, side and colour are not in the trace (they are overwritten before any read), so linkIntoChain's writes to them are checked by reading only. Optional: extend the trace format as proposed, in both producer and consumer."
+   },
+   {
+    "id": "F4",
+    "verdict": "confirmed",
+    "severity": "low",
+    "reasoning": "README.md:42 says \"`rotate` proven to perform the zipper rotation (the other proofs are the next steps...)\". That is stale: README.md:137-145, Heap.lean's module doc and heap-layer.md §4 items 1-3 (✅) all record attach_to, substitute_with, switch_with and insert_fixup as proven. The row contradicts the rest of its own file. The proposed rewrite is correct.",
+    "corrected_fix": ""
+   },
+   {
+    "id": "F5",
+    "verdict": "confirmed",
+    "severity": "nit",
+    "reasoning": "Fixup.lean:120-121 assigns the \"no parent at all: `cur` is the root\" exit to the last arm. But `| .root, t => (t.setBlack, 0)` is the first arm (line 123), and Lean's first-match semantics mean the catch-all never sees `.root`. The doc misattributes the Rust case to the arm, contrary to transcription rule 2. The proposed rewording is correct. \"`p` is the black sentinel\" accurately describes the Rust (p = head, which is black), but it could be shortened to \"the exit at the root\".",
+    "corrected_fix": ""
+   },
+   {
+    "id": "F6",
+    "verdict": "confirmed",
+    "severity": "nit",
+    "reasoning": "Verified the debug_assert!s at align.rs:13,20 and bucket.rs:96,105,113. Arith.lean's module doc says \"Departures from the Rust: none\" and has no note that these are not modelled, while Heap.lean lists its debug_assert!s under \"Not modelled\": an inconsistency across files. The remark at Arith.lean:352-353, \"(at `0` both wrap to `usize::MAX`)\", is true only in release builds. Debug builds hit bucket.rs:96/105's `size > 0` assertion. The small_alloc_bucket doc (400-402) says `alloc` sends every small `s` to a bucket, but orisnik.rs:481-483 returns None for size == 0 first. The theorem's hypothesis `isSmall guard s` admits s = 0, so it is stronger than needed, not wrong. These are polish-level doc inaccuracies. The fix is correct.",
+    "corrected_fix": ""
+   }
+  ]
+ },
+ {
+  "dim": "robustness",
+  "review": {
+   "summary": "The Heap.lean proofs are sound and fast: the whole module elaborates in about 3.1 s (`lake env lean Oris/RB/Heap.lean`), so performance is not a problem. Their weakness is how they are written. A lot is repeated: the two rotations, the eight cases of `insertFixupLoop_refines`, and a sentinel-or-member case split that appears 27 times. Several proofs also depend on the exact shape of definitions or library lemmas: `insertFixupLoop` is unfolded by hand eight times, there are positional `.2.2.2.2.2.1` projections into `node_inv` and into the raw `List.nodup_append` normal form, a `simp [*]`, and `rfl` steps that unfold `insFix`. I compiled the most valuable factorings in scratch files against the built project: loop step lemmas, `Rep.ne_root`, a `reroot` proof through `nodup_node`, and `insFix` without `rfl`. All of them work, and they carry over directly to step 3c, where `delFix` is well-founded and `rfl` cannot unfold it (I checked this).",
+   "findings": [
+    {
+     "id": "R1",
+     "title": "insertFixupLoop is unfolded by hand in all eight cases; per-branch step lemmas would remove this",
+     "severity": "medium",
+     "file": "Lean/Oris/RB/Heap.lean",
+     "line": 1962,
+     "description": "Each of the eight non-exit cases of `insertFixupLoop_refines` ends by unfolding the loop's definition with a long `simp only`. Red-uncle cases (lines 1962-1963, 2021-2022, 2079-2080, 2145-2146): `simp only [insertFixupLoop, red, hyr, parent, parentSide, hyz, hys, Side.other, childAt, huv, hcol, makeBlack, makeRed, setColour_parent, colourBit, ite_true]`. Black-uncle cases (1985-1988, 2044-2047, 2110-2113, 2176-2179): `rw [insertFixupLoop]; simp only [red, hyr, ..., Bool.false_eq_true, ite_true, ite_false, hcy, makeBlack, makeRed]`. These blocks depend on simp normalising the `let (h, cur, p, rotations) := if … then … else …` tuple destructuring in the definition, and on the names `ite_true`, `ite_false` and `Bool.false_eq_true`. This is the part of the file most likely to break on a toolchain bump or a small change to `insertFixupLoop`, and it breaks in eight places at once. `eraseFixupLoop` (step 3c) has two such tuple-`let`s and four cases, so repeating the pattern there would make it worse.",
+     "evidence": "Scratch file `robust1.lean`: the three lemmas below compile against the built project. Scratch file `robust2.lean`: a copy of `insertFixupLoop_refines` whose four red-uncle endings are replaced by `rw [← hH, insertFixupLoop_red_uncle hyr hyz hys (by simpa only [red, childAt, Side.other, huv] using hcol)]; simp only [makeRed, makeBlack, childAt, Side.other, huv, colourBit, parent, setColour_parent]` compiles with no error.",
+     "fix": "Add one unfolding lemma per loop branch, each stated once and side-generic (the loop is already side-generic):\n```lean\ntheorem insertFixupLoop_red_uncle {head fuel h cur p pp s rot} (hp : red h p = true)\n    (hpp : parent h p = pp) (hs : parentSide h p = s) (hu : red h (childAt h pp s.other) = true) :\n    insertFixupLoop head (fuel + 1) h cur p rot =\n      insertFixupLoop head fuel (makeRed (makeBlack (makeBlack h p) (childAt h pp s.other)) pp)\n        pp (parent h pp) rot := by\n  rw [insertFixupLoop]; subst hpp hs\n  simp only [hp, hu, ite_true]; simp only [makeRed, makeBlack, parent, setColour_parent]\n\ntheorem insertFixupLoop_black_uncle_outer … (hu : red h (childAt h pp s.other) = false)\n    (hc : cur ≠ childAt h p s.other) :\n    insertFixupLoop head (fuel + 1) h cur p rot =\n      insertFixupLoop head fuel (rotateAt (makeRed (makeBlack h p) pp) pp s.other) cur p (rot + 1)\n\ntheorem insertFixupLoop_black_uncle_inner … (hc : cur = childAt h p s.other) :\n    insertFixupLoop head (fuel + 1) h cur p rot =\n      insertFixupLoop head fuel\n        (rotateAt (makeRed (makeBlack (rotateAt h p s) (parent (rotateAt h p s) p)) pp) pp s.other)\n        p (parent (rotateAt h p s) p) (rot + 2)\n```\nEach is proved by `rw [insertFixupLoop]; simp only [hp, hpp, hs, hu, hc, ite_true, ite_false, Bool.false_eq_true]`, and they sit next to `insertFixupLoop_exit`. Before writing 3c, add the matching set for `eraseFixupLoop`: `eraseFixupLoop_exit`, `_case1` (w red), `_case2`, and `_case34` (with and without case 3), stated with `parent h cur = p` and `parentSide h cur = s` as hypotheses. The refinement proof then never unfolds the loop."
+    },
+    {
+     "id": "R2",
+     "title": "rotateAt_refines_left and _right are about 110-line mirror images; the HH block is copied verbatim",
+     "severity": "medium",
+     "file": "Lean/Oris/RB/Heap.lean",
+     "line": 1038,
+     "description": "`rotateAt_refines_right` (1161-1273) repeats `rotateAt_refines_left` (1038-1143) line for line with left and right swapped. The 18-line sentinel analysis `have HH : (rotateAt h a .left head).right = … := by have hah := Ne.symm ha … cases s · by_cases h1 : head = m …` is textually identical at 1112-1129 and 1242-1259, apart from the side argument. The same left/right split continues in `rotateAt_refines_left_frame`/`_right_frame`, `Located.up_left`/`up_right`, `down_left`/`down_right`, `rootColour_up_left`/`_right` (identical proofs, 1868-1879), and the 12-line prelude of each of the eight `insertFixupLoop_refines` cases. Step 3c needs rotations on both sides at `p` (cases 1 and 4) and at `w` (case 3), in both mirror halves of `delFix`, so every extra side-specific lemma has to be written twice.",
+     "evidence": "Reading and diffing the two theorems. The file already uses the cure once: `substituteWith_refines_core` (1391) is a side-generic core with `_left` and `_right` as two-line corollaries.",
+     "fix": "Follow the `substituteWith_refines_core` precedent. Add a side-indexed node constructor, `def nodeOn : Side → RBColor → RBNode Addr → Addr → RBNode Addr → RBNode Addr | .left, c, i, a, o => .node c i a o | .right, c, i, a, o => .node c o a i`, where `i` is the child on side σ and `o` the child on side σ.other. Then `rotate σ (nodeOn σ c l a (nodeOn σ c' rl b rr)) = nodeOn σ c' (nodeOn σ c l a rl) b rr` holds by `cases σ <;> rfl`. Prove once:\n```lean\ntheorem rotateAt_refines (σ : Side)\n    (hl : Located h head a p s (nodeOn σ c l a (nodeOn σ c' rl b rr)) path) :\n    Located (rotateAt h a σ) head b p s (nodeOn σ c' (nodeOn σ c l a rl) b rr) path\n```\nand keep `_left` and `_right` as corollaries for readers. Supporting lemmas: `Rep.nodeOn_inv` (stated with `childAt h a σ` and `childAt h a σ.other`), `Located.down (σ)` and `Located.up (σ)`. A side-indexed path step `Path.stepOn σ c pp y b` would make `up`/`down` and the 3c case lemmas generic too. As a cheaper first step, at least lift the duplicated HH block into one lemma about `rotateAt` at the sentinel when `head ∉ {a, b}`."
+    },
+    {
+     "id": "R3",
+     "title": "The sentinel-or-member argument is repeated 27 times; one Rep.ne_root lemma replaces it",
+     "severity": "medium",
+     "file": "Lean/Oris/RB/Heap.lean",
+     "line": 1055,
+     "description": "The pattern `fun e => by by_cases hmh : m = head · exact ha (e.trans hmh) · exact hai.1 (e ▸ hmrl hmh)` proves `x ≠ k` when `k` starts a `Rep` of `u`, `x` is not the sentinel and `x ∉ u`. It is re-derived by hand at 1055-1062, 1092-1094, 1101-1103, 1107-1110, 1134-1136, 1182-1189, 1217-1219, 1229-1231, 1237-1240, 1263-1266, 1407-1410, 1415-1418, 1422-1425, 1580-1607 (six times in a row: hnL, hnR, htL, htR, hLR), 1627-1630, 1639-1642, 1648-1659, 1970-1973 and 2029-2032. `grep -c 'by_cases h[a-zA-Z]*h : [a-zA-Z]* = head'` counts 27. In step 3c the hole is often the sentinel and `w`'s children may be the sentinel, so this argument will appear many more times there.",
+     "evidence": "Scratch file `robust1.lean` compiles both lemmas below against the built project.",
+     "fix": "Add next to `Rep.root_mem`:\n```lean\ntheorem Rep.ne_root (hr : Rep h head k q σ u) (hxh : x ≠ head) (hxu : x ∉ u.toList) : x ≠ k :=\n  fun e => by\n    by_cases hk : k = head\n    · exact hxh (e.trans hk)\n    · exact hxu (e ▸ hr.root_mem hk)\n\ntheorem Rep.ne_root_of_mem (hr : Rep h head k q σ u) (hv : Rep h head a p' σ' v)\n    (hx : x ∈ v.toList) (hdis : x ∉ u.toList) : x ≠ k := hr.ne_root (hv.mem_ne hx).1 hdis\n```\nEach site then becomes one term, for example `have ham : a ≠ m := hbl.ne_root ha hai.1`."
+    },
+    {
+     "id": "R4",
+     "title": "Positional projections into 8-tuples (`.node_inv.2.2.2.2.2.1`, `.2.2.2.2.2.2.2.node_inv.1`)",
+     "severity": "medium",
+     "file": "Lean/Oris/RB/Heap.lean",
+     "line": 1922,
+     "description": "Facts are read out of `Rep.node_inv`'s eight-way conjunction by position. Examples: `hl.up_left.1.node_inv.2.2.2.2.2.1` (1922, 1926, 1936, 1995, 2054, 2120: the colour), `Ly.1.node_inv.2.2.2.2.2.2.2.node_inv.1` (2090), `Ly.1.node_inv.2.2.2.2.2.2.1.node_inv.1` (2156), `RB.2.2.2.2.trans hcb` and `RA.2.2.2.1` (1086-1088, 1213-1221), `hpt.2.2.2.1` (1064), `(nodup_node Lz.1.nodup).2.2.2.1` (1998, 2163), and `HH.2.2.1` (1686). A reader cannot tell what `.2.2.2.2.2.1` is without counting through `node_inv`'s statement. Adding or reordering a conjunct (3c may want, say, the children's `parent` words in `node_inv`) shifts every such index, and the resulting errors are hard to follow.",
+     "evidence": "Reading, plus `grep` for `\\.2\\.2\\.2\\.2|\\.2\\.2\\.2\\.1|hnd\\.[12]`: 22 lines.",
+     "fix": "Turn `Rep.node_inv`'s conclusion, and `nodup_node`'s, into structures with named fields, e.g. `structure Rep.NodeView … where eq : a = v; ne_head : v ≠ head; ne_null : v ≠ null; parent : (h v).parent = p; side : (h v).side = s; red : (h v).red = colourBit c; left : Rep h head (h v).left v .left l; right : Rep h head (h v).right v .right r`. Anonymous-constructor `obtain ⟨…⟩` destructuring keeps working, and the deep projections become `Ly.1.node_inv.red` and `Ly.1.node_inv.right.node_inv.eq`. For the most frequent read, add `theorem Located.root_red (hl : Located h head y P S (.node c l y r) pp) : (h y).red = colourBit c`."
+    },
+    {
+     "id": "R5",
+     "title": "Rep.reroot, Located.outside and Rep.nodup project into the raw List.nodup_append normal form; nodup_node already exists",
+     "severity": "medium",
+     "file": "Lean/Oris/RB/Heap.lean",
+     "line": 704,
+     "description": "`Rep.reroot` runs `simp only [RBNode.toList_node, List.nodup_append, List.nodup_cons] at hnd` and then uses `hnd.2.2 x hx x (by simp) rfl` and `hnd.2.1.1 hx` (704-710). `Located.outside` uses `hnd.1.2.2 x hx x hxt rfl` and `hnd.2.2 x (.inr hxt) x hx rfl` (822-832). `Rep.nodup` builds the same shape at 673-677. These indices depend on the exact right-hand side of core's `List.nodup_append`/`List.nodup_cons`. Core's `List` API has reformulated such lemmas before (`Disjoint` versus `∀ a ∈ l₁, ∀ b ∈ l₂, a ≠ b`), and `CONVENTIONS.md` § Toolchain plans bumps. `nodup_node` (803) was written to hide exactly this shape and is used 14 times, but it is defined after `Rep`, so `reroot` cannot use it.",
+     "evidence": "Scratch file `reroot.lean`: `Rep.reroot` re-proved with `obtain ⟨-, -, hal, har, -⟩ := nodup_node hnd` and `(by rintro rfl; exact hal hx)` / `(by rintro rfl; exact har hx)` compiles.",
+     "fix": "Move `nodup_node` above `namespace Rep`, since it depends only on `RBNode.toList_node`. Use it in `Rep.reroot` (as tested) and to close `Rep.nodup`. For `Located.outside`, add one lemma that wraps the path form: `theorem Path.nodup_withList (hnd : (path.withList L).Nodup) : L.Nodup ∧ ∀ x ∈ path.listL ++ path.listR, x ∉ L`, so that `List.nodup_append` is named in two places only."
+    },
+    {
+     "id": "R6",
+     "title": "switchWith_apply closes its goals with `simp [*]`, partly non-terminal (`simp [*]; cases ps <;> rfl`)",
+     "severity": "medium",
+     "file": "Lean/Oris/RB/Heap.lean",
+     "line": 1519,
+     "description": "Lines 1519-1534 close every branch with `simp [*]`, and three of them use it non-terminally: `subst e₃; subst e₅; simp [*]; cases ps <;> rfl` (1523), `subst e₃; simp [*]; cases ps <;> rfl` (1524), `subst e₄; simp [*]; cases ps <;> rfl` (1530). `simp [*]` hands simp every hypothesis in context, including the generalisation equations `hL`, `hR`, `hP`, `hps` and `hc`. Which of them each branch actually uses is invisible. Adding a hypothesis, or a change in how simp orients one, changes the outcome. The sibling proofs `rotateAt_apply` and `substituteWith_apply` give explicit lemma lists. The proof also relies on `subst e₁` (`e₁ : x = this`) eliminating `this` rather than `x`.",
+     "evidence": "In scratch file `sw.lean` I replaced each `simp [*]` with what looked like the needed list (e.g. `simp [hP, hc, h₂, h₃, hn5, hn6, hn7]` after `subst e₁`). Two branches still failed: an unsolved `if x = P …` goal and a failing `cases ps <;> rfl`. So the proof needs more of the context than it appears to, and nobody reading it can know which parts.",
+     "fix": "Rewrite the proof in the style of `rotateAt_apply`. Generalise only what the statement mentions, finish the `simp only [switchWith, …]` prelude with the generalisation equations included, so that no `(h node).…` term is left for `[*]` to catch, then do the case split and close each branch with an explicit `simp [e…, hn…]`. Do the `cases ps` before the closing `simp`, so that no `simp` is non-terminal."
+    },
+    {
+     "id": "R7",
+     "title": "`rfl` steps unfold insFix by definitional reduction; the same style cannot work for the well-founded delFix",
+     "severity": "low",
+     "file": "Lean/Oris/RB/Heap.lean",
+     "line": 1956,
+     "description": "Four times, `have hz : insFix (.left .red (.left c' gp z (.node .red ul uv ur)) y b) t = insFix gp (…) := by rfl` (1956-1958, 2015-2017, 2073-2075, 2139-2141), plus `rw [insFix, ite_eq_right hu]; rfl` (2104, 2170) and the closing `rfl`s at 1913, 1988, 2047, 2113 and 2179. These rely on `insFix` being compiled by structural recursion, so the kernel can unfold it and decide `red? (node red …)`. `delFix` is defined with `termination_by path` (Fixup.lean:449), and `rfl` does not unfold it. Copying the 3b proof style into 3c will therefore fail, and the two proofs will end up in different styles.",
+     "evidence": "Scratch file `robust1.lean`: `simp only [insFix, red?, ite_true, RBNode.setBlack]` closes the `hz` of line 1956 without `rfl`. Scratch file `wf.lean`: `delFix (.left .black pp y .nil) (.node .red x 1 .nil) = (… .fill …, 0) := by rfl` fails ('not definitionally equal'), while `rw [delFix]; rfl` succeeds. Fixup.lean already uses `rw [delFix.eq_def]` (lines 474, 815, 833, …).",
+     "fix": "Use the equation lemmas consistently: `rw [insFix]` / `simp only [insFix, red?, ite_true, RBNode.setBlack]` in place of the bare `rfl`s. Before 3c, add per-arm equation lemmas for `delFix` in Fixup.lean, next to `delFix_red`, e.g. `delFix_left_red_sibling (hx : red? x = false) : delFix (.left pc pp y (node red wl wv wr)) x = match stage2L … with …`. The heap proof can then rewrite with named facts instead of `delFix.eq_def` plus a `simp only` that depends on the `match` compilation."
+    },
+    {
+     "id": "R8",
+     "title": "Non-terminal bare `simp` followed by `cases … <;> rfl`",
+     "severity": "low",
+     "file": "Lean/Oris/RB/Heap.lean",
+     "line": 1376,
+     "description": "`substituteWith_apply` line 1376: `· subst e₂; simp; cases ps <;> rfl`, a bare non-terminal `simp`. `rotateAt_apply` lines 1018-1019 (`subst e₂; simp [e₁, h₃, h₅]` then `cases s <;> rfl`) and 1023-1024 (`simp [e₁, e₂]` then `cases s <;> cases ps <;> rfl`) are the same pattern with a lemma list. Whatever simp leaves behind must then be closed by `rfl` after the case split, so a change to the simp set (new simp lemmas about structure updates or `if`) changes the residual goal and breaks the `rfl`.",
+     "evidence": "Reading. Each residual goal is a `NodeRec` structure-update equality that `rfl` closes only in the exact form the current simp leaves.",
+     "fix": "Split first and finish with simp: `· subst e₂; cases ps <;> simp [NodeRec.withChild]` (and likewise `cases s <;> simp [e₁, h₃, h₅, NodeRec.withChild]`), or replace the bare `simp` with a `simp only [...]` list."
+    },
+    {
+     "id": "R9",
+     "title": "Unused lemmas, one with the file's heaviest automation",
+     "severity": "low",
+     "file": "Lean/Oris/RB/Heap.lean",
+     "line": 968,
+     "description": "`rotateAt_parent_fields` (968-986) unfolds every write and closes an eight-way case split with `simp_all [rotateAt, parent, parentSide, childAt, Side.other, setChild, setParentPtr, setParentSide, Heap.modify]`. It is cited only in docs (Heap.lean:1037, heap-layer.md:147). Also unused by any proof: `rotateAt_links` (955), `rotateAt_refines_left_frame` and `_right_frame` (1148, 1277), and `switchWith_frame` (1537, zero references). They are offered as API for later frame arguments, but carry the most toolchain-sensitive proof style while nothing checks they fit their intended use.",
+     "evidence": "`grep` over Oris/ and Tools/: `rotateAt_parent_fields` has 1 reference (a doc comment), `rotateAt_links` 1 (doc), `switchWith_frame` 0, and each `_refines_*_frame` 1 (doc).",
+     "fix": "Re-prove `rotateAt_parent_fields` and `rotateAt_links` without `simp_all`: `simp only [rotateAt, setChild_eq, setParentPtr, setParentSide, Heap.modify]` followed by `by_cases` and a terminal `simp [...]`, as `rotateAt_frame` does. Or derive them from `rotateAt_apply` where its hypotheses are available. Review the remaining frame lemmas when 3c is written, and delete any that 3c does not use."
+    },
+    {
+     "id": "R10",
+     "title": "Fixup.lean: `rename_i` with eleven auto-generated names after `split`",
+     "severity": "low",
+     "file": "Lean/Oris/RB/Fixup.lean",
+     "line": 1072,
+     "description": "In the erase spec, `unfold eraseAt; split` is followed by `rename_i c₁ cl ll lv lr x₁ cr rl rv rr hm` (1072), `rename_i c₁ x₁ cr rl rv rr hm` (1069) and `rename_i c₁ l₁ x₁ hm` (1066), and the same again at 1112-1127. The names are bound by the positions of `split`'s inaccessible hypotheses, which depend on how `eraseAt`'s `match` is compiled and on `split`'s implementation. If either changes, the names land on the wrong variables, with confusing errors. The `fun_induction` proofs in the same file avoid `caseN` names for this reason (comment at 516-518), but these sites were not changed in the same way.",
+     "evidence": "Reading (`grep rename_i`: 39 occurrences in Fixup.lean; the ones binding more than two names are at 835-923 and 1065-1127).",
+     "fix": "Do the case split on the explicit shape instead of `split`: `match hm : r, l with …`, or `rcases` on a small lemma `eraseAt_cases` that states the three shapes with named components. Or at least add a comment, as at 516-518, saying which constructor's fields each `rename_i` binds."
+    }
+   ],
+   "recommendations": [
+    "Do these in order of payoff, before 3c: R1 (loop step lemmas; also write the `eraseFixupLoop_case*` versions first), R3 (`Rep.ne_root`), R4/R5 (named projections, a single home for the `List.nodup_append` shape), then R2 (side-generic `rotateAt_refines` via `nodeOn`). Together they should cut `insertFixupLoop_refines` and the rotation proofs by roughly a third. More importantly, 3c's proof can then be written mostly as one side-generic argument rather than mirrored pairs.",
+    "Add a short 'Proof robustness' section to CONVENTIONS.md: no `simp [*]`, no non-terminal bare `simp`/`simp_all`, no `rfl` that unfolds a recursive definition (use its equation lemmas), named fields rather than `.2.2.2` projections into conjunctions of more than three facts, and `rename_i` only with a comment saying what it binds. `Tools/Audit.lean`'s banned-construct lint could flag `simp [*]` and `simp_all [*]` cheaply.",
+    "Elaboration time is not a concern: `time lake env lean Oris/RB/Heap.lean` reports 3.1 s for the whole module, so the factorings above are for robustness, not speed.",
+    "When Heap.lean is split, put the per-branch loop lemmas (R1) and `insertFixupLoop_exit` in the fix-ups file next to the refinement theorems, and `Rep.ne_root`, `nodup_node` and the named-field views in the relation file, so that 3c imports them without the structural-operation proofs."
+   ]
+  },
+  "verdicts": [
+   {
+    "id": "R1",
+    "verdict": "confirmed",
+    "severity": "medium",
+    "reasoning": "Checked at Heap.lean 1962-1963 and 1985-1988 (and the mirrored sites): each of the eight non-exit cases closes by unfolding `insertFixupLoop` (def at 284-315, which includes the tuple-`let` at 303-308) with a long `simp only` list. The reviewer's scratch file robust1.lean compiles as is against the built project. It holds all three proposed lemmas (`insertFixupLoop_red_uncle`, `_black_uncle_outer`, `_black_uncle_inner`) with the short proofs given, and robust2.lean (the refinement proof with its red-uncle endings swapped for the new lemma) also compiles. The lemma statements match the definition: in the inner case `pp` is taken before the first rotation and `p` becomes `parent (rotateAt h p s) p`, and simp normalises `rot + 1 + 1` to `rot + 2`. This is real duplication, and its sensitivity to toolchain or definition changes would repeat in 3c. 'Most likely part of the file to break' is a judgment call, but the fix is correct and has been tested.",
+    "corrected_fix": ""
+   },
+   {
+    "id": "R2",
+    "verdict": "partly",
+    "severity": "low",
+    "reasoning": "The duplication is real. A diff of Heap.lean 1112-1129 against 1242-1259 shows the HH block differs only in the side argument on its first three lines, and `rotateAt_refines_left` and `_right` mirror each other. However, CONVENTIONS.md 172-174 makes mirror-image definitions (`L`/`R`) and mirror-image theorems (`_left`/`_right`) a naming convention, and Fixup.lean is written in that style throughout, so side-specific pairs are an accepted pattern, not a defect. The full `nodeOn` generalisation is a large refactor whose payoff for 3c is a guess. It changes how the Located/Rep lemmas are stated, and nobody has tested it (the `rotate`/`nodeOn` rfl identity does hold by hand-checking). The cheap, clearly worthwhile part is lifting the duplicated HH sentinel block into one side-generic lemma, in the style of `substituteWith_refines_core`.",
+    "corrected_fix": "Lift the HH block into one side-generic lemma about `rotateAt h a σ head` when `head ∉ {a, b}` (or follow the `substituteWith_refines_core` pattern for a `rotateAt_refines_core`, with `_left`/`_right` as corollaries). Decide on a wider `nodeOn` refactor while writing 3c, if the mirrored case lemmas actually multiply. Keep the `_left`/`_right` names as CONVENTIONS.md requires."
+   },
+   {
+    "id": "R3",
+    "verdict": "confirmed",
+    "severity": "medium",
+    "reasoning": "`grep -c 'by_cases h[a-zA-Z]*h : [a-zA-Z]* = head'` gives 27 in Heap.lean. The pattern is visible at 1055-1062 (`ham`, `hbm`) and at 1970-1973 (`hcy`, the same argument via `hrb.root_mem`). The proposed `Rep.ne_root` and `Rep.ne_root_of_mem` compile in robust1.lean against the built project. This is a straightforward, low-risk deduplication that 3c will need.",
+    "corrected_fix": ""
+   },
+   {
+    "id": "R4",
+    "verdict": "confirmed",
+    "severity": "low",
+    "reasoning": "There are positional projections such as `Ly.1.node_inv.2.2.2.2.2.1` (Heap.lean 1993, and the other listed lines) for the colour conjunct of the eight-way `Rep.node_inv`. Readers do have to count through the statement, and adding a conjunct would shift every index. It is a readability and maintenance cost, not a correctness or honesty issue, hence low rather than medium. The fix is sound: anonymous-constructor `obtain ⟨…⟩` works on structures, and `Located.root_red` alone covers the most frequent read.",
+    "corrected_fix": ""
+   },
+   {
+    "id": "R5",
+    "verdict": "confirmed",
+    "severity": "low",
+    "reasoning": "`Rep.reroot` (Heap.lean 700-710) projects `hnd.2.2 …` and `hnd.2.1.1` out of the `List.nodup_append`/`nodup_cons` normal form, and `Located.outside` (822-832) does the same with `hnd.1.2.2`/`hnd.2.2`. `nodup_node` (803) depends only on `RBNode.toList_node` and sits after `namespace Rep`, so it can move up. The reviewer's reroot.lean compiles. The real gain is localising the dependence on core's lemma shape, which `nodup_node` itself still has, but in one place. That is minor.",
+    "corrected_fix": ""
+   },
+   {
+    "id": "R6",
+    "verdict": "partly",
+    "severity": "low",
+    "reasoning": "Real: `switchWith_apply` (Heap.lean 1519-1534) closes branches with `simp [*]`, three of them non-terminally (`simp [*]; cases ps <;> rfl`). But the reviewer's attempt to replace `[*]` with explicit lists failed (sw.lean), so the proposed rewrite is unvalidated and the hardest part. I tested a smaller fix in scratch: `cases ps <;> simp [*, NodeRec.withChild]` in place of each `simp [*]; cases ps <;> rfl`. It compiles, and it removes the non-terminal simp, the more fragile half. The `subst e₁` concern is spurious: whichever variable `subst` eliminates, the remaining goal is the same up to renaming, and `simp [*]` closes it. Severity is low: the lemma is a local apply lemma with a precise statement, so if it breaks it breaks visibly.",
+    "corrected_fix": "Split first and finish with a terminal simp: replace `simp [*]; cases ps <;> rfl` with `cases ps <;> simp [*, NodeRec.withChild]` at the three sites (checked in scratch: compiles). Replacing `[*]` with explicit lists is optional polish, and it needs the generalisation equations named."
+   },
+   {
+    "id": "R7",
+    "verdict": "partly",
+    "severity": "nit",
+    "reasoning": "True that `rfl` cannot unfold the well-founded `delFix` (Fixup.lean 425-450, `termination_by path`). But the 3b `rfl`s on the structurally recursive `insFix` are sound and stable: the kernel reliably unfolds structural recursion, so they are not a robustness defect. The reviewer's own evidence is partly wrong. In wf.lean, the claimed-working `rw [delFix]; rfl` also fails ('unsolved goals case x_1 … nil = node red … → False'), and the example has a red `x`, so it exercises only the first `if` branch. Also, lines 2104/2170 are `rw [insFix, ite_eq_right hu]` with no trailing `rfl`. On the forward-looking part: Fixup.lean already provides `delFix.eq_def` usage, `delFix_red`, and the `rfl` step lemmas `delFix_case1_fill_left`/`_right` that CONVENTIONS.md item 4 asks for, so 3c has a style to follow. This is a planning note for 3c, not a defect in 3b.",
+    "corrected_fix": "No change needed in 3b. When writing 3c, add per-arm equation lemmas for `delFix` in Fixup.lean (proved via `delFix.eq_def`/`rw [delFix]` plus the match case analysis, not `rfl`), next to `delFix_red`."
+   },
+   {
+    "id": "R8",
+    "verdict": "confirmed",
+    "severity": "low",
+    "reasoning": "Non-terminal simp followed by `cases … <;> rfl` appears at Heap.lean 1376 (`subst e₂; simp; cases ps <;> rfl`), 1018-1019 and 1023-1024. In scratch I tested the proposed reordering: `subst e₂; cases ps <;> simp [NodeRec.withChild]` in `substituteWith_apply`, and `cases s <;> cases ps <;> simp [NodeRec.withChild]` in `rotateAt_apply`. Both compile. The fix needs `NodeRec.withChild` in the simp set, as the reviewer wrote. A plain `simp` after the split leaves `withChild` goals unsolved. In `rotateAt_apply`'s `e₂` branch, the preceding `simp [e₁, h₃, h₅]` also needs folding into the terminal call.",
+    "corrected_fix": ""
+   },
+   {
+    "id": "R9",
+    "verdict": "partly",
+    "severity": "nit",
+    "reasoning": "Usage is as claimed: `rotateAt_parent_fields`, `rotateAt_links`, and `rotateAt_refines_left_frame`/`_right_frame` are cited only in doc comments and heap-layer.md:145-148, and `switchWith_frame` has no references. But heap-layer.md lists them explicitly as step-1 deliverables (the frame part of `rotate`), so they are documented API, not dead code. `rotateAt_links` (955-962) does not use `simp_all`: it is already `simp only` plus `by_cases` plus a terminal `simp`, so that part of the finding is wrong. Only `rotateAt_parent_fields` (968-986) uses `simp_all`, and it is terminal in every branch. Keeping documented API is a judgment call. Deferring the review until 3c, as the reviewer also suggests, is reasonable.",
+    "corrected_fix": "Optionally re-prove `rotateAt_parent_fields` without `simp_all`, possibly from `rotateAt_apply`. At 3c, delete any frame lemma that is still unused and update heap-layer.md §step 1 to match."
+   },
+   {
+    "id": "R10",
+    "verdict": "confirmed",
+    "severity": "low",
+    "reasoning": "Fixup.lean 1065-1072 and 1112-1127 use `unfold eraseAt; split` followed by `rename_i` with up to 11 positional names (`rename_i c₁ cl ll lv lr x₁ cr rl rv rr hm`). These names depend on `split`'s generated inaccessible hypotheses. This is a common Lean idiom, and the subsequent `cases hm` would fail loudly rather than silently, but it is the same kind of fragility the file's own comment at 516-518 avoids for `fun_induction`. Low severity. The cheapest fix is a comment naming the constructor fields, or an explicit `match`/`rcases` on a shape lemma.",
+    "corrected_fix": ""
+   }
+  ]
+ },
+ {
+  "dim": "structure",
+  "review": {
+   "summary": "The docs mostly agree with the code. Every citable Heap.lean declaration has a doc comment, and the README, CONVENTIONS and design-note claims about 3a/3b match the theorem statements. The real problems are four. The README's layout row for Heap.lean is stale, and the README lists the proven heap theorems under \"What is not (yet) proven\". The 3a/3b/3c step labels are used everywhere but defined nowhere, and they clash with §4's own numbering. Three docs give the wrong reason why Oris.lean must import every module. heap-layer.md describes `!chained` hypotheses that no theorem has. Heap.lean (2,228 lines) splits cleanly into a model, a relation, a heap-algebra file and two refinement files, with no renames; the audit and the lakefile need no code change, but Oris.lean must import each new module directly.",
+   "findings": [
+    {
+     "id": "S1",
+     "title": "README: Heap.lean's layout row is stale, and the proven heap theorems sit under 'What is not (yet) proven'",
+     "severity": "medium",
+     "file": "Lean/README.md",
+     "line": 42,
+     "description": "The layout row says Heap.lean holds \"the abstraction relation to zippers, and `rotate` proven to perform the zipper rotation (the other proofs are the next steps of `docs/heap-layer.md`)\". Since 3a and 3b, attach_to, substitute_with, switch_with and insert_fixup are proven too (attachTo_refines, substituteWith_refines_left/_right, switchWith_refines, insertFixup_refines, insertFixup_refines_depth). Also, the '## What is proven' section (line 49) covers only Arith and Fixup. The five proven pointer functions appear only inside the first bullet of '## What is not (yet) proven, and the trust base' (lines 134-147). A reader scanning 'What is proven' does not learn that any heap theorem exists, and the layout row says that only rotate is proven.",
+     "evidence": "Read README.md lines 42, 49-132 and 134-147 against the theorem list of Oris/RB/Heap.lean (grep of declarations: attachTo_refines at line 1329, substituteWith_refines_left at 1458, switchWith_refines at 1559, insertFixup_refines at 2183, insertFixup_refines_depth at 2213).",
+     "fix": "Layout row: \"The same functions as pointer code on a model heap, one write per Rust write; the abstraction relation to zippers, and refinement proofs for `rotate`, `attach_to`, `substitute_with`, `switch_with` and `insert_fixup` (the rest is planned in `docs/heap-layer.md`)\". Add a '**The pointer layer** (`Oris/RB/Heap.lean`)' block to 'What is proven', listing rotateAt_refines_left/_right, attachTo_refines, substituteWith_refines_left/_right, switchWith_refines, insertFixup_refines and insertFixup_refines_depth, each with its hypotheses: Located, a black root (`rootColour`), and fuel. Cut the first bullet of 'What is not (yet) proven' down to what is still open: erase_fixup, the cached root, the counted operations and the chains."
+    },
+    {
+     "id": "S2",
+     "title": "The step labels 3a/3b/3c are defined nowhere and clash with §4's numbering",
+     "severity": "medium",
+     "file": "Lean/docs/heap-layer.md",
+     "line": 204,
+     "description": "The design note has two numberings: §4 numbers the theorems 1-7, and §5 numbers the plan steps 0-4, where plan step 3 = \"Steps 2–5 of §4\". The code and the other docs use sub-labels that the note never defines. Heap.lean: \"Step 3a, the structural operations\" (line 17), \"Step 3b, `insert_fixup`\" (24), \"steps 3c and 4\" (53), \"## Step 3a\" (1287), \"(step 3c's hole invariant)\" (1558). CONVENTIONS.md:121: \"steps 3c and 4\". CHANGELOG [Unreleased]: \"step 3b of the heap layer, `Lean/docs/heap-layer.md` §4\" and \"(step 3a of the heap layer, `Lean/docs/heap-layer.md` §4)\". But §4 calls those theorems step 3 and step 2. The hole invariant has two numbers for one object: heap-layer.md:37 says \"the hole invariant of step 4\" and line 166 says \"the value step 4's hole invariant starts from\", while Heap.lean:1558 says \"step 3c's hole invariant\". A reader who follows the CHANGELOG to §4 finds no step 3a or 3b, and a step 2 and a step 3 that mean other things.",
+     "evidence": "grep for 'step [0-9]' and '3a|3b|3c' across Oris/RB/*.lean, docs/heap-layer.md, CONVENTIONS.md and ../CHANGELOG.md. heap-layer.md never contains '3a', '3b' or '3c'.",
+     "fix": "Define the sub-steps in §5's table, e.g. split row 3 into '3a ✅ §4 step 2 (structural operations)', '3b ✅ §4 step 3 (insert_fixup)', '3c §4 step 4 (erase_fixup, hole invariant)', '3d §4 step 5 (cached root)'. Then say once at the top of §4 that plan steps are cited as 3a…3d and theorem steps as '§4.N'. Rewrite heap-layer.md:37 and :166 to 'the hole invariant of step 3c (§4.4)'. Keep the CHANGELOG's 'step 3a'/'step 3b', but cite '§5' (or '§4.2'/'§4.3') instead of a bare '§4'."
+    },
+    {
+     "id": "S3",
+     "title": "heap-layer.md describes `!chained` hypotheses that no theorem takes, and 'step 4' is ambiguous there",
+     "severity": "medium",
+     "file": "Lean/docs/heap-layer.md",
+     "line": 132,
+     "description": "\"**Left for step 4** ... The step-4 theorems will add `head ≠ null` (to `Tree`, or as a hypothesis), and `Groups` must pin `prev = a` ...; until then, the step-3 theorems about the `Node` branch take `!chained h node` as a hypothesis.\" No theorem mentions `chained`: the only occurrences in Heap.lean are its definition (line 136) and its use in `eraseCountedWith` (line 449). No plan-step-3 theorem (§4 steps 2-5) is about `erase_counted`'s branch choice at all; that is §4 step 6, plan step 4. The heading's 'step 4' could mean §4's step 4 (erase_fixup) or plan step 4 (counted operations), and the same document uses both senses (lines 37 and 166 mean §4.4).",
+     "evidence": "grep -n chained Oris/RB/Heap.lean docs/heap-layer.md README.md: no theorem statement contains it.",
+     "fix": "Reword: \"**Left for plan step 4 (§4, step 6)**. ... No theorem so far depends on `erase_counted`'s branch choice; the step-4 theorems about its `Node` branch will either take `!chained h node` as a hypothesis or derive it from `Groups`.\""
+    },
+    {
+     "id": "S4",
+     "title": "Oris.lean, CONVENTIONS and the audit give the wrong reason why Oris.lean must import every module",
+     "severity": "medium",
+     "file": "Lean/Oris.lean",
+     "line": 2,
+     "description": "Oris.lean says \"`lake build` builds what is imported here\". CONVENTIONS.md:81-82 says \"`lake build` builds what `Oris.lean` imports, so the audit also fails if `Oris.lean` does not import a module\". Tools/Audit.lean:18 says \"since `lake build` builds what `Oris.lean` imports\", and its failure message (line 178) says \"so `lake build` does not build it\". README.md:43 says \"(what `lake build` builds)\". But lakefile.toml declares `globs = [\"Oris.*\"]`. In Lake, `X.*` is `Glob.andSubmodules`: X plus every module found on disk below it. So `lake build` builds every file under Oris/ whether Oris.lean imports it or not. The import check still matters, for another reason: `lake env leanchecker --fresh Oris` replays module `Oris` and its imports, so a module that Oris.lean misses would escape the kernel replay. This matters for the split (S5), which adds modules.",
+     "evidence": "Lake source for the pinned toolchain: Lake/Load/Toml.lean:103 maps a trailing '*' to `.andSubmodules`. Lake/Config/Glob.lean:24-25 and 58-59: andSubmodules = \"the specified module and all submodules\", enumerated with forEachModuleInDir. lakefile.toml:12-13 has `globs = [\"Oris.*\"]`.",
+     "fix": "Oris.lean: \"-- Every proof module. `lake env leanchecker --fresh Oris` replays what is imported here, and `lake exe audit` (Tools/Audit.lean) fails if a module under `Oris/` is missing from this list.\" Make the same change in CONVENTIONS.md § The audit covers every module, Audit.lean's doc (check 1) and failure message (\"so the kernel replay does not check it\"), and README.md:43 (\"Imports every proof module (what the kernel replay checks)\")."
+    },
+    {
+     "id": "S5",
+     "title": "Proposed split of Heap.lean (2,228 lines) before step 3c",
+     "severity": "medium",
+     "file": "Lean/Oris/RB/Heap.lean",
+     "line": 1,
+     "description": "Heap.lean already has five layers that depend on each other one way: definitions (72-483), the relation (485-906), per-address heap algebra (908-1028, 1295-1322, 1359-1385, 1480-1542, 1792-1815), refinement of the structural operations (1030-1285, 1324-1357, 1387-1478, 1544-1697, 1770-1788, 1817-1842) and insert_fixup (1844-2224). Step 3c will add erase_fixup on top of these. The 3b tools section (1699-1842) mixes pure relation lemmas with heap algebra. Namespace blocks are scattered: `namespace Located` is opened twice (812-840, 1736-1790), and `RepPath.retarget`/`head_side`/`childAt_slot`/`head_red`/`left_inv`/`right_inv` and `Rep.red_eq` are declared outside their namespace blocks (756-800, 532-712).",
+     "evidence": "Read the declaration list (grep of def/theorem with line numbers) and the dependencies between sections. Each later section uses only earlier ones, and nothing in the relation uses the _apply lemmas.",
+     "fix": "Keep every declaration in namespace `Oris.RB.Heap`, so nothing is renamed and every citation stays valid. Files:\n- `Oris/RB/Heap/Model.lean` (lines 79-483): Addr, NodeRec, Heap, primitives, transcriptions. Its module doc is today's 'The model' + 'Not modelled' + the fuel departure. Imports Oris.RB.Fixup. This is the only file the pointer-code rule of 'Keeping the model in step' points to.\n- `Oris/RB/Heap/Rep.lean` (485-906, plus 1706-1768: RepPath.head_red, Rep.red_eq, RepPath.left_inv/right_inv, Located.up_*/down_*): colourBit, Rep, ancestor, RepPath, Located, Tree, nodup/frame/reroot/retarget, one namespace block per prefix. Imports Model.\n- `Oris/RB/Heap/Apply.lean` (908-1028, 1295-1322, 1359-1385, 1480-1542, 1792-1815): NodeRec.withChild, setChild_eq, the `_apply`/`_frame` lemmas, setColour_*, modify_red, rotateAt_red. Imports Model only, with no relation.\n- `Oris/RB/Heap/Structural.lean` (1030-1285, 1324-1357, 1387-1478, 1544-1697, Located.paint, Tree.makeBlack_root): the `_refines` theorems of 3a and rotate. Imports Rep and Apply.\n- `Oris/RB/Heap/InsertFixup.lean` (1844-2224). Imports Structural.\n- Later: `EraseFixup.lean` (3c), `CachedRoot.lean` (3d), `Counted.lean` and `Chains.lean` (step 4).\n- `Oris/RB/Heap.lean` becomes an umbrella that imports all parts, with a module doc giving the overview and what is proven, file by file (today's lines 4-29), so `import Oris.RB.Heap` and doc links keep working.\nAlongside the split, move the zipper-level items to Fixup.lean (or a new `Oris/RB/Path.lean`): Side.other (next to Side), nodup_node, pathDepth, rootColour, rootColour_up_*, pathDepth_add_depth_le. All are pure RBNode/Path facts; see S6.\nWhat else changes:\n- Oris.lean must import each new module directly. The audit compares the list of modules on disk with Oris.lean's direct imports (Audit.lean:174-178), so importing only the umbrella would fail.\n- lakefile.toml: no change (`Oris.*` picks up Oris/RB/Heap/*).\n- Tools/Audit.lean: no code change (walkDir is recursive, and nothing is hardcoded to Heap.lean except the example in moduleOf's doc).\n- Tools/XCheck.lean can import `Oris.RB.Heap.Model` and `Oris.RB.Fixup` instead of `Oris` (optional).\n- CONVENTIONS.md: file-layout table rows for Oris/RB/Heap/*.lean; 'Keeping the model in step' points to Heap/Model.lean; § Departures cites Model.lean.\n- heap-layer.md: title line; §7 decision 3 (\"The chains' proofs go in `Heap.lean`\") becomes \"in `Oris/RB/Heap/`\" (a dated amendment).\n- Also update: root CLAUDE.md:40, .github/workflows/lean-ci.yml:17 (comment), Rust/src/rbtree.rs:1956 (doc), README layout table, and the Fixup.lean module doc (lines 16 and 61)."
+    },
+    {
+     "id": "S6",
+     "title": "Zipper-level declarations live in Heap.lean, some needlessly fixed to `Addr`",
+     "severity": "low",
+     "file": "Lean/Oris/RB/Heap.lean",
+     "line": 1855,
+     "description": "`def Side.other` (line 75, doc \"`rbtree.rs` `Side::other`\") is declared in namespace Oris.RB in Heap.lean, although `Side` is defined in Fixup.lean. `nodup_node` (803), `pathDepth` (1855), `rootColour` (1862), `rootColour_up_left/_right` (1868, 1875) and `pathDepth_add_depth_le` (2195) are facts about `RBNode`/`Path` with nothing heap-specific, yet they are stated for `Path Addr`/`RBNode Addr` under `Oris.RB.Heap`. Erase_fixup's proof (3c) and the transfer theorems will want them generic, at the zipper level.",
+     "evidence": "Scratch file scratch/generic.lean restates pathDepth, pathDepth_add_depth_le and nodup_node for an arbitrary `α` with the original proofs copied verbatim. It checks with `lake env lean` and no errors.",
+     "fix": "Move `Side.other` next to `Side` in Fixup.lean. Move the other six to Fixup.lean (a '## Paths' section) or a new Oris/RB/Path.lean, with `{α : Type _}` and in namespace `Oris.RB`. Heap.lean's uses still elaborate at `α := Addr`."
+    },
+    {
+     "id": "S7",
+     "title": "CONVENTIONS' naming table does not cover the heap layer's vocabulary, and two names break its pattern",
+     "severity": "low",
+     "file": "Lean/CONVENTIONS.md",
+     "line": 180,
+     "description": "The table and 'Properties use the same words everywhere: `_toList`, `_rotations`, `_balanced`, `_spec`' predate the heap layer. The heap files use these suffixes systematically: `_apply` (per-address result), `_frame` (records unchanged), `_refines` (performs the zipper step), `_inv` (inversion), plus dot-namespaced relation lemmas (`Rep.*`, `RepPath.*`, `Located.*`, `Tree.*`). None is recorded. Two names deviate. (a) `rotateAt_refines_left_frame`/`_right_frame` (1148, 1277) put the mirror suffix in the middle, against the table's 'suffix `_left`/`_right`', and reuse `_frame` for a zipper-terms restatement of `rotateAt_frame`. (b) `modify_red` (1807) is a lemma about `Heap.modify`, whose full name is `Oris.RB.Heap.Heap.modify`, but it is named `Oris.RB.Heap.modify_red`. So it does not follow `<def>_<property>`, and `h.modify_red` dot notation does not resolve.",
+     "evidence": "Scratch names.lean: `#check @Oris.RB.Heap.Heap.modify` and `#check @Oris.RB.Heap.modify_red` both resolve, which confirms the doubled `Heap.Heap` namespace and the mismatch.",
+     "fix": "Add rows to the naming table: '`<op>_apply`: the operation's result, address by address'; '`<op>_frame`: the addresses it leaves unchanged'; '`<op>_refines`: the heap operation performs the zipper step'; '`R.<lemma>` for lemmas about relation `R` (`Rep.frame`, `Located.up_left`)'; '`_inv`: an inversion'. Rename `modify_red` → `Heap.modify_red`, i.e. `Oris.RB.Heap.Heap.modify_red`. Optionally rename `rotateAt_refines_left_frame` → `rotateAt_frame_left` (and `_right`), updating CHANGELOG and heap-layer.md §4.1."
+    },
+    {
+     "id": "S8",
+     "title": "`rotateAt_links` and `rotateAt_parent_fields` are cited as the field-by-field frame but no proof uses them",
+     "severity": "low",
+     "file": "Lean/Oris/RB/Heap.lean",
+     "line": 955,
+     "description": "The doc of rotateAt_refines_left (1036-1037) says \"Which records change is `rotateAt_refines_left_frame` (and, field by field, `rotateAt_links` and `rotateAt_parent_fields`)\". heap-layer.md §4 step 1 (lines 145-148) and the CHANGELOG rename bullet present them as part of the step-1 result too. Since `rotateAt_apply` (0bd56a8), no proof references either lemma. They are leftovers from the old rotate proof and still look like load-bearing results.",
+     "evidence": "grep -nw rotateAt_links / rotateAt_parent_fields over Oris/ and Tools/: only their definitions (955, 968) and the doc mention at 1036-1037.",
+     "fix": "Either delete both lemmas, pointing the docs to `rotateAt_apply` (which states every field, under the distinctness the callers guarantee), or keep them as hypothesis-light API and make the rotateAt_refines_left doc say so: \"(`rotateAt_links` and `rotateAt_parent_fields` state the same field by field, on any heap)\"."
+    },
+    {
+     "id": "S9",
+     "title": "21 lines exceed the 100-column limit, and nothing enforces it",
+     "severity": "low",
+     "file": "Lean/Oris/RB/Heap.lean",
+     "line": 326,
+     "description": "CONVENTIONS § Doc comments: \"Lines stay within 100 columns, as in the ports.\" Over the limit: Heap.lean lines 326, 523, 1104, 1232, 1561, 2185, 2215; Fixup.lean 298, 476, 485, 586, 622, 845, 851, 915, 1168 (109); Arith.lean 14 (127) and 16 (131), both markdown table rows in the module doc; Tools/Audit.lean 191; Tools/XCheck.lean 241, 268.",
+     "evidence": "awk 'length > 100' over Oris.lean, Oris/*.lean, Oris/RB/*.lean, Tools/*.lean.",
+     "fix": "Re-wrap these lines. Turn Arith.lean's two table rows into a list, or allow tables as an exception in CONVENTIONS. Add a column check to Tools/Audit.lean's lintFile (it already reads every source line by line), so the rule is enforced like the others."
+    },
+    {
+     "id": "S10",
+     "title": "insertFixup_refines's doc calls insert_fixup `NodeBase`-level",
+     "severity": "nit",
+     "file": "Lean/Oris/RB/Heap.lean",
+     "line": 2181,
+     "description": "\"**`NodeBase`-level `insert_fixup` performs `insFix`**\". In rbtree.rs, `insert_fixup` is a free function (`unsafe fn insert_fixup(head, node)`, line 623), not a `NodeBase` method. Other docs say 'heap-level' or 'pointer code'.",
+     "evidence": "grep -n 'fn insert_fixup' Rust/src/rbtree.rs: line 623, outside `impl NodeBase` (126-…).",
+     "fix": "\"**The heap-level `insert_fixup` performs `insFix`**: `insertFixupLoop_refines` from the Rust's entry …\""
+    },
+    {
+     "id": "S11",
+     "title": "CHANGELOG says the renamed theorems' proofs are 'otherwise unchanged'",
+     "severity": "nit",
+     "file": "CHANGELOG.md",
+     "line": 27,
+     "description": "The rename bullet ends \"Statements and proofs are otherwise unchanged.\" Relative to 0.3.2, the bullet's reference point, the rotate refinement proofs were rewritten on top of `rotateAt_apply` (commit 0bd56a8, 'rotate_apply, one per-address description of a rotated heap'). heap-layer.md:167-168 itself says it \"shortened the rotation proofs\".",
+     "evidence": "git log -- Lean/ shows 0bd56a8 (rotate_apply) before 459f0a2 (rename), both after 0.3.2's c251ddd. rotateAt_refines_left's proof uses `RL` (rotateAt_apply), lines 1104-1143.",
+     "fix": "\"Statements are otherwise unchanged (the proofs now go through `rotateAt_apply`).\""
+    },
+    {
+     "id": "S12",
+     "title": "A stray blank line splits Heap.lean's module-doc list",
+     "severity": "nit",
+     "file": "Lean/Oris/RB/Heap.lean",
+     "line": 23,
+     "description": "In the module doc, a blank line separates the 'Step 3a' bullet (17-22) from the 'Step 3b' bullet (24-26), so Markdown renders two lists. Lines 28-29 then say \"That `erase_fixup` and the counted operations perform their zipper steps is the rest of the plan's step 3, and its step 4\", which the 3c/3d labels (S2) would state more precisely.",
+     "evidence": "Read lines 10-29.",
+     "fix": "Delete line 23. After S2: \"Steps 3c (`erase_fixup`), 3d (the cached root) and 4 (the counted operations) remain.\""
+    }
+   ],
+   "recommendations": [
+    "After the split, mark one-proof helpers that stay in their own file `private`: `ancestor` (used only by Rep.nodup), `substituteWith_refines_core`, `insertFixupLoop_exit`, `rootColour_up_left/_right`. The audit already handles private names.",
+    "The type `Heap` lives at `Oris.RB.Heap.Heap`, so the module, namespace and type share a name, and `Heap.modify` is `Oris.RB.Heap.Heap.modify`. Renaming is not worth the churn now, but say it in one line of the module doc so readers aren't puzzled by `Heap.Heap.modify` in error messages.",
+    "heap-layer.md:167-168 quotes Heap.lean's elaboration time ('about 2.4 seconds instead of 24'), measured before 3b. Mark it as of 3a, or drop the number when the file is split.",
+    "When splitting, put the module's 'what is proven' list in the umbrella Oris/RB/Heap.lean doc. Each part's own module doc then only needs to say what it contains, with no step history."
+   ]
+  },
+  "verdicts": [
+   {
+    "id": "S1",
+    "verdict": "confirmed",
+    "severity": "medium",
+    "reasoning": "README.md:42 still says Heap.lean holds the relation and only \"`rotate` proven to perform the zipper rotation (the other proofs are the next steps ...)\". That is stale now that attachTo_refines (1329), substituteWith_refines_left/_right (1458/1471), switchWith_refines (1559), insertFixup_refines (2183) and insertFixup_refines_depth (2213) exist. '## What is proven' covers only Arith and Fixup. The five proven functions appear only inside the first bullet of 'What is not (yet) proven' (lines 134-147). That bullet is accurate, but it sits under a heading that says the opposite. The fix is right. The new 'pointer layer' block should list the hypotheses each theorem takes (Located, a real node, rootColour ≠ some .red, fuel), and the open-items bullet should keep its trust-base sentences (transcription plus cross-check for erase_fixup and the counted operations, the chains, the scratch parent, the cached root).",
+    "corrected_fix": ""
+   },
+   {
+    "id": "S2",
+    "verdict": "confirmed",
+    "severity": "medium",
+    "reasoning": "Checked by grep. heap-layer.md never says 3a/3b/3c. Its header (line 4) says \"the first two parts of step 3 (§4, steps 2 and 3...)\". Heap.lean (17, 24, 53, 1287, 1558, 1699, 1844), CONVENTIONS.md:121 and CHANGELOG:15/20 use 3a/3b/3c and cite a bare '§4', where those theorems are numbered 2 and 3. The hole invariant is 'step 4' at heap-layer.md:37 and :166 (meaning §4.4) but 'step 3c' at Heap.lean:1558, while §5's 'step 4' is the counted operations. A reader really can trip on this. The fix (define 3a-3d in §5's table, cite §4.N for theorem steps) is sound.",
+    "corrected_fix": ""
+   },
+   {
+    "id": "S3",
+    "verdict": "confirmed",
+    "severity": "low",
+    "reasoning": "heap-layer.md:132-137 says \"until then, the step-3 theorems about the `Node` branch take `!chained h node` as a hypothesis\". No theorem anywhere takes `chained`; it appears only in its definition and in eraseCountedWith. Theorems about erase_counted's Node branch are §4 step 6, i.e. plan step 4, so 'step-3 theorems about the Node branch' names nothing. 'Left for step 4' is ambiguous too, given lines 37/166. The claim is real, but it describes a plan for the future and no proven statement depends on it, so low rather than medium. The rewording is fine; it simplifies once S2 sets up the 3a-3d labels.",
+    "corrected_fix": ""
+   },
+   {
+    "id": "S4",
+    "verdict": "confirmed",
+    "severity": "medium",
+    "reasoning": "Verified in the pinned toolchain's Lake source. Lake/Config/Glob.lean defines `.*` as andSubmodules (\"the specified module and all submodules\"), and forEachModuleIn enumerates the directory on disk. Toml.lean:103 maps a trailing '*' to .andSubmodules. lakefile.toml has globs = [\"Oris.*\"]. So `lake build` builds every Oris/** file whether Oris.lean imports it or not, and the stated reason is false in Oris.lean:2, CONVENTIONS.md:81-82, Audit.lean:18 and :178, and README.md:43. The real reason is that `lake env leanchecker --fresh Oris` (CLAUDE.md:25, lean-ci.yml:60) replays module Oris and its imports. The fix is correct and complete. It matters before the split adds modules.",
+    "corrected_fix": ""
+   },
+   {
+    "id": "S5",
+    "verdict": "confirmed",
+    "severity": "medium",
+    "reasoning": "Checked against the declaration list. Heap.lean is 2,228 lines. `namespace Located` is opened twice (812-840, 1736-1790). RepPath.retarget/head_side/childAt_slot (850-906) and RepPath.head_red/left_inv/right_inv and Rep.red_eq (1708-1731) sit outside their namespace blocks. The per-address lemmas (915-1028, setColour_*, modify_red, rotateAt_red, *_apply/*_frame) mention only Heap primitives, not the relation, so the proposed Apply file needing only Model is plausible. The audit compares Oris.lean's direct imports with the files on disk (Audit.lean:174-178), so importing only the umbrella would indeed fail. The Oris.* glob picks up subdirectories. Two corrections: (1) say plainly that the umbrella Oris/RB/Heap.lean is itself a module under Oris/ and must stay in Oris.lean's import list too; (2) the reason Oris.lean must import each part is the kernel replay (S4), not the build. This is a design proposal, not a defect, but it is a sound one; the exact line ranges should be re-derived when splitting.",
+    "corrected_fix": "As proposed, but Oris.lean imports every part and the umbrella (the audit checks each file on disk). Justify this by the kernel replay (S4), not by `lake build`."
+   },
+   {
+    "id": "S6",
+    "verdict": "confirmed",
+    "severity": "low",
+    "reasoning": "Side.other is declared at Heap.lean:74-77 in namespace Oris.RB, although `Side` is defined in Fixup.lean:74. pathDepth (1855), rootColour (1862), rootColour_up_left/_right (1868, 1875), pathDepth_add_depth_le (2195) and nodup_node (803) mention nothing heap-specific beyond the fixed `Addr`. Making them generic over α is a harmless improvement, useful for 3c. Purely organisational, so low.",
+    "corrected_fix": ""
+   },
+   {
+    "id": "S7",
+    "verdict": "partly",
+    "severity": "low",
+    "reasoning": "Real: the naming table (CONVENTIONS.md:171-180) has no rows for _apply/_frame/_refines/_inv or the dotted relation lemmas the heap layer uses systematically. modify_red (1807) is about Heap.modify, which is declared at line 107 inside namespace Oris.RB.Heap and so is Oris.RB.Heap.Heap.modify, yet the lemma is Oris.RB.Heap.modify_red: an inconsistency. Overstated: calling rotateAt_refines_left_frame a breach of the _left/_right suffix rule is arguable, since the table's row covers mirror-image standalone theorems and here _frame qualifies the _refines_left theorem it accompanies. That rename is optional churn across CHANGELOG and heap-layer.md and is not worth it on its own. Add the table rows and the modify_red rename; leave the rotate names.",
+    "corrected_fix": "Add the table rows. Rename modify_red to Heap.modify_red. Do not rename rotateAt_refines_left_frame/_right_frame."
+   },
+   {
+    "id": "S8",
+    "verdict": "confirmed",
+    "severity": "low",
+    "reasoning": "grep -w over Oris/ and Tools/ finds rotateAt_links/rotateAt_parent_fields only at their definitions (955, 968), in the rotateAt_refines_left doc (1036-1037), in heap-layer.md:145-148 and in the CHANGELOG rename bullet. No proof uses them, yet the docs present them as part of the step-1 result. Both proposed fixes are valid. Keeping them as hypothesis-free field-by-field API with an honest doc is the lower-churn choice, since heap-layer.md §4.1 describes them.",
+    "corrected_fix": ""
+   },
+   {
+    "id": "S9",
+    "verdict": "confirmed",
+    "severity": "low",
+    "reasoning": "Re-ran awk 'length > 100': exactly the listed lines (Arith 14/16 at 127/131, nine Fixup lines, seven Heap lines, Audit 191, XCheck 241/268). CONVENTIONS.md:194 states the 100-column rule, and the audit's lint does not check it. The fix (re-wrap, list or exception for the Arith table, a column check in lintFile) is right.",
+    "corrected_fix": ""
+   },
+   {
+    "id": "S10",
+    "verdict": "partly",
+    "severity": "nit",
+    "reasoning": "insert_fixup is a free function in rbtree.rs (line 623, after impl NodeBase closes at 614). But 'NodeBase-level' can be read as 'at the level of NodeBase records' rather than 'a NodeBase method', so it is loose wording, not a factual error. 'heap-level' or 'the pointer code's' is clearer and matches the rest of the docs. A nit only.",
+    "corrected_fix": ""
+   },
+   {
+    "id": "S11",
+    "verdict": "partly",
+    "severity": "nit",
+    "reasoning": "The bullet is about the rename (459f0a2), and the rename itself left the proofs unchanged. But the CHANGELOG is read against 0.3.2, and between 0.3.2 and now 0bd56a8 rewrote the rotate proofs on rotateAt_apply. The [Unreleased] section mentions rotateAt_apply elsewhere (3a bullet, lines 26-27), so nothing is hidden, but 'proofs are otherwise unchanged' is inaccurate against the reference point. The suggested wording is fine.",
+    "corrected_fix": ""
+   },
+   {
+    "id": "S12",
+    "verdict": "confirmed",
+    "severity": "nit",
+    "reasoning": "Heap.lean:23 is a blank line between the Step 3a bullet (17-22) and the Step 3b bullet (24-26), which splits the list (CommonMark makes it a loose list or breaks it, depending on the renderer). Lines 28-29 use the ambiguous 'the rest of the plan's step 3, and its step 4' that S2 addresses. Deleting the line and rewording after S2 is correct.",
+    "corrected_fix": ""
+   }
+  ]
+ },
+ {
+  "dim": "readiness",
+  "review": {
+   "summary": "The relation is ready for 3c and needs no change. `Located` already handles an empty hole, because the occupant is an index and is never read. The hole invariant fits as one extra conjunct, `parent h cur = P ∧ parentSide h cur = S`. `substituteWith_refines_*` and `switchWith_refines` already produce that conjunct, and the up/down/paint/rotate lemmas cover every move `erase_fixup` makes. The real gaps are elsewhere. 3c cannot take insert's \"every located input\" form: on a tree whose sibling is the sentinel (a red-black tree never has one), the heap model ends with the sentinel red while `delFix` does not, so the theorem needs a no-departure hypothesis. The Rust's once-read root needs a black-root hypothesis, which §6 and `Fixup.lean` leave out. Three docs misstate things: `heap-layer.md` §4 step 4, the cross-check's \"root changed\" coverage item, and the audit lint, which `#eval!` and `_root_.Lean.` get past (both confirmed).",
+   "findings": [
+    {
+     "id": "R1",
+     "title": "3c cannot be stated for every located input: at a sentinel sibling the heap model turns the sentinel red",
+     "severity": "medium",
+     "file": "Lean/docs/heap-layer.md",
+     "line": 182,
+     "description": "`insertFixupLoop_refines` holds for every located input with a black root, and nothing in the plan says `erase_fixup` will be different. It will be. `Fixup.lean` has a departure at a nil sibling (`stage2L`/`stage2R`, Fixup.lean 367-372: \"A `nil` sibling is unreachable ... the model returns `none` there\"). In the heap model, which follows the Rust, that state goes further: `w` is the sentinel, `childAt h head .left` is the root, and when the root is black, case 2 runs `make_red(w)`, which paints the sentinel red. `RepPath.root` and `Tree` both require `(h head).red = false`. So `eraseFixupLoop_refines` is false without a hypothesis that rules out this departure. That hypothesis is a balance or no-nil-sibling condition carried through every iteration and after case 1. §4 step 4 never says this, and the only `hpha_*` lemma it cites, it cites for the wrong reason (see D2).",
+     "evidence": "Scratch file audit/nilsib.lean. The heap is head=1 (black), root 2 (black, left child 3, right child the sentinel), cur=3 (black). `eraseFixup 10 h0 1 3` and `eraseFixupHpha` both return `(h 1).red = true`. `delFix (.left .black .root 2 .nil) (.node .black .nil 3 .nil)` returns a tree, and the sentinel's colour is not part of it.",
+     "fix": "Decide the hypothesis's form before writing 3c, and record the decision in §4 step 4. The best option: in Fixup.lean, define a predicate `DelFixClean : Path α → RBNode α → Prop` by the same recursion as `delFix`, true when `delFix` never reaches the nil-sibling arm (the sibling of a black non-root `cur` is non-nil, and after case 1 so is the red sibling's near child, recursively on the case-2 branch). Prove `delFixClean_of_balanced` from the invariant of `delFix_balanced_aux`. That proof reuses `hpha_sibling_not_sentinel_*` and `hpha_sibling_after_case1_not_sentinel_*`, ideally by extracting the per-case propagation steps out of `delFix_balanced_aux` first. The heap theorem then takes `DelFixClean path x`, which keeps black heights out of Heap.lean. It holds for every input on which the zipper model takes no departure, and the spec theorem supplies the hypothesis from `Path.Balanced`."
+    },
+    {
+     "id": "D1",
+     "title": "The claim that both root readings agree assumes a black root without saying so",
+     "severity": "medium",
+     "file": "Lean/Oris/RB/Fixup.lean",
+     "line": 416,
+     "description": "`delFix`'s doc says: \"If that fourth case rotated at the root, the stale value is the old p, which make_black(p) has just made black, so that write changes nothing, while HPHA's lands on the new root, already black too\". `heap-layer.md` §6 (lines 239-240) says: \"After case 4, the loop ends at once, and both final `make_black`s land on a node that is already black\". The new root is the old `w`, and `set_colour(w, colour(p))` gives it `p`'s colour. When case 4 rotates at a red root without a case 1 first, the Rust's write lands on the old `p` and changes nothing, while HPHA's lands on a red node and blackens it. The heaps differ. The §6 sketch `eraseFixup_cached_eq (hl ...) (hb : …)` leaves the needed hypothesis unspecified, and Heap.lean's module doc (lines 55-57: \"§6 plans the theorem that they agree\") says nothing of the condition.",
+     "evidence": "Scratch file audit/redroot.lean. Root 2 is red, with left child 3 black (cur) and right child 4 black, whose right child 5 is red. `eraseFixup` gives `(h 4).red = true`; `eraseFixupHpha` gives `false`. Both have root 4 and 1 rotation.",
+     "fix": "Reword both passages to \"already black too, given a black root (the new root takes `p`'s colour)\". Give the §6 sketch `(hroot : rootColour path ≠ some .red)`, the same hypothesis `insertFixup_refines` takes. Valid trees satisfy it, so the cross-check result is unaffected."
+    },
+    {
+     "id": "X1",
+     "title": "The cross-check's `root changed` coverage item also counts erasing the root node, not just fix-ups that rotate at the root",
+     "severity": "medium",
+     "file": "Lean/Tools/XCheck.lean",
+     "line": 206,
+     "description": "`let rootChanged := !isInsert && letter == \"N\" && (h' headAddr).left != rootBefore` is also true whenever the erased node is the root: `substitute_with` or `switch_with` writes the sentinel's left link, with no fix-up rotation involved. The docs claim more: the field doc (line 160) says \"(an erase that rebalanced only)\", the module doc (line 33) says it fails if the trace \"never ... changes the root during a fix-up\", and README.md 113-115 says \"so the fix-ups also run at the root (the root changes during 447 erases ...)\". A trace that never rotates at the root, the code path §6 calls the hardest case, would still pass this coverage requirement.",
+     "evidence": "Reading the code. In a `Node` erase, the root's address changes when the erased node is the root (the sentinel's link is rewritten by `substituteWith` or `switchWith`) or when a fix-up rotates at the root. The condition does not separate the two.",
+     "fix": "Use `let rootChanged := !isInsert && letter == \"N\" && a != rootBefore && (h' headAddr).left != rootBefore`. Splicing out a non-root node never touches the sentinel's link, so what remains is exactly a fix-up rotation at the root. Then re-measure and update the 447 in README.md."
+    },
+    {
+     "id": "A1",
+     "title": "The audit lint misses `#eval!` and `Lean` names written with a `_root_.` prefix",
+     "severity": "medium",
+     "file": "Lean/Tools/Audit.lean",
+     "line": 136,
+     "description": "The lint matches whole tokens: `forbiddenTokens.contains tok` (`#eval` is in the list) and `tok == \"Lean\" || tok.startsWith \"Lean.\"`. `tokenChar` accepts `!` and `_`, so `#eval!` is a single token different from `#eval`, and `_root_.Lean.Elab...` does not start with `Lean.`. Both get past the lint. `#eval!` runs arbitrary code at elaboration time, the exact thing the module doc says the lint bans (\"any `Lean.` name\", `#eval`). The axiom collection and `leanchecker --fresh` remain as further checks, but the lint does not live up to what it claims.",
+     "evidence": "Scratch file audit/evil.lean contains `#eval! (1 : Nat)` and `def foo := _root_.Lean.Name.anonymous`, and it compiles. Running `Oris.AuditTool.lintFile` on it (audit/lint.lean) prints `0 findings`.",
+     "fix": "In `lintFile`, flag every token that starts with `#`: no file under `Oris/` uses a `#` command today (checked by grep), so this costs nothing. Flag every token with a `Lean` name component: `(tok.splitOn \".\").contains \"Lean\"` in place of the current test. Then add both cases to the \"checked to reject\" list in CONVENTIONS.md, as that file asks when `Audit.lean` changes."
+    },
+    {
+     "id": "D2",
+     "title": "§4 step 4's case for the hole invariant leans on a lemma it does not need, and misses a lemma it does",
+     "severity": "low",
+     "file": "Lean/docs/heap-layer.md",
+     "line": 183,
+     "description": "\"The proof shows the scratch is read only in the first iteration, and that no write reaches it before that read. Case 1's rotation would clobber it only if `w.child(s)` were the sentinel, which `hpha_sibling_after_case1_not_sentinel_*` rules out.\" `eraseFixupLoop` reads `p := parent h cur` and `s := parentSide h cur` at the very top of the iteration (Heap.lean 339-340), before any write, and later reads use those locals. From the second iteration on, `cur` is a real node: case 2 sets `cur := p`, which is a path node and so not the sentinel, and case 4 ends the loop. A write to the scratch fields by case 1 or case 4 therefore never matters, and the hole invariant needs no balance hypothesis at all. The passage also misses the loop's other dependence on the sentinel's fields: the loop test `cur != root` needs the root's address, which is a path address whenever the path is non-empty (`RepPath.root_mem` below).",
+     "evidence": "Reading `eraseFixupLoop` (Heap.lean 336-382): the only reads of `cur`'s `parent` word are the two `let`s right after the test.",
+     "fix": "Replace the sentence: the scratch is read only at the top of the first iteration, before any write, and every later iteration starts from a real node, so writes to it (case 1's or case 4's rotation when `top_s_child` is the sentinel) are irrelevant. Then point to R1 for the reason 3c still needs a balance-derived hypothesis."
+    }
+   ],
+   "recommendations": [
+    "The 3c loop theorem, sketched, with one theorem covering both root readings: `theorem eraseFixupLoop_refines (head : Addr) (reread : Bool) (root₀ : Addr) : ∀ (fuel : Nat) {h : Heap} {cur P : Addr} {S : Side} {x : RBNode Addr} {path : Path Addr} (rot : Nat), Located h head cur P S x path → parent h cur = P → parentSide h cur = S → (reread = false → childAt h head .left = root₀) → (reread = false → rootColour path ≠ some .red) → DelFixClean path x → pathDepth path + 1 ≤ fuel → ∃ H, eraseFixupLoop head reread root₀ fuel h cur rot = some (H, rot + (delFix path x).2) ∧ Tree H head (delFix path x).1`. Two of the hypotheses come for free. The hole conjunct is automatic for a real `cur` (`Rep.root_fields`), and `substituteWith_refines_*` and `switchWith_refines` already produce it at entry. The `root₀` hypothesis is only needed at recursive calls after a case 2 without a case 1, where the root is unchanged. Keep the hole invariant out of `Located`, so every existing lemma stays as it is: no change to the relation is needed.",
+    "Three helper lemmas, written and type-checked in scratch (audit/proto.lean). `theorem setColour_of_eq {h a b} (e : (h a).red = b) : setColour h a b = h`, needed for the final `make_black` on the sentinel and for the §6 \"already black\" writes. `theorem Located.makeBlack_fill (hl : Located h head a p s t path) : Tree (makeBlack h a) head (path.fill t.setBlack)`, which generalises `Tree.makeBlack_root` and covers both of `delFix`'s exits (a red `cur`, and the `.root` arm, the sentinel included). `theorem RepPath.root_mem (hp : RepPath h head a p s path) : path = .root ∧ childAt h head .left = a ∨ childAt h head .left ∈ path.listL ++ path.listR`, which together with `Located.outside` decides the loop test `cur != root`.",
+    "Before 3c, add side-generic forms so each erase case is proven once rather than once per side. `insertFixupLoop_refines` has eight near-duplicate cases; `delFix` would need about twelve leaves per side. Written and type-checked in scratch (audit/side.lean): `def nodeOn : Side → RBColor → RBNode Addr → Addr → RBNode Addr → RBNode Addr` (the near child on side s), `def stepOn : Side → RBColor → Path Addr → Addr → RBNode Addr → Path Addr`, `theorem rotateAt_refines (s) (hl : Located h head a p σ (nodeOn s c l a (nodeOn s c' rl b rr)) path) : Located (rotateAt h a s) head b p σ (nodeOn s c' (nodeOn s c l a rl) b rr) path`, `Located.up s` and `Located.down s` (the latter landing at `childAt h y s`). Each is a two-line `cases s`. Matching `stage2L`/`stage2R` then becomes one `cases s` at the zipper equation.",
+    "Fuel: `pathDepth path + 1 ≤ fuel` carries over from insert, with one trap. After case 1 then case 2, the zipper recurses on `.left black pp wv wr`, which has the same depth as before. So that branch must close with an exit lemma (`cur = p` is red, as in `delFix_red`), not with the induction hypothesis. Provide equation lemmas in the style of `insertFixupLoop_exit` (`eraseFixupLoop_exit_red`, `eraseFixupLoop_exit_root`) so the tuple-`let`s are unfolded in only one place. For a depth-based fuel theorem with an empty hole, `(path.fill .nil).depth` can equal `pathDepth path`, so the `+1` comes from the non-nil sibling (DelFixClean) or from the pre-erase tree.",
+    "Step-4 preparation that 3c's entry point depends on. `switchWith_refines` describes only the subtree rooted at `node`. When the successor `repl` is deeper than `node`'s right child, the hole is inside that subtree, so two more things are needed: (a) a conclusion that `switchWith` keeps the sentinel's `parent` word when the sentinel is neither of `node`'s children (derivable from `switchWith_apply`; when `node` is the root only the sentinel's link is written); and (b) a way to move a deep `Located` through the switch, with `node` replaced by `repl` on the path. This is cheapest as an Oris-side path concatenation (`Path.glue seg path` with `(glue seg path).fill t = path.fill (seg.fill t)`, and `(leftmost t q).2 = glue (leftmost t .root).2 q`), plus `Located.glue` for descending. Both are new lemmas; the relation itself needs no change.",
+    "Cross-check coverage for 3c. Count, and require, three cases: erases whose fix-up starts from an empty hole (black `repl` and `replChild = head`); the case where `switch_with` overwrites the scratch fields (`repl = node.right` and `repl.right = head`); and §6's case 1 at the root followed by case 4. All three can be computed in `replay` from the pre-state with the existing `Heap` functions. Also add an executable check of the hole invariant at fix-up entry: replay `substituteWith`/`switchWith` and require `childAt H (H head).parent (H head).side = head` whenever `replChild = head`. That tests the 3c invariant on all 9,935 erases before any proof is written.",
+    "Minor cross-check gap: `headInfo` prints the sentinel's `parent` word and colour but not its right link, which `Tree` requires to equal `head`. The step-3a proofs now cover that link for `attach`/`substitute`/`switch`, so this matters little; note it in the README's list of what the comparison covers."
+   ]
+  },
+  "verdicts": []
+ }
+]

@@ -200,7 +200,7 @@ bound), `_balanced` (red-black invariant), `_spec` (the operation's full contrac
 | `Oris/Arith.lean` | Size arithmetic |
 | `Oris/RB/*.lean` | The red-black tree (`Fixup.lean`: the zipper level; `Heap.lean`: the pointer level, its definitions and the refinement theorems proven so far) |
 | `Tools/` | Executables, run after the build (`Audit.lean`, the axiom audit and lint; `XCheck.lean`, the cross-check consumer) |
-| `docs/` | Design notes (`heap-layer.md`), agreed before the proofs they plan |
+| `docs/` | Design notes (`heap-layer.md`), agreed before the proofs they plan; audit records (`audits/`), each with its findings and the scratch files behind them, not built |
 | `RBTree/` | Vendored, verbatim |
 
 ---
