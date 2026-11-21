@@ -864,13 +864,22 @@ theorem delFix_balanced_aux : ∀ (k : Nat) {path : Path α} {x : RBNode α} {c 
           cases hp with
           | redL hw hpp =>
             exact key hw hpp fun _ _ hl hr' =>
-              delFix_balanced_aux k (by simp at hk; omega) hpp (.redred trivial hxb (.red hl hr'))
+              delFix_balanced_aux k
+                (by
+                  simp only [Path.left.sizeOf_spec, red.sizeOf_spec, Nat.reduceAdd, sizeOf_default,
+                    Nat.add_zero, node.sizeOf_spec, black.sizeOf_spec] at hk
+                  omega)
+                hpp (.redred trivial hxb (.red hl hr'))
           | blackL hw hpp =>
             cases hw with
             | black hwl hwr =>
             exact key (.black hwl hwr) hpp fun _ _ hl hr' =>
-              delFix_balanced_aux k (by simp at hk; omega) hpp
-                (.balanced (.black hxb (.red hl hr')))
+              delFix_balanced_aux k
+                (by
+                  simp only [Path.left.sizeOf_spec, black.sizeOf_spec, Nat.reduceAdd,
+                    sizeOf_default, Nat.add_zero, node.sizeOf_spec] at hk
+                  omega)
+                hpp (.balanced (.black hxb (.red hl hr')))
     | right pc w y pp =>
       cases w with
       | nil => cases hp with
@@ -919,13 +928,22 @@ theorem delFix_balanced_aux : ∀ (k : Nat) {path : Path α} {x : RBNode α} {c 
           cases hp with
           | redR hw hpp =>
             exact key hw hpp fun _ _ hl hr' =>
-              delFix_balanced_aux k (by simp at hk; omega) hpp (.redred trivial (.red hl hr') hxb)
+              delFix_balanced_aux k
+                (by
+                  simp only [Path.right.sizeOf_spec, red.sizeOf_spec, Nat.reduceAdd,
+                    node.sizeOf_spec, black.sizeOf_spec, sizeOf_default, Nat.add_zero] at hk
+                  omega)
+                hpp (.redred trivial (.red hl hr') hxb)
           | blackR hw hpp =>
             cases hw with
             | black hwl hwr =>
             exact key (.black hwl hwr) hpp fun _ _ hl hr' =>
-              delFix_balanced_aux k (by simp at hk; omega) hpp
-                (.balanced (.black (.red hl hr') hxb))
+              delFix_balanced_aux k
+                (by
+                  simp only [Path.right.sizeOf_spec, black.sizeOf_spec, Nat.reduceAdd,
+                    node.sizeOf_spec, sizeOf_default, Nat.add_zero] at hk
+                  omega)
+                hpp (.balanced (.black (.red hl hr') hxb))
 
 /-- **The erase fix-up restores the red-black invariant** (see `delFix_balanced_aux`, which
 carries the size bound its recursion needs). -/
