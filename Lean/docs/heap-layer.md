@@ -139,16 +139,17 @@ step-3 theorems about the `Node` branch take `!chained h node` as a hypothesis.
 
 Each step uses the ones before it.
 
-1. ✅ **`rotate` performs the zipper rotation** (`rotate_refines_left`, `rotate_refines_right`).
-   As built, the list of changed records is a separate theorem for each side,
-   `rotate_refines_left_frame` and `_right_frame`, and field by field `rotate_links` (the moving
-   subtree's first node, possibly the sentinel: only its `parent` word) and `rotate_parent_fields`
-   (the slot's node: only the link that held `a`, plus its `parent` word when it is the sentinel
-   and the moving subtree is empty).
+1. ✅ **`rotate` performs the zipper rotation** (`rotateAt_refines_left`,
+   `rotateAt_refines_right`). As built, the list of changed records is a separate theorem for each
+   side, `rotateAt_refines_left_frame` and `_right_frame`, and field by field `rotateAt_links` (the
+   moving subtree's first node, possibly the sentinel: only its `parent` word) and
+   `rotateAt_parent_fields` (the slot's node: only the link that held `a`, plus its `parent` word
+   when it is the sentinel and the moving subtree is empty). The heap's `child` and `rotate` are
+   named `childAt` and `rotateAt`, apart from the zipper's (§7, decision 4).
    ```lean
    -- Sketch.
-   theorem rotate_refines (hl : Located h head a t path) (ht : t = .node c l a (.node c' rl b rr)) :
-       Located (rotateHeap h a .left) head b (Oris.RB.rotate .left t) path
+   theorem rotateAt_refines (hl : Located h head a t path) (ht : t = .node c l a (.node c' rl b rr)) :
+       Located (rotateAt h a .left) head b (Oris.RB.rotate .left t) path
    ```
    The theorem also states exactly which addresses' fields changed: `a`, `b`, `rl`'s root, the
    parent, and `head` when `rl` is empty. Later frame arguments need that list.
@@ -179,7 +180,7 @@ Each step uses the ones before it.
 | 0 | This note, agreed | Decisions in §2 accepted or changed |
 | 1 ✅ | `Heap.lean`: `NodeRec`, the primitives, executable transcriptions of `rotate`, `attach_to`, `substitute_with`, `switch_with`, both fix-ups (in two variants: cached root and re-read root), and both counted operations | Each definition's doc names its Rust function, and its writes follow the Rust's order |
 | 1b ✅ | Extend `lake exe xcheck` to replay the trace through the heap model too, comparing with the Rust's shapes and with the zipper model, and running both root variants. Time the replay | 20,000 operations, 0 mismatches, before any proof is attempted. This also tests the cached-root expectation at heap level, for free |
-| 2 ✅ | `Repr`, `ReprPath`, `Repr.nodup`, the frame lemma, `rotate_refines` (as built: `Rep`, `RepPath`, `Rep.nodup`, `Rep.frame`, `RepPath.retarget`, `rotate_refines_left` and `_right`; §3, §4) | The first refinement theorem; if the encoding is clumsy, it shows here, cheaply |
+| 2 ✅ | `Repr`, `ReprPath`, `Repr.nodup`, the frame lemma, `rotateAt_refines` (as built: `Rep`, `RepPath`, `Rep.nodup`, `Rep.frame`, `RepPath.retarget`, `rotateAt_refines_left` and `_right`; §3, §4) | The first refinement theorem; if the encoding is clumsy, it shows here, cheaply |
 | 3 | Steps 2–5 of §4 | `insert_fixup` and `erase_fixup` performing `insFix` and `delFix`; the cached-root theorem |
 | 4 | Steps 6–7 of §4, chains included | `insert_spec` and `erase_spec` hold for the pointer code |
 
@@ -246,6 +247,12 @@ both ports. It would then be fixed as a patch, with an entry in `Cpp/ERRATA.md`
    the sentinel and the operation's node), and the whole replay, with the richer trace (equal
    keys, drains to empty, every node's `parent` word and chain), takes about 15 seconds.
 3. **The chains' proofs go in `Heap.lean`** (decided 2026-11-14).
+4. **The heap's `child` and `rotate` are `childAt` and `rotateAt`** (decided 2026-11-21). Named
+   `child` and `rotate`, as first written, they shadowed the zipper's `Oris.RB.child` and
+   `Oris.RB.rotate` inside `Oris.RB.Heap`, so a statement naming both levels had to qualify the
+   zipper's, and a file opening both namespaces could not use either name unqualified. The
+   theorems about them were renamed with them (`rotate_refines_left` became
+   `rotateAt_refines_left`, and so on), following `CONVENTIONS.md`'s `<def>_<property>`.
 
 ## 8. What stays outside the heap layer
 

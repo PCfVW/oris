@@ -5,15 +5,15 @@ import Oris.RB.Fixup
 # `rbtree.rs`'s pointer code, on a model heap
 
 Steps 1 and 2 of the heap layer, as numbered in the plan of `Lean/docs/heap-layer.md` (§5;
-§4 numbers the theorems, `rotate_refines` being its first).
+§4 numbers the theorems, `rotateAt_refines` being its first).
 
 - **Step 1, the definitions.** Every function below transcribes one function of
   `Rust/src/rbtree.rs`, **one heap update per Rust write, in the Rust's order**, with every read
   where the Rust reads it.
 - **Step 2, the abstraction relation and the first refinement theorem.** `Rep`, `RepPath`,
   `Located` and `Tree` say when a heap represents a zipper state of `Oris/RB/Fixup.lean`, and
-  `rotate_refines_left` and `rotate_refines_right` prove that `rotate` performs the zipper's
-  rotation.
+  `rotateAt_refines_left` and `rotateAt_refines_right` prove that `rotateAt` (`NodeBase::rotate`)
+  performs the zipper's rotation.
 
 That the other functions perform their zipper steps is the plan's steps 3 and 4.
 
@@ -27,6 +27,9 @@ That the other functions perform their zipper steps is the plan's steps 3 and 4.
   (`Heap.modify`). The Rust's `NodeBase` primitives that write the `parent` word
   (`set_parent_ptr`, `set_parent_side`, `set_colour`) are each one read-modify-write of that
   word, so each is one `Heap.modify` here.
+- Two of `NodeBase`'s functions share their names with `Fixup.lean`'s zipper models of the same
+  Rust: here they are `childAt` and `rotateAt` (an address in a heap, where the zipper's `child`
+  and `rotate` take a subtree), so that both levels can be named in one statement.
 - Rust's `Colour` enum is modelled as a `Bool` (`true` for red), the colour bit itself.
 - Keys: the descent of `insert_counted` compares nodes with the Rust's `T::cmp`; here, with
   `cmp (key a) (key b)` for a fixed `key : Addr → α`.
@@ -93,8 +96,9 @@ def Heap.modify (h : Heap) (a : Addr) (f : NodeRec → NodeRec) : Heap :=
 
 /-! ## `NodeBase`'s accessors (reads) -/
 
-/-- `NodeBase::child`: `children[s]`. -/
-def child (h : Heap) (a : Addr) : Side → Addr
+/-- `NodeBase::child`: `children[s]`. Named `childAt`, not `child`, to keep it apart from the
+zipper's `Oris.RB.child` (`Fixup.lean`), which this file also uses. -/
+def childAt (h : Heap) (a : Addr) : Side → Addr
   | .left => (h a).left
   | .right => (h a).right
 
@@ -167,13 +171,14 @@ def initHead (h : Heap) (head : Addr) : Heap :=
 `top`'s side-`s` child), then nine writes, in the Rust's order. When `top`'s side-`s` child is
 the sentinel, the second and third writes land on the sentinel's `parent` word (its scratch
 fields; `docs/heap-layer.md`, §1). Not modelled: the test builds' call to
-`tests::count_rotation`. -/
-def rotate (h : Heap) (this : Addr) (s : Side) : Heap :=
+`tests::count_rotation`. Named `rotateAt`, not `rotate`, to keep it apart from the zipper's
+`Oris.RB.rotate` (`Fixup.lean`), which the refinement theorems below state their results with. -/
+def rotateAt (h : Heap) (this : Addr) (s : Side) : Heap :=
   let o := s.other
   let ps := parentSide h this
   let thisParent := parent h this
-  let top := child h this o
-  let topSChild := child h top s
+  let top := childAt h this o
+  let topSChild := childAt h top s
   let h := setChild h this o topSChild
   let h := setParentPtr h topSChild this
   let h := setParentSide h topSChild o
@@ -190,7 +195,7 @@ neighbour writes, as in the Rust (the sentinel, when the caller's descent ended 
 def attachTo (h : Heap) (this parent : Addr) (s : Side) : Heap :=
   let h := setNeighbour h this .left this
   let h := setNeighbour h this .right this
-  let leafChild := child h parent s
+  let leafChild := childAt h parent s
   let h := setChild h this .left leafChild
   let h := setChild h this .right leafChild
   let h := setParentPtr h this parent
@@ -220,8 +225,8 @@ has just written the sentinel's scratch `parent` as `node`, and this overwrites 
 modelled: the `debug_assert!`s on `is_attached(node)` and `this != node`. -/
 def switchWith (h : Heap) (this node : Addr) : Heap :=
   let nps := parentSide h node
-  let nodeLeft := child h node .left
-  let nodeRight := child h node .right
+  let nodeLeft := childAt h node .left
+  let nodeRight := childAt h node .right
   let h := setChild h this .left nodeLeft
   let h := setChild h this .right nodeRight
   let nodeParent := parent h node
@@ -270,7 +275,7 @@ def insertFixupLoop (head : Addr) : Nat → Heap → Addr → Addr → Nat → O
       let pp := parent h p
       let s := parentSide h p
       let o := s.other
-      let ppRight := child h pp o
+      let ppRight := childAt h pp o
       if red h ppRight then
         -- Red uncle: `make_black(p); make_black(pp_right); make_red(pp); cur = pp`.
         let h := makeBlack h p
@@ -281,19 +286,19 @@ def insertFixupLoop (head : Addr) : Nat → Heap → Addr → Addr → Nat → O
       else
         -- Black uncle: if `cur == p_o_child`, `cur = p; rotate(cur, s)` first (inner case),
         -- then `make_black(p); make_red(pp); rotate(pp, o)`.
-        let pOChild := child h p o
+        let pOChild := childAt h p o
         let (h, cur, p, rotations) :=
           if cur = pOChild then
             let cur := p
-            let h := rotate h cur s
+            let h := rotateAt h cur s
             (h, cur, parent h cur, rotations + 1)
           else (h, cur, p, rotations)
         let h := makeBlack h p
         let h := makeRed h pp
-        let h := rotate h pp o
+        let h := rotateAt h pp o
         insertFixupLoop head fuel h cur p (rotations + 1)
     else
-      let root := child h head .left
+      let root := childAt h head .left
       some (makeBlack h root, rotations)
 
 /-- `rbtree.rs` `insert_fixup`: rebalances after `attach_to` attached `node` as a red leaf, and
@@ -315,23 +320,23 @@ def eraseFixupLoop (head : Addr) (reread : Bool) (root₀ : Addr) :
     Nat → Heap → Addr → Nat → Option (Heap × Nat)
   | 0, _, _, _ => none
   | fuel + 1, h, cur, rotations =>
-    let root := if reread then child h head .left else root₀
+    let root := if reread then childAt h head .left else root₀
     if !red h cur && cur != root then
       let p := parent h cur
       let s := parentSide h cur
       let o := s.other
-      let w := child h p o
+      let w := childAt h p o
       -- First case: `w` red.
       let (h, w, rotations) :=
         if red h w then
           let h := makeBlack h w
           let h := makeRed h p
-          let w := child h w s
-          let h := rotate h p s
+          let w := childAt h w s
+          let h := rotateAt h p s
           (h, w, rotations + 1)
         else (h, w, rotations)
-      let wLeft := child h w .left
-      let wRight := child h w .right
+      let wLeft := childAt h w .left
+      let wRight := childAt h w .right
       let wLeftBlack := !red h wLeft
       let wRightBlack := !red h wRight
       if wLeftBlack && wRightBlack then
@@ -340,24 +345,24 @@ def eraseFixupLoop (head : Addr) (reread : Bool) (root₀ : Addr) :
         eraseFixupLoop head reread root₀ fuel h p rotations
       else
         -- Third case, if `w`'s side-`o` child is black.
-        let wOChild := child h w o
+        let wOChild := childAt h w o
         let (h, w, rotations) :=
           if !red h wOChild then
-            let wSChild := child h w s
+            let wSChild := childAt h w s
             let h := makeBlack h wSChild
             let h := makeRed h w
             let c := wSChild
-            let h := rotate h w o
+            let h := rotateAt h w o
             (h, c, rotations + 1)
           else (h, w, rotations)
         -- Fourth case.
         let pColour := red h p
         let h := setColour h w pColour
         let h := makeBlack h p
-        let wOChild := child h w o
+        let wOChild := childAt h w o
         let h := makeBlack h wOChild
-        let h := rotate h p s
-        let cur := if reread then child h head .left else root₀
+        let h := rotateAt h p s
+        let cur := if reread then childAt h head .left else root₀
         eraseFixupLoop head reread root₀ fuel h cur (rotations + 1)
     else
       some (makeBlack h cur, rotations)
@@ -368,7 +373,7 @@ returns the rotations performed. `root₀` is read on entry, as the Rust reads `
 this file's one departure from the Rust (see the module doc): `none` when it runs out. -/
 def eraseFixupWith (reread : Bool) (fuel : Nat) (h : Heap) (head node : Addr) :
     Option (Heap × Nat) :=
-  eraseFixupLoop head reread (child h head .left) fuel h node 0
+  eraseFixupLoop head reread (childAt h head .left) fuel h node 0
 
 /-- `rbtree.rs` `erase_fixup`: the root read once, on entry, as the Rust does. -/
 def eraseFixup (fuel : Nat) (h : Heap) (head node : Addr) : Option (Heap × Nat) :=
@@ -391,8 +396,8 @@ def insertDescent {α : Type _} (cmp : α → α → Ordering) (key : Addr → �
     if cur != head then
       let last := cur
       match cmp (key node) (key cur) with
-      | .lt => insertDescent cmp key h head node fuel last (child h cur .left) .left
-      | .gt => insertDescent cmp key h head node fuel last (child h cur .right) .right
+      | .lt => insertDescent cmp key h head node fuel last (childAt h cur .left) .left
+      | .gt => insertDescent cmp key h head node fuel last (childAt h cur .right) .right
       | .eq => some (.inl cur)
     else some (.inr (last, s))
 
@@ -402,7 +407,7 @@ element with an equal key (`Chain`, no rotation) or attaching it as a red leaf a
 runs out. Not modelled: `head_ptr`'s lazy-initialization test (the `head` here is initialized). -/
 def insertCounted {α : Type _} (cmp : α → α → Ordering) (key : Addr → α) (fuel : Nat)
     (h : Heap) (head node : Addr) : Option (Heap × InsertKind × Nat) :=
-  match insertDescent cmp key h head node fuel head (child h head .left) .left with
+  match insertDescent cmp key h head node fuel head (childAt h head .left) .left with
   | none => none
   | some (.inl cur) => some (linkIntoChain h node cur, .chain, 0)
   | some (.inr (last, s)) =>
@@ -415,7 +420,7 @@ Rust (see the module doc): `none` when it runs out. -/
 def successorDescent (h : Heap) (head : Addr) : Nat → Addr → Addr → Option Addr
   | 0, _, _ => none
   | fuel + 1, repl, replLeft =>
-    if replLeft != head then successorDescent h head fuel replLeft (child h replLeft .left)
+    if replLeft != head then successorDescent h head fuel replLeft (childAt h replLeft .left)
     else some repl
 
 /-- `rbtree.rs` `IntrusiveMultiRbTree::erase_counted`, with `erase_fixup`'s root read as `reread`
@@ -434,18 +439,18 @@ def eraseCountedWith (reread : Bool) (fuel : Nat) (h : Heap) (head node : Addr) 
       let h := switchWith h repl node
       some (unlinkFromChain h node, .promote, 0)
   else
-    let right := child h node .right
+    let right := childAt h node .right
     let found : Option (Addr × Side) :=
       if right != head then
-        let left := child h node .left
+        let left := childAt h node .left
         if left != head then
-          (successorDescent h head fuel right (child h right .left)).map fun repl =>
+          (successorDescent h head fuel right (childAt h right .left)).map fun repl =>
             (repl, .right)
         else some (node, .right)
       else some (node, .left)
     found.bind fun (repl, s) =>
       let replRed := red h repl
-      let replChild := child h repl s
+      let replChild := childAt h repl s
       let h := substituteWith h repl replChild
       let h := if repl != node then switchWith h repl node else h
       if replRed then some (h, .node, 0)
@@ -468,8 +473,8 @@ def eraseCountedHpha (fuel : Nat) (h : Heap) (head node : Addr) :
 When a heap *is* a zipper state: `Rep` for a subtree, `RepPath` for its ancestors, `Located` for
 the pair. Their basic lemmas: no address occurs twice in a represented tree (`Rep.nodup`), writes
 outside a tree preserve it (`Rep.frame`, `RepPath.frame`), and a slot can change occupant
-(`RepPath.retarget`). Then the first refinement theorem: `rotate` performs the zipper's `rotate`
-(`rotate_refines_left`, `rotate_refines_right`). -/
+(`RepPath.retarget`). Then the first refinement theorem: `rotateAt` performs the zipper's
+`rotate` (`rotateAt_refines_left`, `rotateAt_refines_right`). -/
 
 open RBTree (RBNode RBColor)
 open RBTree.RBNode (Path)
@@ -671,7 +676,7 @@ theorem frame (hr : Rep h head a p s t) (hf : ∀ x ∈ t.toList, h' x = h x) :
     · rw [haa]; exact ihr fun x hx => hf x (by simp [hx])
 
 /-- The frame lemma for a subtree that moves to a new slot: when the first node keeps its
-children and colour but takes a new `parent` and side (as the subtree `rotate` moves across does),
+children and colour but takes a new `parent` and side (as the subtree `rotateAt` moves across does),
 and every other address of `t` keeps its record, the subtree is represented at the new slot. -/
 theorem reroot {p' : Addr} {s' : Side} (hr : Rep h head a p s t)
     (hroot : a ≠ head → (h' a).left = (h a).left ∧ (h' a).right = (h a).right ∧
@@ -833,8 +838,8 @@ theorem RepPath.retarget {h H : Heap} {head a b p : Addr} {s : Side} {path : Pat
     (hfr : ∀ x ∈ path.listL ++ path.listR, x ≠ p → H x = h x)
     (hright : (H head).right = (h head).right) (hred : (H head).red = (h head).red)
     (hleft : p ≠ head → (H head).left = (h head).left)
-    (hslot : child H p s = b)
-    (hp' : p ≠ head → child H p s.other = child h p s.other ∧ (H p).red = (h p).red ∧
+    (hslot : childAt H p s = b)
+    (hp' : p ≠ head → childAt H p s.other = childAt h p s.other ∧ (H p).red = (h p).red ∧
       (H p).parent = (h p).parent ∧ (H p).side = (h p).side) :
     RepPath H head b p s path := by
   cases hp with
@@ -881,7 +886,7 @@ theorem RepPath.head_side {h : Heap} {head a : Addr} {s : Side} {path : Path Add
 /-! ### Per-address descriptions of the structural operations
 
 Each operation's result, address by address, under the distinctness its callers guarantee: one
-`if` chain per operation (`rotate_apply`), so that a proof reads a field of the new heap with one
+`if` chain per operation (`rotateAt_apply`), so that a proof reads a field of the new heap with one
 `simp` instead of unfolding every write. -/
 
 /-- `setChild`'s write on a single record. -/
@@ -909,78 +914,78 @@ theorem setChild_eq (h : Heap) (a : Addr) (s : Side) (v : Addr) :
     setChild h a s v = h.modify a (·.withChild s v) := by
   cases s <;> rfl
 
-/-- **`rotate` touches four addresses.** On any heap, `rotate h this s` changes no record but those
-of `this`, its side-`o` child `top` (`o = s.other`), `top`'s side-`s` child, and `this`'s parent.
--/
-theorem rotate_frame (h : Heap) (this : Addr) (s : Side) {x : Addr} (h₁ : x ≠ this)
-    (h₂ : x ≠ child h this s.other) (h₃ : x ≠ child h (child h this s.other) s)
-    (h₄ : x ≠ parent h this) : rotate h this s x = h x := by
-  simp only [rotate, setChild, setParentPtr, setParentSide, Heap.modify]
+/-- **`rotateAt` touches four addresses.** On any heap, `rotateAt h this s` changes no record but
+those of `this`, its side-`o` child `top` (`o = s.other`), `top`'s side-`s` child, and `this`'s
+parent. -/
+theorem rotateAt_frame (h : Heap) (this : Addr) (s : Side) {x : Addr} (h₁ : x ≠ this)
+    (h₂ : x ≠ childAt h this s.other) (h₃ : x ≠ childAt h (childAt h this s.other) s)
+    (h₄ : x ≠ parent h this) : rotateAt h this s x = h x := by
+  simp only [rotateAt, setChild, setParentPtr, setParentSide, Heap.modify]
   simp [h₁, h₂, h₃, h₄]
 
-/-- Of `top`'s side-`s` child (the subtree that moves across), `rotate` writes only the `parent`
+/-- Of `top`'s side-`s` child (the subtree that moves across), `rotateAt` writes only the `parent`
 word's pointer and side bit: away from `this`, `top` and `this`'s parent, every record keeps its
 child links and colour. When that child is the sentinel, these are its scratch fields. -/
-theorem rotate_links (h : Heap) (this : Addr) (s : Side) {x : Addr} (h₁ : x ≠ this)
-    (h₂ : x ≠ child h this s.other) (h₄ : x ≠ parent h this) :
-    (rotate h this s x).left = (h x).left ∧ (rotate h this s x).right = (h x).right ∧
-      (rotate h this s x).red = (h x).red := by
-  simp only [rotate, setChild, setParentPtr, setParentSide, Heap.modify]
-  by_cases h₃ : x = child h (child h this s.other) s
+theorem rotateAt_links (h : Heap) (this : Addr) (s : Side) {x : Addr} (h₁ : x ≠ this)
+    (h₂ : x ≠ childAt h this s.other) (h₄ : x ≠ parent h this) :
+    (rotateAt h this s x).left = (h x).left ∧ (rotateAt h this s x).right = (h x).right ∧
+      (rotateAt h this s x).red = (h x).red := by
+  simp only [rotateAt, setChild, setParentPtr, setParentSide, Heap.modify]
+  by_cases h₃ : x = childAt h (childAt h this s.other) s
   · subst h₃; simp [h₁, h₂, h₄]
   · simp [h₁, h₂, h₃, h₄]
 
-/-- Of `this`'s parent, `rotate` writes only the child link `this` hung from, which now holds
+/-- Of `this`'s parent, `rotateAt` writes only the child link `this` hung from, which now holds
 `top`: the other link and the colour are kept, and so is the `parent` word unless the parent is
 also `top`'s side-`s` child (a rotation at the root whose moving subtree is empty: both are the
 sentinel, and its scratch `parent` and side are written). -/
-theorem rotate_parent_fields (h : Heap) (this : Addr) (s : Side)
-    (h₁ : parent h this ≠ this) (h₂ : parent h this ≠ child h this s.other) :
-    child (rotate h this s) (parent h this) (parentSide h this) = child h this s.other ∧
-      child (rotate h this s) (parent h this) (parentSide h this).other =
-        child h (parent h this) (parentSide h this).other ∧
-      (rotate h this s (parent h this)).red = (h (parent h this)).red ∧
-      (parent h this ≠ child h (child h this s.other) s →
-        (rotate h this s (parent h this)).parent = (h (parent h this)).parent ∧
-        (rotate h this s (parent h this)).side = (h (parent h this)).side) := by
-  by_cases h₃ : parent h this = child h (child h this s.other) s
+theorem rotateAt_parent_fields (h : Heap) (this : Addr) (s : Side)
+    (h₁ : parent h this ≠ this) (h₂ : parent h this ≠ childAt h this s.other) :
+    childAt (rotateAt h this s) (parent h this) (parentSide h this) = childAt h this s.other ∧
+      childAt (rotateAt h this s) (parent h this) (parentSide h this).other =
+        childAt h (parent h this) (parentSide h this).other ∧
+      (rotateAt h this s (parent h this)).red = (h (parent h this)).red ∧
+      (parent h this ≠ childAt h (childAt h this s.other) s →
+        (rotateAt h this s (parent h this)).parent = (h (parent h this)).parent ∧
+        (rotateAt h this s (parent h this)).side = (h (parent h this)).side) := by
+  by_cases h₃ : parent h this = childAt h (childAt h this s.other) s
   · refine ⟨?_, ?_, ?_, fun h₄ => absurd h₃ h₄⟩ <;>
-      simp only [parent, parentSide, child] at h₁ h₂ h₃ ⊢ <;>
+      simp only [parent, parentSide, childAt] at h₁ h₂ h₃ ⊢ <;>
       cases s <;> cases hps : (h this).side <;>
-      simp_all [rotate, parent, parentSide, child, Side.other, setChild, setParentPtr,
+      simp_all [rotateAt, parent, parentSide, childAt, Side.other, setChild, setParentPtr,
         setParentSide, Heap.modify]
-  · simp only [parent, parentSide, child] at h₁ h₂ h₃ ⊢
+  · simp only [parent, parentSide, childAt] at h₁ h₂ h₃ ⊢
     cases s <;> cases hps : (h this).side <;>
-      simp_all [rotate, parent, parentSide, child, Side.other, setChild, setParentPtr,
+      simp_all [rotateAt, parent, parentSide, childAt, Side.other, setChild, setParentPtr,
         setParentSide, Heap.modify]
 
-/-- **`rotate`, address by address.** With `top` `this`'s side-`o` child (`o = s.other`), `m`
-`top`'s side-`s` child and `P` `this`'s parent, all distinct except that `m` and `P` may coincide
-(a rotation at the root whose moving subtree is empty: both are then the sentinel), `rotate h this
-s` gives `this` the child `m` on side `o` and the slot `(top, s)`; `top` the child `this` on side
-`s` and `this`'s old slot; `m` the slot `(this, o)`; `P` the child `top` in the link that held
-`this` (on `m`'s record too when `m = P`); and every other address its old record. The writes'
-order matters only where two of them hit the same field, which the distinctness rules out. -/
-theorem rotate_apply (h : Heap) (this : Addr) (s : Side)
-    (h₁ : this ≠ child h this s.other) (h₂ : this ≠ child h (child h this s.other) s)
-    (h₃ : child h this s.other ≠ child h (child h this s.other) s)
-    (h₄ : this ≠ parent h this) (h₅ : child h this s.other ≠ parent h this) (x : Addr) :
-    rotate h this s x =
+/-- **`rotateAt`, address by address.** With `top` `this`'s side-`o` child (`o = s.other`), `m`
+`top`'s side-`s` child and `P` `this`'s parent, all distinct except that `m` and `P` may coincide (a
+rotation at the root whose moving subtree is empty: both are then the sentinel), `rotateAt h this s`
+gives `this` the child `m` on side `o` and the slot `(top, s)`; `top` the child `this` on side `s`
+and `this`'s old slot; `m` the slot `(this, o)`; `P` the child `top` in the link that held `this`
+(on `m`'s record too when `m = P`); and every other address its old record. The writes' order
+matters only where two of them hit the same field, which the distinctness rules out. -/
+theorem rotateAt_apply (h : Heap) (this : Addr) (s : Side)
+    (h₁ : this ≠ childAt h this s.other) (h₂ : this ≠ childAt h (childAt h this s.other) s)
+    (h₃ : childAt h this s.other ≠ childAt h (childAt h this s.other) s)
+    (h₄ : this ≠ parent h this) (h₅ : childAt h this s.other ≠ parent h this) (x : Addr) :
+    rotateAt h this s x =
       if x = this then
-        { (h this).withChild s.other (child h (child h this s.other) s) with
-          parent := child h this s.other, side := s }
-      else if x = child h this s.other then
+        { (h this).withChild s.other (childAt h (childAt h this s.other) s) with
+          parent := childAt h this s.other, side := s }
+      else if x = childAt h this s.other then
         { (h x).withChild s this with parent := parent h this, side := parentSide h this }
-      else if x = child h (child h this s.other) s then
-        { (if x = parent h this then (h x).withChild (parentSide h this) (child h this s.other)
+      else if x = childAt h (childAt h this s.other) s then
+        { (if x = parent h this then (h x).withChild (parentSide h this) (childAt h this s.other)
             else h x) with parent := this, side := s.other }
-      else if x = parent h this then (h x).withChild (parentSide h this) (child h this s.other)
+      else if x = parent h this then (h x).withChild (parentSide h this) (childAt h this s.other)
       else h x := by
-  generalize ht : child h this s.other = top at *
-  generalize hm : child h top s = m at *
+  generalize ht : childAt h this s.other = top at *
+  generalize hm : childAt h top s = m at *
   generalize hP : parent h this = P at *
   generalize hps : parentSide h this = ps
-  simp only [rotate, setChild_eq, setParentPtr, setParentSide, Heap.modify, ht, hm, hP, hps]
+  simp only [rotateAt, setChild_eq, setParentPtr, setParentSide, Heap.modify, ht, hm, hP, hps]
   by_cases e₁ : x = this
   · subst e₁; simp [h₁, h₂, h₄]
   by_cases e₂ : x = top
@@ -998,17 +1003,17 @@ theorem rotate_apply (h : Heap) (this : Addr) (s : Side)
 
 /-- **`NodeBase::rotate(this, Left)` performs the zipper rotation** (step 1 of the note's §4). If
 the heap represents the located subtree `node c l a (node c' rl b rr)`, then after
-`rotate h a .left` it represents `Oris.RB.rotate .left` of it, `node c' (node c l a rl) b rr`, at
-the same slot and path, with `b` now in the slot. Nothing is assumed beyond `Located` (the subtree
-and its path, which the proof needs: it is what puts the slot's node outside the subtree); in
-particular, the writes to the sentinel's scratch fields when `rl` is empty need no hypothesis.
-Which records change is `rotate_refines_left_frame` (and, field by field, `rotate_links` and
-`rotate_parent_fields`). -/
-theorem rotate_refines_left {h : Heap} {head a b p : Addr} {s : Side} {c c' : RBColor}
+`rotateAt h a .left` it represents `Oris.RB.rotate .left` of it, `node c' (node c l a rl) b rr`,
+at the same slot and path, with `b` now in the slot. Nothing is assumed beyond `Located` (the
+subtree and its path, which the proof needs: it is what puts the slot's node outside the subtree);
+in particular, the writes to the sentinel's scratch fields when `rl` is empty need no hypothesis.
+Which records change is `rotateAt_refines_left_frame` (and, field by field, `rotateAt_links` and
+`rotateAt_parent_fields`). -/
+theorem rotateAt_refines_left {h : Heap} {head a b p : Addr} {s : Side} {c c' : RBColor}
     {l rl rr : RBNode Addr} {path : Path Addr}
     (hl : Located h head a p s (.node c l a (.node c' rl b rr)) path) :
-    Located (rotate h a .left) head b p s
-      (Oris.RB.rotate .left (.node c l a (.node c' rl b rr))) path := by
+    Located (rotateAt h a .left) head b p s
+      (rotate .left (.node c l a (.node c' rl b rr))) path := by
   have hout := hl.outside
   have hpt := hl.slot_not_mem
   obtain ⟨hr, hp⟩ := hl
@@ -1032,24 +1037,24 @@ theorem rotate_refines_left {h : Heap} {head a b p : Addr} {s : Side} {c c' : RB
   have hap : a ≠ p := fun e => hpt.2.1 e.symm
   have hbp : b ≠ p := fun e => hpt.2.2.2.1 e.symm
   have hmp : m ≠ head → m ≠ p := fun hmh e => hpt.2.2.1 (e ▸ hmrl hmh)
-  have RL := rotate_apply h a .left (by simpa [child, Side.other, hab] using hab')
-    (by simpa [child, Side.other, hab, hm] using ham)
-    (by simpa [child, Side.other, hab, hm] using hbm) (by simpa [parent, hpa] using hap)
-    (by simpa [child, Side.other, hab, parent, hpa] using hbp)
-  simp only [child, Side.other, parent, parentSide, hab, hm, hpa, hsa] at RL
-  have rfr : ∀ x, x ≠ a → x ≠ b → x ≠ m → x ≠ p → rotate h a .left x = h x :=
+  have RL := rotateAt_apply h a .left (by simpa [childAt, Side.other, hab] using hab')
+    (by simpa [childAt, Side.other, hab, hm] using ham)
+    (by simpa [childAt, Side.other, hab, hm] using hbm) (by simpa [parent, hpa] using hap)
+    (by simpa [childAt, Side.other, hab, parent, hpa] using hbp)
+  simp only [childAt, Side.other, parent, parentSide, hab, hm, hpa, hsa] at RL
+  have rfr : ∀ x, x ≠ a → x ≠ b → x ≠ m → x ≠ p → rotateAt h a .left x = h x :=
     fun x h₁ h₂ h₃ h₄ => by simp [RL, h₁, h₂, h₃, h₄]
-  have RA : (rotate h a .left a).left = (h a).left ∧ (rotate h a .left a).right = m ∧
-      (rotate h a .left a).parent = b ∧ (rotate h a .left a).side = .left ∧
-      (rotate h a .left a).red = (h a).red := by
+  have RA : (rotateAt h a .left a).left = (h a).left ∧ (rotateAt h a .left a).right = m ∧
+      (rotateAt h a .left a).parent = b ∧ (rotateAt h a .left a).side = .left ∧
+      (rotateAt h a .left a).red = (h a).red := by
     simp [RL, NodeRec.withChild]
-  have RB : (rotate h a .left b).left = a ∧ (rotate h a .left b).right = (h b).right ∧
-      (rotate h a .left b).parent = p ∧ (rotate h a .left b).side = s ∧
-      (rotate h a .left b).red = (h b).red := by
+  have RB : (rotateAt h a .left b).left = a ∧ (rotateAt h a .left b).right = (h b).right ∧
+      (rotateAt h a .left b).parent = p ∧ (rotateAt h a .left b).side = s ∧
+      (rotateAt h a .left b).red = (h b).red := by
     simp [RL, hab'.symm]
-  have RM : m ≠ head → (rotate h a .left m).left = (h m).left ∧
-      (rotate h a .left m).right = (h m).right ∧ (rotate h a .left m).red = (h m).red ∧
-      (rotate h a .left m).parent = a ∧ (rotate h a .left m).side = .right := fun hmh => by
+  have RM : m ≠ head → (rotateAt h a .left m).left = (h m).left ∧
+      (rotateAt h a .left m).right = (h m).right ∧ (rotateAt h a .left m).red = (h m).red ∧
+      (rotateAt h a .left m).parent = a ∧ (rotateAt h a .left m).side = .right := fun hmh => by
     simp [RL, ham.symm, hbm.symm, hmp hmh]
   show Located _ head b p s (.node c' (.node c l a rl) b rr) path
   refine ⟨.node hb hnb RB.2.2.1 RB.2.2.2.1 (RB.2.2.2.2.trans hcb) ?_ ?_, ?_⟩
@@ -1078,9 +1083,9 @@ theorem rotate_refines_left {h : Heap} {head a b p : Addr} {s : Side} {c c' : RB
       · exact hph (e.trans hmh)
       · exact hpt.2.2.1 (by rw [e]; exact hmrl hmh)
     have hs : p = head → s = .left := fun e => by rw [e] at hp; exact hp.head_side
-    have HH : (rotate h a .left head).right = (h head).right ∧
-        (rotate h a .left head).red = (h head).red ∧
-        (p ≠ head → (rotate h a .left head).left = (h head).left) := by
+    have HH : (rotateAt h a .left head).right = (h head).right ∧
+        (rotateAt h a .left head).red = (h head).red ∧
+        (p ≠ head → (rotateAt h a .left head).left = (h head).left) := by
       have hah := Ne.symm ha
       have hbh := Ne.symm hb
       cases s
@@ -1105,33 +1110,33 @@ theorem rotate_refines_left {h : Heap} {head a b p : Addr} {s : Side} {c c' : RB
           · exact (hout x hx).1 (memt _ (.inr (.inr (.inl (e ▸ hmrl hmh)))))) hxp)
       HH.1 HH.2.1 HH.2.2 ?_ ?_
     · by_cases hpm' : p = m
-      · subst hpm'; cases s <;> simp [RL, child, Ne.symm hap, Ne.symm hbp, NodeRec.withChild]
-      · cases s <;> simp [RL, child, Ne.symm hap, Ne.symm hbp, hpm', NodeRec.withChild]
+      · subst hpm'; cases s <;> simp [RL, childAt, Ne.symm hap, Ne.symm hbp, NodeRec.withChild]
+      · cases s <;> simp [RL, childAt, Ne.symm hap, Ne.symm hbp, hpm', NodeRec.withChild]
     · intro hph
       have hpm' := hpm hph
-      cases s <;> simp [RL, child, Side.other, Ne.symm hap, Ne.symm hbp, hpm', NodeRec.withChild]
+      cases s <;> simp [RL, childAt, Side.other, Ne.symm hap, Ne.symm hbp, hpm', NodeRec.withChild]
 
-/-- `rotate_frame` for `rotate_refines_left`, in the zipper's terms: the only records the rotation
-changes are those of `a`, `b`, `b`'s left child (the first node of `rl`, or the sentinel when `rl`
-is empty) and the slot's node `p`. -/
-theorem rotate_refines_left_frame {h : Heap} {head a b p : Addr} {s : Side} {c c' : RBColor}
+/-- `rotateAt_frame` for `rotateAt_refines_left`, in the zipper's terms: the only records the
+rotation changes are those of `a`, `b`, `b`'s left child (the first node of `rl`, or the sentinel
+when `rl` is empty) and the slot's node `p`. -/
+theorem rotateAt_refines_left_frame {h : Heap} {head a b p : Addr} {s : Side} {c c' : RBColor}
     {l rl rr : RBNode Addr} {path : Path Addr}
     (hl : Located h head a p s (.node c l a (.node c' rl b rr)) path) {x : Addr}
     (h₁ : x ≠ a) (h₂ : x ≠ b) (h₃ : x ≠ (h b).left) (h₄ : x ≠ p) :
-    rotate h a .left x = h x := by
+    rotateAt h a .left x = h x := by
   obtain ⟨-, -, -, hpa, -, -, -, har⟩ := hl.1.node_inv
   obtain ⟨hab, -⟩ := har.node_inv
-  exact rotate_frame h a .left h₁ (by simpa [child, Side.other, hab] using h₂)
-    (by simpa [child, Side.other, hab] using h₃) (by simpa [parent, hpa] using h₄)
+  exact rotateAt_frame h a .left h₁ (by simpa [childAt, Side.other, hab] using h₂)
+    (by simpa [childAt, Side.other, hab] using h₃) (by simpa [parent, hpa] using h₄)
 
 /-- **`NodeBase::rotate(this, Right)` performs the zipper rotation**, the mirror image of
-`rotate_refines_left`: `node c (node c' ll b lr) a r` becomes `node c' ll b (node c lr a r)`.
-Which records change is `rotate_refines_right_frame`. -/
-theorem rotate_refines_right {h : Heap} {head a b p : Addr} {s : Side} {c c' : RBColor}
+`rotateAt_refines_left`: `node c (node c' ll b lr) a r` becomes `node c' ll b (node c lr a r)`.
+Which records change is `rotateAt_refines_right_frame`. -/
+theorem rotateAt_refines_right {h : Heap} {head a b p : Addr} {s : Side} {c c' : RBColor}
     {ll lr r : RBNode Addr} {path : Path Addr}
     (hl : Located h head a p s (.node c (.node c' ll b lr) a r) path) :
-    Located (rotate h a .right) head b p s
-      (Oris.RB.rotate .right (.node c (.node c' ll b lr) a r)) path := by
+    Located (rotateAt h a .right) head b p s
+      (rotate .right (.node c (.node c' ll b lr) a r)) path := by
   have hout := hl.outside
   have hpt := hl.slot_not_mem
   obtain ⟨hr, hp⟩ := hl
@@ -1159,24 +1164,24 @@ theorem rotate_refines_right {h : Heap} {head a b p : Addr} {s : Side} {c c' : R
   have hap : a ≠ p := fun e => hpa' e.symm
   have hbp : b ≠ p := fun e => hpb' e.symm
   have hmp : m ≠ head → m ≠ p := fun hmh e => hplr (e ▸ hmlr hmh)
-  have RL := rotate_apply h a .right (by simpa [child, Side.other, hab] using hab')
-    (by simpa [child, Side.other, hab, hm] using ham)
-    (by simpa [child, Side.other, hab, hm] using hbm) (by simpa [parent, hpa] using hap)
-    (by simpa [child, Side.other, hab, parent, hpa] using hbp)
-  simp only [child, Side.other, parent, parentSide, hab, hm, hpa, hsa] at RL
-  have rfr : ∀ x, x ≠ a → x ≠ b → x ≠ m → x ≠ p → rotate h a .right x = h x :=
+  have RL := rotateAt_apply h a .right (by simpa [childAt, Side.other, hab] using hab')
+    (by simpa [childAt, Side.other, hab, hm] using ham)
+    (by simpa [childAt, Side.other, hab, hm] using hbm) (by simpa [parent, hpa] using hap)
+    (by simpa [childAt, Side.other, hab, parent, hpa] using hbp)
+  simp only [childAt, Side.other, parent, parentSide, hab, hm, hpa, hsa] at RL
+  have rfr : ∀ x, x ≠ a → x ≠ b → x ≠ m → x ≠ p → rotateAt h a .right x = h x :=
     fun x h₁ h₂ h₃ h₄ => by simp [RL, h₁, h₂, h₃, h₄]
-  have RA : (rotate h a .right a).right = (h a).right ∧ (rotate h a .right a).left = m ∧
-      (rotate h a .right a).parent = b ∧ (rotate h a .right a).side = .right ∧
-      (rotate h a .right a).red = (h a).red := by
+  have RA : (rotateAt h a .right a).right = (h a).right ∧ (rotateAt h a .right a).left = m ∧
+      (rotateAt h a .right a).parent = b ∧ (rotateAt h a .right a).side = .right ∧
+      (rotateAt h a .right a).red = (h a).red := by
     simp [RL, NodeRec.withChild]
-  have RB : (rotate h a .right b).right = a ∧ (rotate h a .right b).left = (h b).left ∧
-      (rotate h a .right b).parent = p ∧ (rotate h a .right b).side = s ∧
-      (rotate h a .right b).red = (h b).red := by
+  have RB : (rotateAt h a .right b).right = a ∧ (rotateAt h a .right b).left = (h b).left ∧
+      (rotateAt h a .right b).parent = p ∧ (rotateAt h a .right b).side = s ∧
+      (rotateAt h a .right b).red = (h b).red := by
     simp [RL, hab'.symm]
-  have RM : m ≠ head → (rotate h a .right m).left = (h m).left ∧
-      (rotate h a .right m).right = (h m).right ∧ (rotate h a .right m).red = (h m).red ∧
-      (rotate h a .right m).parent = a ∧ (rotate h a .right m).side = .left := fun hmh => by
+  have RM : m ≠ head → (rotateAt h a .right m).left = (h m).left ∧
+      (rotateAt h a .right m).right = (h m).right ∧ (rotateAt h a .right m).red = (h m).red ∧
+      (rotateAt h a .right m).parent = a ∧ (rotateAt h a .right m).side = .left := fun hmh => by
     simp [RL, ham.symm, hbm.symm, hmp hmh]
   show Located _ head b p s (.node c' ll b (.node c lr a r)) path
   refine ⟨.node hb hnb RB.2.2.1 RB.2.2.2.1 (RB.2.2.2.2.trans hcb) ?_ ?_, ?_⟩
@@ -1208,9 +1213,9 @@ theorem rotate_refines_right {h : Heap} {head a b p : Addr} {s : Side} {c c' : R
       · exact hph (e.trans hmh)
       · exact hplr (by rw [e]; exact hmlr hmh)
     have hs : p = head → s = .left := fun e => by rw [e] at hp; exact hp.head_side
-    have HH : (rotate h a .right head).right = (h head).right ∧
-        (rotate h a .right head).red = (h head).red ∧
-        (p ≠ head → (rotate h a .right head).left = (h head).left) := by
+    have HH : (rotateAt h a .right head).right = (h head).right ∧
+        (rotateAt h a .right head).red = (h head).red ∧
+        (p ≠ head → (rotateAt h a .right head).left = (h head).left) := by
       have hah := Ne.symm ha
       have hbh := Ne.symm hb
       cases s
@@ -1235,23 +1240,23 @@ theorem rotate_refines_right {h : Heap} {head a b p : Addr} {s : Side} {c c' : R
           · exact (hout x hx).1 (memt _ (.inr (.inr (.inl (e ▸ hmlr hmh)))))) hxp)
       HH.1 HH.2.1 HH.2.2 ?_ ?_
     · by_cases hpm' : p = m
-      · subst hpm'; cases s <;> simp [RL, child, Ne.symm hap, Ne.symm hbp, NodeRec.withChild]
-      · cases s <;> simp [RL, child, Ne.symm hap, Ne.symm hbp, hpm', NodeRec.withChild]
+      · subst hpm'; cases s <;> simp [RL, childAt, Ne.symm hap, Ne.symm hbp, NodeRec.withChild]
+      · cases s <;> simp [RL, childAt, Ne.symm hap, Ne.symm hbp, hpm', NodeRec.withChild]
     · intro hph
       have hpm' := hpm hph
-      cases s <;> simp [RL, child, Side.other, Ne.symm hap, Ne.symm hbp, hpm', NodeRec.withChild]
+      cases s <;> simp [RL, childAt, Side.other, Ne.symm hap, Ne.symm hbp, hpm', NodeRec.withChild]
 
-/-- `rotate_frame` for `rotate_refines_right`: the only records changed are those of `a`, `b`,
+/-- `rotateAt_frame` for `rotateAt_refines_right`: the only records changed are those of `a`, `b`,
 `b`'s right child (the first node of `lr`, or the sentinel) and `p`. -/
-theorem rotate_refines_right_frame {h : Heap} {head a b p : Addr} {s : Side} {c c' : RBColor}
+theorem rotateAt_refines_right_frame {h : Heap} {head a b p : Addr} {s : Side} {c c' : RBColor}
     {ll lr r : RBNode Addr} {path : Path Addr}
     (hl : Located h head a p s (.node c (.node c' ll b lr) a r) path) {x : Addr}
     (h₁ : x ≠ a) (h₂ : x ≠ b) (h₃ : x ≠ (h b).right) (h₄ : x ≠ p) :
-    rotate h a .right x = h x := by
+    rotateAt h a .right x = h x := by
   obtain ⟨-, -, -, hpa, -, -, hal, -⟩ := hl.1.node_inv
   obtain ⟨hab, -⟩ := hal.node_inv
-  exact rotate_frame h a .right h₁ (by simpa [child, Side.other, hab] using h₂)
-    (by simpa [child, Side.other, hab] using h₃) (by simpa [parent, hpa] using h₄)
+  exact rotateAt_frame h a .right h₁ (by simpa [childAt, Side.other, hab] using h₂)
+    (by simpa [childAt, Side.other, hab] using h₃) (by simpa [parent, hpa] using h₄)
 
 end Heap
 

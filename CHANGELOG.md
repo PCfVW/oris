@@ -12,6 +12,13 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Changed
 
+- **Lean: the heap model's `child` and `rotate` are now `childAt` and `rotateAt`**, and the
+  theorems about them are renamed with them: `rotate_refines_left` and `_right` (cited in 0.3.2
+  below) are now `rotateAt_refines_left` and `_right`, likewise `rotateAt_refines_left_frame`,
+  `_right_frame`, `rotateAt_frame`, `rotateAt_links` and `rotateAt_parent_fields`. Under their
+  old names they shadowed the zipper's `Oris.RB.child` and `Oris.RB.rotate` inside
+  `Oris.RB.Heap` (`Lean/docs/heap-layer.md`, §7, decision 4). Statements and proofs are
+  otherwise unchanged.
 - **CI runs on `ubuntu-24.04`, pinned**, instead of `ubuntu-latest`, which GitHub is moving
   to Ubuntu 26: the Linux image now changes only when the workflows say so.
 
