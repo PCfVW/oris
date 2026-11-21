@@ -2183,6 +2183,39 @@ theorem insertFixup_refines {fuel : Nat} {h : Heap} {head node P : Addr} {S : Si
   refine ⟨H, ?_, hT⟩
   rw [insertFixup, hP, hH, Nat.zero_add]
 
+/-- The hole of a path lies above the subtree in it: the depth of the filled tree is at least the
+hole's depth plus the subtree's. -/
+theorem pathDepth_add_depth_le (path : Path Addr) (t : RBNode Addr) :
+    pathDepth path + t.depth ≤ (path.fill t).depth := by
+  induction path generalizing t with
+  | root => simp [pathDepth, Path.fill]
+  | left c pp y b ih =>
+    have := ih (.node c t y b)
+    simp only [pathDepth, Path.fill, RBNode.depth] at this ⊢
+    have := Nat.le_max_left t.depth b.depth
+    omega
+  | right c b y pp ih =>
+    have := ih (.node c b y t)
+    simp only [pathDepth, Path.fill, RBNode.depth] at this ⊢
+    have := Nat.le_max_right b.depth t.depth
+    omega
+
+/-- **The first fuel theorem**: fuel at least the depth of the tree `insert_fixup` starts from
+(`RBNode.depth`, the number of nodes on its longest branch: its height in edges plus one) always
+suffices, the loop's one departure from the Rust (the module doc) then never showing. -/
+theorem insertFixup_refines_depth {fuel : Nat} {h : Heap} {head node P : Addr} {S : Side}
+    {t : RBNode Addr} {path : Path Addr} (hl : Located h head node P S t path)
+    (hn : node ≠ head) (hroot : rootColour path ≠ some .red) (hf : (path.fill t).depth ≤ fuel) :
+    ∃ H, insertFixup fuel h head node = some (H, (insFix path t).2) ∧
+      Tree H head (insFix path t).1 := by
+  refine insertFixup_refines hl hn hroot ?_
+  have h1 := pathDepth_add_depth_le path t
+  obtain ⟨c, l, v, r, rfl⟩ : ∃ c l v r, t = .node c l v r := by
+    match t, hl.1.root_mem hn with
+    | .node c l v r, _ => exact ⟨c, l, v, r, rfl⟩
+  simp only [RBNode.depth] at h1
+  omega
+
 end Heap
 
 end Oris.RB
