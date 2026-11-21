@@ -26,7 +26,7 @@ proves it, and the cross-check runs against the Rust.
 |---|---|
 | Create a `.lean` file | [File layout](#file-layout), [the audit covers it](#the-audit-covers-every-module) |
 | Write a `def` that models Rust code | [Transcription](#transcription-rules), [departures](#departures-are-listed) |
-| Write a theorem | [Kernel-only](#kernel-only-proofs), [statement honesty](#statements-say-what-the-doc-says), [naming](#naming) |
+| Write a theorem | [Kernel-only](#kernel-only-proofs), [statement honesty](#statements-say-what-the-doc-says), [naming](#naming), [proof robustness](#proof-robustness) |
 | Write a recursive `def` or theorem | [Termination](#termination) |
 | Reach for `native_decide`, `bv_decide`, `sorry`, `axiom`, `admit` | [Kernel-only](#kernel-only-proofs) — don't |
 | Model a `usize` computation | [Machine arithmetic](#machine-arithmetic) |
@@ -141,6 +141,35 @@ a scratch copy, that every `[Std.TransCmp cmp]` a theorem takes is needed.
   checked in isolation.
 - Specification theorems (`*_spec`) take only hypotheses the Rust's callers guarantee (a valid
   tree with a black root, a request at or below `MAX_ALLOCATION`); their docs say what those are.
+
+---
+
+## Proof robustness
+
+A proof that compiles today should still compile after a toolchain or library bump, and after a
+small change to a definition, or fail where the change is. These rules came out of the audit of
+2026-11-21 (`docs/audits/2026-11-21-fresh-eyes/`, robustness findings R1–R10):
+
+- **No `simp [*]`.** Name the facts `simp` may use.
+- **A plain `simp` or `simp_all` only to close a goal.** In the middle of a proof, use
+  `simp only [...]` with its lemmas (`simp?` prints the list). When a case split must follow, split
+  first and close each case with a terminal `simp`.
+- **No `rfl` that unfolds a recursive definition.** Rewrite with its equations (`rw [insFix]`,
+  `simp only [insFix, ...]`). A well-founded definition such as `delFix` does not unfold by
+  `rfl` at all: give it per-arm equation lemmas next to its definition.
+- **A loop's definition is unfolded in one place**: one lemma per branch
+  (`insertFixupLoop_red_uncle`, `_black_uncle_outer`, `_black_uncle_inner`), which the proofs
+  about the loop use.
+- **No positional projections into a long conjunction** (`.2.2.2.1`). Return a structure with
+  named fields (`Rep.NodeView`, `NodupNode`), or destructure with `obtain ⟨name, ...⟩` right where
+  the conjunction is stated.
+- **Core's list normal forms are unpacked in one place each**: `List.nodup_append`'s in
+  `nodup_node`, `nodup_node_intro` and `nodup_withList`.
+- **No generated names.** No `fun_induction ... with | case1 ...`; no `rename_i` binding the
+  fields of a match after `split` (case on the scrutinee, or `cases h : e with`). One `rename_i`
+  naming the single condition that `split` on an `if` brings in is fine.
+- **An argument made more than twice becomes a lemma** (`Rep.ne_root`, the sentinel-or-member
+  argument; `rotateAt_sentinel`, the sentinel's fields under a rotation).
 
 ---
 

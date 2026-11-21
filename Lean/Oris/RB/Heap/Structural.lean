@@ -40,92 +40,62 @@ theorem rotateAt_refines_left {h : Heap} {head a b p : Addr} {s : Side} {c c' : 
   generalize hm : (h b).left = m at hbl
   obtain ⟨-, -, hal', hai, hli⟩ := nodup_node hr.nodup
   obtain ⟨-, -, hbrl, hbrr, hrlrr⟩ := nodup_node har.nodup
-  simp only [RBNode.toList_node, List.mem_append, List.mem_cons, not_or] at hai hli hpt
-  -- `m` is the sentinel or the root of `rl`.
-  have hmrl : m ≠ head → m ∈ rl.toList := hbl.root_mem
-  have hab' : a ≠ b := hai.2.1
-  have ham : a ≠ m := fun e => by
-    by_cases hmh : m = head
-    · exact ha (e.trans hmh)
-    · exact hai.1 (e ▸ hmrl hmh)
-  have hbm : b ≠ m := fun e => by
-    by_cases hmh : m = head
-    · exact hb (e.trans hmh)
-    · exact hbrl (e ▸ hmrl hmh)
-  have hap : a ≠ p := fun e => hpt.2.1 e.symm
-  have hbp : b ≠ p := fun e => hpt.2.2.2.1 e.symm
-  have hmp : m ≠ head → m ≠ p := fun hmh e => hpt.2.2.1 (e ▸ hmrl hmh)
-  have RL := rotateAt_apply h a .left (by simpa [childAt, Side.other, hab] using hab')
-    (by simpa [childAt, Side.other, hab, hm] using hbm) (by simpa [parent, hpa] using hap)
-    (by simpa [childAt, Side.other, hab, parent, hpa] using hbp)
+  -- Distinctness: `m` (the sentinel or the root of `rl`) through `Rep.ne_root`; `p` is outside.
+  have hab' : a ≠ b := fun e => hai (by simp [e])
+  have ham : a ≠ m := hbl.ne_root ha fun hx => hai (by simp [hx])
+  have hbm : b ≠ m := hbl.ne_root hb hbrl
+  have hap : a ≠ p := fun e => hpt (by simp [e])
+  have hbp : b ≠ p := fun e => hpt (by simp [e])
+  have hmp : m ≠ head → m ≠ p := fun hmh e => hpt (by simp [← e, hbl.root_mem hmh])
+  have hpm : p ≠ head → p ≠ m := fun hph => hbl.ne_root hph fun hx => hpt (by simp [hx])
+  have ap₁ : a ≠ childAt h a Side.left.other := by simpa [childAt, Side.other, hab] using hab'
+  have ap₃ : childAt h a Side.left.other ≠ childAt h (childAt h a Side.left.other) .left := by
+    simpa [childAt, Side.other, hab, hm] using hbm
+  have ap₄ : a ≠ parent h a := by simpa [parent, hpa] using hap
+  have ap₅ : childAt h a Side.left.other ≠ parent h a := by
+    simpa [childAt, Side.other, hab, parent, hpa] using hbp
+  have RL := rotateAt_apply h a .left ap₁ ap₃ ap₄ ap₅
   simp only [childAt, Side.other, parent, parentSide, hab, hm, hpa, hsa] at RL
   have rfr : ∀ x, x ≠ a → x ≠ b → x ≠ m → x ≠ p → rotateAt h a .left x = h x :=
     fun x h₁ h₂ h₃ h₄ => by simp [RL, h₁, h₂, h₃, h₄]
-  have RA : (rotateAt h a .left a).left = (h a).left ∧ (rotateAt h a .left a).right = m ∧
-      (rotateAt h a .left a).parent = b ∧ (rotateAt h a .left a).side = .left ∧
-      (rotateAt h a .left a).red = (h a).red := by
+  obtain ⟨RAl, RAr, RAp, RAs, RAc⟩ : (rotateAt h a .left a).left = (h a).left ∧
+      (rotateAt h a .left a).right = m ∧ (rotateAt h a .left a).parent = b ∧
+      (rotateAt h a .left a).side = .left ∧ (rotateAt h a .left a).red = (h a).red := by
     simp [RL, NodeRec.withChild]
-  have RB : (rotateAt h a .left b).left = a ∧ (rotateAt h a .left b).right = (h b).right ∧
-      (rotateAt h a .left b).parent = p ∧ (rotateAt h a .left b).side = s ∧
-      (rotateAt h a .left b).red = (h b).red := by
+  obtain ⟨RBl, RBr, RBp, RBs, RBc⟩ : (rotateAt h a .left b).left = a ∧
+      (rotateAt h a .left b).right = (h b).right ∧ (rotateAt h a .left b).parent = p ∧
+      (rotateAt h a .left b).side = s ∧ (rotateAt h a .left b).red = (h b).red := by
     simp [RL, hab'.symm]
   have RM : m ≠ head → (rotateAt h a .left m).left = (h m).left ∧
       (rotateAt h a .left m).right = (h m).right ∧ (rotateAt h a .left m).red = (h m).red ∧
       (rotateAt h a .left m).parent = a ∧ (rotateAt h a .left m).side = .right := fun hmh => by
     simp [RL, ham.symm, hbm.symm, hmp hmh]
   show Located _ head b p s (.node c' (.node c l a rl) b rr) path
-  refine ⟨.node hb hnb RB.2.2.1 RB.2.2.2.1 (RB.2.2.2.2.trans hcb) ?_ ?_, ?_⟩
-  · rw [RB.1]
-    refine .node ha hna RA.2.2.1 RA.2.2.2.1 (RA.2.2.2.2.trans hca) ?_ ?_
-    · rw [RA.1]
-      refine hal.frame fun x hx => rfr x (fun e => hal' (e ▸ hx)) (hli x hx).2.1
-        (fun e => ?_) (fun e => hpt.1 (e ▸ hx))
-      by_cases hmh : m = head
-      · exact (hal.mem_ne hx).1 (e.trans hmh)
-      · exact (hli x hx).1 (e ▸ hmrl hmh)
-    · rw [RA.2.1]
-      refine hbl.reroot RM fun x hx hxm => rfr x (fun e => hai.1 (e ▸ hx))
-        (fun e => hbrl (e ▸ hx)) hxm (fun e => hpt.2.2.1 (e ▸ hx))
-  · rw [RB.2.1]
-    refine hbr.frame fun x hx => rfr x (fun e => hai.2.2 (e ▸ hx)) (fun e => hbrr (e ▸ hx))
-      (fun e => ?_) (fun e => hpt.2.2.2.2 (e ▸ hx))
-    by_cases hmh : m = head
-    · exact (hbr.mem_ne hx).1 (e.trans hmh)
-    · exact hrlrr m (hmrl hmh) (e ▸ hx)
-  · have memt : ∀ x, x ∈ l.toList ∨ x = a ∨ x ∈ rl.toList ∨ x = b ∨ x ∈ rr.toList →
-        x ∈ (RBNode.node c l a (.node c' rl b rr)).toList := fun x hx => by
-      simp only [RBNode.toList_node, List.mem_append, List.mem_cons]; exact hx
-    have hpm : p ≠ head → p ≠ m := fun hph e => by
-      by_cases hmh : m = head
-      · exact hph (e.trans hmh)
-      · exact hpt.2.2.1 (by rw [e]; exact hmrl hmh)
-    have hs : p = head → s = .left := fun e => by rw [e] at hp; exact hp.head_side
-    have HH : (rotateAt h a .left head).right = (h head).right ∧
-        (rotateAt h a .left head).red = (h head).red ∧
-        (p ≠ head → (rotateAt h a .left head).left = (h head).left) := by
-      have hah := Ne.symm ha
-      have hbh := Ne.symm hb
-      cases s
-      · by_cases h1 : head = m
-        · subst h1
-          by_cases h2 : head = p
-          · subst h2; simp [RL, hah, hbh, NodeRec.withChild]
-          · simp [RL, hah, hbh, h2]
-        · by_cases h2 : head = p
-          · subst h2; simp [RL, hah, hbh, h1, NodeRec.withChild]
-          · simp [RL, hah, hbh, h1, h2]
-      · have h2 : head ≠ p := fun e => by cases hs e.symm
-        by_cases h1 : head = m
-        · subst h1; simp [RL, hah, hbh, h2]
-        · simp [RL, hah, hbh, h1, h2]
+  refine ⟨.node hb hnb RBp RBs (RBc.trans hcb) ?_ ?_, ?_⟩
+  · rw [RBl]
+    refine .node ha hna RAp RAs (RAc.trans hca) ?_ ?_
+    · rw [RAl]
+      exact hal.frame fun x hx => rfr x (fun e => hal' (e ▸ hx))
+        (fun e => hli x hx (by simp [e]))
+        (hbl.ne_root (hal.mem_ne hx).1 fun h' => hli x hx (by simp [h']))
+        (fun e => hpt (by simp [← e, hx]))
+    · rw [RAr]
+      exact hbl.reroot RM fun x hx hxm => rfr x (fun e => hai (by simp [← e, hx]))
+        (fun e => hbrl (e ▸ hx)) hxm (fun e => hpt (by simp [← e, hx]))
+  · rw [RBr]
+    exact hbr.frame fun x hx => rfr x (fun e => hai (by simp [← e, hx]))
+      (fun e => hbrr (e ▸ hx)) (hbl.ne_root (hbr.mem_ne hx).1 fun h' => hrlrr x h' hx)
+      (fun e => hpt (by simp [← e, hx]))
+  · have hs : p = head → s = .left := fun e => by rw [e] at hp; exact hp.head_side
+    have HH := rotateAt_sentinel h a .left ap₁ ap₃ ap₄ ap₅ (Ne.symm ha)
+      (by simpa [childAt, Side.other, hab] using Ne.symm hb)
+      (fun e => by simp only [parent, parentSide, hpa, hsa] at e ⊢; exact hs e)
+    simp only [parent, hpa] at HH
+    obtain ⟨HHr, HHc, HHl⟩ := HH
     refine hp.retarget hr (fun x hx hxp => rfr x
-        (fun e => (hout x hx).1 (memt _ (.inr (.inl e))))
-        (fun e => (hout x hx).1 (memt _ (.inr (.inr (.inr (.inl e))))))
-        (fun e => by
-          by_cases hmh : m = head
-          · exact (hout x hx).2 (e.trans hmh)
-          · exact (hout x hx).1 (memt _ (.inr (.inr (.inl (e ▸ hmrl hmh)))))) hxp)
-      HH.1 HH.2.1 HH.2.2 ?_ ?_
+        (fun e => (hout x hx).1 (by simp [e])) (fun e => (hout x hx).1 (by simp [e]))
+        (hbl.ne_root (hout x hx).2 fun h' => (hout x hx).1 (by simp [h'])) hxp)
+      HHr HHc HHl ?_ ?_
     · by_cases hpm' : p = m
       · subst hpm'; cases s <;> simp [RL, childAt, Ne.symm hap, Ne.symm hbp, NodeRec.withChild]
       · cases s <;> simp [RL, childAt, Ne.symm hap, Ne.symm hbp, hpm', NodeRec.withChild]
@@ -162,99 +132,62 @@ theorem rotateAt_refines_right {h : Heap} {head a b p : Addr} {s : Side} {c c' :
   generalize hm : (h b).right = m at hbr
   obtain ⟨-, -, hai, har', hli⟩ := nodup_node hr.nodup
   obtain ⟨-, -, hbll, hblr, hlllr⟩ := nodup_node hal.nodup
-  simp only [RBNode.toList_node, List.mem_append, List.mem_cons, not_or] at hai hpt
-  obtain ⟨⟨hpll, hpb', hplr⟩, hpa', hpr⟩ := hpt
-  have memi : ∀ x, x ∈ ll.toList ∨ x = b ∨ x ∈ lr.toList →
-      x ∈ (RBNode.node c' ll b lr).toList := fun x hx => by
-    simp only [RBNode.toList_node, List.mem_append, List.mem_cons]; exact hx
-  -- `m` is the sentinel or the root of `lr`.
-  have hmlr : m ≠ head → m ∈ lr.toList := hbr.root_mem
-  have hab' : a ≠ b := hai.2.1
-  have ham : a ≠ m := fun e => by
-    by_cases hmh : m = head
-    · exact ha (e.trans hmh)
-    · exact hai.2.2 (e ▸ hmlr hmh)
-  have hbm : b ≠ m := fun e => by
-    by_cases hmh : m = head
-    · exact hb (e.trans hmh)
-    · exact hblr (e ▸ hmlr hmh)
-  have hap : a ≠ p := fun e => hpa' e.symm
-  have hbp : b ≠ p := fun e => hpb' e.symm
-  have hmp : m ≠ head → m ≠ p := fun hmh e => hplr (e ▸ hmlr hmh)
-  have RL := rotateAt_apply h a .right (by simpa [childAt, Side.other, hab] using hab')
-    (by simpa [childAt, Side.other, hab, hm] using hbm) (by simpa [parent, hpa] using hap)
-    (by simpa [childAt, Side.other, hab, parent, hpa] using hbp)
+  -- Distinctness: `m` (the sentinel or the root of `lr`) through `Rep.ne_root`; `p` is outside.
+  have hab' : a ≠ b := fun e => hai (by simp [e])
+  have ham : a ≠ m := hbr.ne_root ha fun hx => hai (by simp [hx])
+  have hbm : b ≠ m := hbr.ne_root hb hblr
+  have hap : a ≠ p := fun e => hpt (by simp [e])
+  have hbp : b ≠ p := fun e => hpt (by simp [e])
+  have hmp : m ≠ head → m ≠ p := fun hmh e => hpt (by simp [← e, hbr.root_mem hmh])
+  have hpm : p ≠ head → p ≠ m := fun hph => hbr.ne_root hph fun hx => hpt (by simp [hx])
+  have ap₁ : a ≠ childAt h a Side.right.other := by simpa [childAt, Side.other, hab] using hab'
+  have ap₃ : childAt h a Side.right.other ≠ childAt h (childAt h a Side.right.other) .right := by
+    simpa [childAt, Side.other, hab, hm] using hbm
+  have ap₄ : a ≠ parent h a := by simpa [parent, hpa] using hap
+  have ap₅ : childAt h a Side.right.other ≠ parent h a := by
+    simpa [childAt, Side.other, hab, parent, hpa] using hbp
+  have RL := rotateAt_apply h a .right ap₁ ap₃ ap₄ ap₅
   simp only [childAt, Side.other, parent, parentSide, hab, hm, hpa, hsa] at RL
   have rfr : ∀ x, x ≠ a → x ≠ b → x ≠ m → x ≠ p → rotateAt h a .right x = h x :=
     fun x h₁ h₂ h₃ h₄ => by simp [RL, h₁, h₂, h₃, h₄]
-  have RA : (rotateAt h a .right a).right = (h a).right ∧ (rotateAt h a .right a).left = m ∧
-      (rotateAt h a .right a).parent = b ∧ (rotateAt h a .right a).side = .right ∧
-      (rotateAt h a .right a).red = (h a).red := by
+  obtain ⟨RAr, RAl, RAp, RAs, RAc⟩ : (rotateAt h a .right a).right = (h a).right ∧
+      (rotateAt h a .right a).left = m ∧ (rotateAt h a .right a).parent = b ∧
+      (rotateAt h a .right a).side = .right ∧ (rotateAt h a .right a).red = (h a).red := by
     simp [RL, NodeRec.withChild]
-  have RB : (rotateAt h a .right b).right = a ∧ (rotateAt h a .right b).left = (h b).left ∧
-      (rotateAt h a .right b).parent = p ∧ (rotateAt h a .right b).side = s ∧
-      (rotateAt h a .right b).red = (h b).red := by
+  obtain ⟨RBr, RBl, RBp, RBs, RBc⟩ : (rotateAt h a .right b).right = a ∧
+      (rotateAt h a .right b).left = (h b).left ∧ (rotateAt h a .right b).parent = p ∧
+      (rotateAt h a .right b).side = s ∧ (rotateAt h a .right b).red = (h b).red := by
     simp [RL, hab'.symm]
   have RM : m ≠ head → (rotateAt h a .right m).left = (h m).left ∧
       (rotateAt h a .right m).right = (h m).right ∧ (rotateAt h a .right m).red = (h m).red ∧
       (rotateAt h a .right m).parent = a ∧ (rotateAt h a .right m).side = .left := fun hmh => by
     simp [RL, ham.symm, hbm.symm, hmp hmh]
   show Located _ head b p s (.node c' ll b (.node c lr a r)) path
-  refine ⟨.node hb hnb RB.2.2.1 RB.2.2.2.1 (RB.2.2.2.2.trans hcb) ?_ ?_, ?_⟩
-  · rw [RB.2.1]
-    refine hbl.frame fun x hx => rfr x (fun e => hai.1 (e ▸ hx)) (fun e => hbll (e ▸ hx))
-      (fun e => ?_) (fun e => hpll (e ▸ hx))
-    by_cases hmh : m = head
-    · exact (hbl.mem_ne hx).1 (e.trans hmh)
-    · exact hlllr x hx (e ▸ hmlr hmh)
-  · rw [RB.1]
-    refine .node ha hna RA.2.2.1 RA.2.2.2.1 (RA.2.2.2.2.trans hca) ?_ ?_
-    · rw [RA.2.1]
-      exact hbr.reroot RM fun x hx hxm => rfr x (fun e => hai.2.2 (e ▸ hx))
-        (fun e => hblr (e ▸ hx)) hxm (fun e => hplr (e ▸ hx))
-    · rw [RA.1]
-      refine har.frame fun x hx => rfr x (fun e => har' (e ▸ hx))
-        (fun e => hli b (memi b (.inr (.inl rfl))) (e ▸ hx)) (fun e => ?_)
-        (fun e => hpr (e ▸ hx))
-      by_cases hmh : m = head
-      · exact (har.mem_ne hx).1 (e.trans hmh)
-      · exact hli m (memi m (.inr (.inr (hmlr hmh)))) (e ▸ hx)
-  · have memt : ∀ x, x ∈ ll.toList ∨ x = b ∨ x ∈ lr.toList ∨ x = a ∨ x ∈ r.toList →
-        x ∈ (RBNode.node c (.node c' ll b lr) a r).toList := fun x hx => by
-      simp only [RBNode.toList_node, List.mem_append, List.mem_cons, List.append_assoc,
-        List.cons_append]
-      rcases hx with hx | hx | hx | hx | hx <;> simp [hx]
-    have hpm : p ≠ head → p ≠ m := fun hph e => by
-      by_cases hmh : m = head
-      · exact hph (e.trans hmh)
-      · exact hplr (by rw [e]; exact hmlr hmh)
-    have hs : p = head → s = .left := fun e => by rw [e] at hp; exact hp.head_side
-    have HH : (rotateAt h a .right head).right = (h head).right ∧
-        (rotateAt h a .right head).red = (h head).red ∧
-        (p ≠ head → (rotateAt h a .right head).left = (h head).left) := by
-      have hah := Ne.symm ha
-      have hbh := Ne.symm hb
-      cases s
-      · by_cases h1 : head = m
-        · subst h1
-          by_cases h2 : head = p
-          · subst h2; simp [RL, hah, hbh, NodeRec.withChild]
-          · simp [RL, hah, hbh, h2]
-        · by_cases h2 : head = p
-          · subst h2; simp [RL, hah, hbh, h1, NodeRec.withChild]
-          · simp [RL, hah, hbh, h1, h2]
-      · have h2 : head ≠ p := fun e => by cases hs e.symm
-        by_cases h1 : head = m
-        · subst h1; simp [RL, hah, hbh, h2]
-        · simp [RL, hah, hbh, h1, h2]
+  refine ⟨.node hb hnb RBp RBs (RBc.trans hcb) ?_ ?_, ?_⟩
+  · rw [RBl]
+    exact hbl.frame fun x hx => rfr x (fun e => hai (by simp [← e, hx]))
+      (fun e => hbll (e ▸ hx)) (hbr.ne_root (hbl.mem_ne hx).1 fun h' => hlllr x hx h')
+      (fun e => hpt (by simp [← e, hx]))
+  · rw [RBr]
+    refine .node ha hna RAp RAs (RAc.trans hca) ?_ ?_
+    · rw [RAl]
+      exact hbr.reroot RM fun x hx hxm => rfr x (fun e => hai (by simp [← e, hx]))
+        (fun e => hblr (e ▸ hx)) hxm (fun e => hpt (by simp [← e, hx]))
+    · rw [RAr]
+      exact har.frame fun x hx => rfr x (fun e => har' (e ▸ hx))
+        (fun e => hli b (by simp) (by simp [← e, hx]))
+        (hbr.ne_root (har.mem_ne hx).1 fun h' => hli x (by simp [h']) hx)
+        (fun e => hpt (by simp [← e, hx]))
+  · have hs : p = head → s = .left := fun e => by rw [e] at hp; exact hp.head_side
+    have HH := rotateAt_sentinel h a .right ap₁ ap₃ ap₄ ap₅ (Ne.symm ha)
+      (by simpa [childAt, Side.other, hab] using Ne.symm hb)
+      (fun e => by simp only [parent, parentSide, hpa, hsa] at e ⊢; exact hs e)
+    simp only [parent, hpa] at HH
+    obtain ⟨HHr, HHc, HHl⟩ := HH
     refine hp.retarget hr (fun x hx hxp => rfr x
-        (fun e => (hout x hx).1 (memt _ (.inr (.inr (.inr (.inl e))))))
-        (fun e => (hout x hx).1 (memt _ (.inr (.inl e))))
-        (fun e => by
-          by_cases hmh : m = head
-          · exact (hout x hx).2 (e.trans hmh)
-          · exact (hout x hx).1 (memt _ (.inr (.inr (.inl (e ▸ hmlr hmh)))))) hxp)
-      HH.1 HH.2.1 HH.2.2 ?_ ?_
+        (fun e => (hout x hx).1 (by simp [e])) (fun e => (hout x hx).1 (by simp [e]))
+        (hbr.ne_root (hout x hx).2 fun h' => (hout x hx).1 (by simp [h'])) hxp)
+      HHr HHc HHl ?_ ?_
     · by_cases hpm' : p = m
       · subst hpm'; cases s <;> simp [RL, childAt, Ne.symm hap, Ne.symm hbp, NodeRec.withChild]
       · cases s <;> simp [RL, childAt, Ne.symm hap, Ne.symm hbp, hpm', NodeRec.withChild]
@@ -337,26 +270,18 @@ theorem substituteWith_refines_core {h : Heap} {head this p k : Addr} {s σ : Si
   simp only [hpa, hsa] at SU
   have hs : p = head → s = .left := fun e => by rw [e] at hp; exact hp.head_side
   -- `k` is the sentinel or an address of `u`, inside `t`; `p` is the sentinel or on the path.
-  have hkp₀ : p ≠ head → k ≠ p := fun hph e => by
-    by_cases hkh : k = head
-    · exact hph (e ▸ hkh)
-    · exact hpt (e ▸ hut k (hk hkh))
+  have hkp₀ : p ≠ head → k ≠ p := fun hph => Ne.symm (hu.ne_root hph fun h' => hpt (hut p h'))
   have FK : (substituteWith h this k k).parent = p ∧ (substituteWith h this k k).side = s := by
     simp [SU]
   refine ⟨⟨?_, ?_⟩, FK⟩
   · refine hu.reroot (fun hkh => ?_) (fun x hx hxk => ?_)
-    · have hkp : k ≠ p := fun e => by
-        by_cases hph : p = head
-        · exact hkh (e.trans hph)
-        · exact hkp₀ hph e
+    · have hkp : k ≠ p := fun e => hpt (e ▸ hut k (hk hkh))
       simp [SU, hkp]
     · have hxp : x ≠ p := fun e => hpt (e ▸ hut x hx)
       simp [SU, hxk, hxp]
-  · have hkk : ∀ x ∈ path.listL ++ path.listR, x ≠ k := fun x hx e => by
-      by_cases hkh : k = head
-      · exact (hout x hx).2 (e.trans hkh)
-      · exact (hout x hx).1 (e ▸ hut k (hk hkh))
-    have HH : (substituteWith h this k head).right = (h head).right ∧
+  · have hkk : ∀ x ∈ path.listL ++ path.listR, x ≠ k := fun x hx =>
+      hu.ne_root (hout x hx).2 fun h' => (hout x hx).1 (hut x h')
+    obtain ⟨HHr, HHc, HHl⟩ : (substituteWith h this k head).right = (h head).right ∧
         (substituteWith h this k head).red = (h head).red ∧
         (p ≠ head → (substituteWith h this k head).left = (h head).left) := by
       by_cases hph : p = head
@@ -369,7 +294,7 @@ theorem substituteWith_refines_core {h : Heap} {head this p k : Addr} {s σ : Si
         · subst hkh; simp [SU, hhp]
         · simp [SU, hkh, hhp]
     refine hp.retarget hr (fun x hx hxp => substituteWith_frame h this k (hkk x hx)
-        (by rw [hpa]; exact hxp)) HH.1 HH.2.1 HH.2.2 ?_ ?_
+        (by rw [hpa]; exact hxp)) HHr HHc HHl ?_ ?_
     · by_cases hph : p = head
       · subst hph; obtain rfl := hs rfl
         by_cases hkh : p = k
@@ -438,46 +363,22 @@ theorem switchWith_refines {h : Heap} {head this node p : Addr} {s : Side} {c : 
   have hout := hl.outside
   have hpt := hl.slot_not_mem
   obtain ⟨hr, hp⟩ := hl
-  obtain ⟨-, hnh, -, hpa, hsa, hca, hL, hR⟩ := hr.node_inv
+  obtain ⟨-, -, -, hpa, hsa, hca, hL, hR⟩ := hr.node_inv
   generalize hLe : (h node).left = L at hL
   generalize hRe : (h node).right = R at hR
-  obtain ⟨-, -, hnl, hnr, hlr⟩ := nodup_node hr.nodup
-  simp only [RBNode.toList_node, List.mem_append, List.mem_cons, not_or] at htree hpt
-  have hLm : L ≠ head → L ∈ l.toList := hL.root_mem
-  have hRm : R ≠ head → R ∈ r.toList := hR.root_mem
+  obtain ⟨-, -, -, -, hlr⟩ := nodup_node hr.nodup
   -- Distinctness, the sentinel being the only address `L`, `R` and `p` can share.
-  have hnL : node ≠ L := fun e => by
-    by_cases hLh : L = head
-    · exact hnh (e.trans hLh)
-    · exact hnl (e ▸ hLm hLh)
-  have hnR : node ≠ R := fun e => by
-    by_cases hRh : R = head
-    · exact hnh (e.trans hRh)
-    · exact hnr (e ▸ hRm hRh)
-  have hnp : node ≠ p := fun e => hpt.2.1 e.symm
-  have htn : this ≠ node := htree.2.1
-  have htL : this ≠ L := fun e => by
-    by_cases hLh : L = head
-    · exact hn (e.trans hLh)
-    · exact htree.1 (e ▸ hLm hLh)
-  have htR : this ≠ R := fun e => by
-    by_cases hRh : R = head
-    · exact hn (e.trans hRh)
-    · exact htree.2.2 (e ▸ hRm hRh)
+  have htL : this ≠ L := hL.ne_root hn fun hx => htree (by simp [hx])
+  have htR : this ≠ R := hR.ne_root hn fun hx => htree (by simp [hx])
   have htp : this ≠ p := fun e => by
     rcases hp.slot with hph | hpm
     · exact hn (e.trans hph)
     · exact hpath (e ▸ hpm)
-  have hLR : L ≠ head → L ≠ R := fun hLh e => by
-    by_cases hRh : R = head
-    · exact hLh (e.trans hRh)
-    · exact hlr L (hLm hLh) (e ▸ hRm hRh)
-  have hLp : L ≠ head → L ≠ p := fun hLh e => hpt.1 (e ▸ hLm hLh)
-  have hRp : R ≠ head → R ≠ p := fun hRh e => hpt.2.2 (e ▸ hRm hRh)
-  have SW := switchWith_apply h this node htn (by simpa [childAt, hLe] using hnL)
-    (by simpa [childAt, hRe] using hnR) (by simpa [parent, hpa] using hnp)
-    (by simpa [childAt, hLe] using htL) (by simpa [childAt, hRe] using htR)
-    (by simpa [parent, hpa] using htp)
+  have hLR : L ≠ head → L ≠ R := fun hLh => hR.ne_root hLh (hlr L (hL.root_mem hLh))
+  have hLp : L ≠ head → L ≠ p := fun hLh e => hpt (by simp [← e, hL.root_mem hLh])
+  have hRp : R ≠ head → R ≠ p := fun hRh e => hpt (by simp [← e, hR.root_mem hRh])
+  have SW := switchWith_apply h this node (by simpa [childAt, hLe] using htL)
+    (by simpa [childAt, hRe] using htR) (by simpa [parent, hpa] using htp)
   simp only [childAt, parent, parentSide, red, hLe, hRe, hpa, hsa, hca] at SW
   have hs : p = head → s = .left := fun e => by rw [e] at hp; exact hp.head_side
   have FR : (switchWith h this node R).parent = this ∧ (switchWith h this node R).side = .right :=
@@ -492,40 +393,24 @@ theorem switchWith_refines {h : Heap} {head this node p : Addr} {s : Side} {c : 
     · have h1 := hLR hLh
       have h2 := hLp hLh
       simp [SW, Ne.symm htL, h1, h2]
-    · have h1 : x ≠ this := fun e => htree.1 (e ▸ hx)
-      have h2 : x ≠ R := fun e => by
-        by_cases hRh : R = head
-        · exact (hL.mem_ne hx).1 (e.trans hRh)
-        · exact hlr x hx (e ▸ hRm hRh)
-      have h3 : x ≠ p := fun e => hpt.1 (e ▸ hx)
+    · have h1 : x ≠ this := fun e => htree (by simp [← e, hx])
+      have h2 : x ≠ R := hR.ne_root (hL.mem_ne hx).1 (hlr x hx)
+      have h3 : x ≠ p := fun e => hpt (by simp [← e, hx])
       simp [SW, h1, h2, hxL, h3]
   · have e : (switchWith h this node this).right = R := by simp [SW]
     rw [e]
     refine hR.reroot (fun hRh => ?_) (fun x hx hxR => ?_)
     · have h2 := hRp hRh
       simp [SW, Ne.symm htR, h2]
-    · have h1 : x ≠ this := fun e => htree.2.2 (e ▸ hx)
-      have h2 : x ≠ L := fun e => by
-        by_cases hLh : L = head
-        · exact (hR.mem_ne hx).1 (e.trans hLh)
-        · exact hlr L (hLm hLh) (e ▸ hx)
-      have h3 : x ≠ p := fun e => hpt.2.2 (e ▸ hx)
+    · have h1 : x ≠ this := fun e => htree (by simp [← e, hx])
+      have h2 : x ≠ L := hL.ne_root (hR.mem_ne hx).1 fun h' => hlr x h' hx
+      have h3 : x ≠ p := fun e => hpt (by simp [← e, hx])
       simp [SW, h1, h2, hxR, h3]
   · have hfr : ∀ x ∈ path.listL ++ path.listR, x ≠ p → switchWith h this node x = h x :=
       fun x hx hxp => by
         have h1 : x ≠ this := fun e => hpath (e ▸ hx)
-        have h2 : x ≠ L := fun e => by
-          by_cases hLh : L = head
-          · exact (hout x hx).2 (e.trans hLh)
-          · exact (hout x hx).1 (by
-              simp only [RBNode.toList_node, List.mem_append, List.mem_cons]
-              exact .inl (e ▸ hLm hLh))
-        have h3 : x ≠ R := fun e => by
-          by_cases hRh : R = head
-          · exact (hout x hx).2 (e.trans hRh)
-          · exact (hout x hx).1 (by
-              simp only [RBNode.toList_node, List.mem_append, List.mem_cons]
-              exact .inr (.inr (e ▸ hRm hRh)))
+        have h2 : x ≠ L := hL.ne_root (hout x hx).2 fun h' => (hout x hx).1 (by simp [h'])
+        have h3 : x ≠ R := hR.ne_root (hout x hx).2 fun h' => (hout x hx).1 (by simp [h'])
         simp [SW, h1, h2, h3, hxp]
     -- Off `this`, a record keeps its right link and colour (its left link too, off the slot's
     -- node), and the slot's node gets `this` in the slot: whichever of `L`, `R` and `p` coincide.
@@ -551,12 +436,12 @@ theorem switchWith_refines {h : Heap} {head this node p : Addr} {s : Side} {c : 
           by_cases e₃ : x = p
           · rw [ite_eq_left e₃]; obtain rfl := hxs e₃; simp [e₃]
           · rw [ite_eq_right e₃]; simp [e₃]
-    have HH := GEN head (Ne.symm hn) (fun e => hs e.symm)
-    refine hp.retarget hr hfr HH.1 HH.2.1 (fun hph => HH.2.2.1 (Ne.symm hph)) ?_ ?_
+    obtain ⟨HHr, HHc, HHl, -⟩ := GEN head (Ne.symm hn) (fun e => hs e.symm)
+    refine hp.retarget hr hfr HHr HHc (fun hph => HHl (Ne.symm hph)) ?_ ?_
     · by_cases hph : p = head
-      · have G := GEN p (Ne.symm htp) (fun _ => hs hph)
+      · obtain ⟨-, -, -, Gslot⟩ := GEN p (Ne.symm htp) (fun _ => hs hph)
         obtain rfl := hs hph
-        exact G.2.2.2 rfl
+        exact Gslot rfl
       · have e₁ : p ≠ R := fun e => hRp (fun h' => hph (e.trans h')) e.symm
         have e₂ : p ≠ L := fun e => hLp (fun h' => hph (e.trans h')) e.symm
         cases s <;> simp [SW, childAt, Ne.symm htp, e₁, e₂, NodeRec.withChild]
