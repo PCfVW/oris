@@ -838,11 +838,11 @@ theorem delFix_balanced_aux : ∀ (k : Nat) {path : Path α} {x : RBNode α} {c 
           have hpp' : (Path.left black pp wv wr).Balanced black n₀ red (bh red n) :=
             .blackL hwr hpp
           rw [delFix.eq_def]; simp only [hr, Bool.false_eq_true, ↓reduceIte]
-          split
-          · rename_i r hs
+          cases hs : stage2L red (Path.left black pp wv wr) y wl x with
+          | some r =>
             obtain ⟨m, hm⟩ := stage2L_balanced hxb hwl hpp' hs
             exact ⟨m, hm⟩
-          · rename_i hs
+          | none =>
             show ∃ m,
               (delFix (Path.left black pp wv wr) (node red x y wl.setRed)).1.Balanced black m
             rw [delFix_red (by rfl)]
@@ -860,10 +860,10 @@ theorem delFix_balanced_aux : ∀ (k : Nat) {path : Path α} {x : RBNode α} {c 
               ∃ m, (delFix (Path.left pc pp y (node black wl wv wr)) x).1.Balanced black m := by
             intro hw hpp hup
             rw [delFix.eq_def]; simp only [hr, Bool.false_eq_true, ↓reduceIte]
-            split
-            · rename_i r hs
+            cases hs : stage2L pc pp y (node black wl wv wr) x with
+            | some r =>
               exact stage2L_balanced hxb hw hpp hs
-            · rename_i hs
+            | none =>
               obtain ⟨h1, h2⟩ := stage2L_none hs
               cases hw with
               | black hwl hwr =>
@@ -903,11 +903,11 @@ theorem delFix_balanced_aux : ∀ (k : Nat) {path : Path α} {x : RBNode α} {c 
           have hpp' : (Path.right black wl wv pp).Balanced black n₀ red (bh red n) :=
             .blackR hwl hpp
           rw [delFix.eq_def]; simp only [hr, Bool.false_eq_true, ↓reduceIte]
-          split
-          · rename_i r hs
+          cases hs : stage2R red (Path.right black wl wv pp) y wr x with
+          | some r =>
             obtain ⟨m, hm⟩ := stage2R_balanced hxb hwr hpp' hs
             exact ⟨m, hm⟩
-          · rename_i hs
+          | none =>
             show ∃ m,
               (delFix (Path.right black wl wv pp) (node red wr.setRed y x)).1.Balanced black m
             rw [delFix_red (by rfl)]
@@ -924,10 +924,10 @@ theorem delFix_balanced_aux : ∀ (k : Nat) {path : Path α} {x : RBNode α} {c 
               ∃ m, (delFix (Path.right pc (node black wl wv wr) y pp) x).1.Balanced black m := by
             intro hw hpp hup
             rw [delFix.eq_def]; simp only [hr, Bool.false_eq_true, ↓reduceIte]
-            split
-            · rename_i r hs
+            cases hs : stage2R pc pp y (node black wl wv wr) x with
+            | some r =>
               exact stage2R_balanced hxb hw hpp hs
-            · rename_i hs
+            | none =>
               obtain ⟨h1, h2⟩ := stage2R_none hs
               cases hw with
               | black hwl hwr =>
@@ -1067,17 +1067,15 @@ theorem eraseAt_spec {t : RBNode α} {n : Nat} {c : RBColor} {l r : RBNode α}
   obtain ⟨c', h', hnode, hpath⟩ := hb.zoom (path := .root) .root hz
   -- The list claim, from which order follows: the result's list is `t`'s with `x` removed.
   have hlist : (eraseAt path (node c l x r)).1.toList = path.withList (l.toList ++ r.toList) := by
-    unfold eraseAt
-    split
-    · rename_i hrr; cases hrr
-    · rename_i c₁ l₁ x₁ hm
-      cases hm
-      split <;> simp [delFix_toList]
-    · rename_i c₁ x₁ cr rl rv rr hm
-      cases hm
-      split <;> simp [delFix_toList]
-    · rename_i c₁ cl ll lv lr x₁ cr rl rv rr hm
-      cases hm
+    -- The three shapes `eraseAt` tells apart, by cases on the children (not `split`, which
+    -- would bind the shapes' fields under generated names).
+    cases r with
+    | nil => cases c <;> simp [eraseAt, delFix_toList]
+    | node cr rl rv rr =>
+      cases l with
+      | nil => cases c <;> simp [eraseAt, delFix_toList]
+      | node cl ll lv lr =>
+      simp only [eraseAt]
       obtain ⟨cm, m, mr, hlm⟩ := leftmost_node (c := cr) (l := rl) (v := rv) (r := rr) .root
       rw [hlm]
       simp only
@@ -1114,25 +1112,31 @@ theorem eraseAt_spec {t : RBNode α} {n : Nat} {c : RBColor} {l r : RBNode α}
     exact List.Sublist.append_left (List.Sublist.append_left
       (List.Sublist.append_right (List.sublist_cons_self _ _) _) _) _
   · -- Balance.
-    unfold eraseAt
-    split
-    · rename_i hrr; cases hrr
-    · rename_i c₁ l₁ x₁ hm
-      cases hm
-      split
-      · cases hnode with
+    cases r with
+    | nil =>
+      cases c with
+      | red =>
+        simp only [eraseAt]
+        cases hnode with
         | red hl hr => cases hr; exact ⟨n, (hole_toBlack hpath).fill hl⟩
-      · cases hnode with
+      | black =>
+        simp only [eraseAt]
+        cases hnode with
         | black hl hr => cases hr; exact delFix_balanced hpath (.balanced hl)
-    · rename_i c₁ x₁ cr rl rv rr hm
-      cases hm
-      split
-      · cases hnode with
-        | red hl hr => cases hl; exact ⟨n, (hole_toBlack hpath).fill hr⟩
-      · cases hnode with
-        | black hl hr => cases hl; exact delFix_balanced hpath (.balanced hr)
-    · rename_i c₁ cl ll lv lr x₁ cr rl rv rr hm
-      cases hm
+    | node cr rl rv rr =>
+      cases l with
+      | nil =>
+        cases c with
+        | red =>
+          simp only [eraseAt]
+          cases hnode with
+          | red hl hr => cases hl; exact ⟨n, (hole_toBlack hpath).fill hr⟩
+        | black =>
+          simp only [eraseAt]
+          cases hnode with
+          | black hl hr => cases hl; exact delFix_balanced hpath (.balanced hr)
+      | node cl ll lv lr =>
+      simp only [eraseAt]
       obtain ⟨cm, m, mr, hlm⟩ := leftmost_node (c := cr) (l := rl) (v := rv) (r := rr) .root
       rw [hlm]
       simp only
