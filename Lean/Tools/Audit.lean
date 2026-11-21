@@ -28,10 +28,12 @@ Four checks, each failing the run:
    equation lemma Lean generated about a constant defined outside the `Oris` modules.
 4. **Lint.** The source of every module under `Oris/`, comments and string literals removed, uses
    none of the constructs that could bypass the kernel or tamper with tooling: metaprogramming
-   (`elab`, `macro`, `syntax`, `run_cmd`, `run_meta`, `initialize`, any `Lean.` name, ...),
+   (`elab`, `macro`, `syntax`, `run_cmd`, `run_meta`, `initialize`, any name with a `Lean`
+   component, `_root_.Lean...` included, ...), any `#` command (`#eval`, `#eval!`, `#print`, ...),
    `set_option` other than `maxHeartbeats` and `maxRecDepth` (in particular
    `debug.skipKernelTC`), and the constructs `CONVENTIONS.md` bans (`sorry`, `axiom`,
-   `native_decide`, `implemented_by`, ...).
+   `native_decide`, `implemented_by`, ...). And every line, comments included, stays within 100
+   characters (`CONVENTIONS.md`, § Doc comments).
 
 What this does not check: that each proof was actually checked by the kernel. A module can add a
 declaration with the kernel check switched off; checks 2 and 4 make that hard to do unnoticed, and
@@ -127,6 +129,9 @@ def tokens (cs : List Char) : Array (String × Nat) := Id.run do
   if !cur.isEmpty then out := out.push (cur, lineNo)
   return out
 
+/-- The longest line a source file may have, in characters (`CONVENTIONS.md`, § Doc comments). -/
+def maxColumns : Nat := 100
+
 /-- The lint findings for one file. -/
 def lintFile (path : FilePath) : IO (Array String) := do
   let src ← IO.FS.readFile path
@@ -137,12 +142,20 @@ def lintFile (path : FilePath) : IO (Array String) := do
     let at_ := s!"{path}:{ln}"
     if forbiddenTokens.contains tok then
       bad := bad.push s!"{at_}: forbidden `{tok}`"
-    else if tok == "Lean" || tok.startsWith "Lean." then
+    else if tok.startsWith "#" then
+      bad := bad.push s!"{at_}: forbidden `{tok}` (no `#` command in proof modules)"
+    else if (tok.splitOn ".").contains "Lean" then
       bad := bad.push s!"{at_}: forbidden `{tok}` (no metaprogramming in proof modules)"
     else if tok == "set_option" then
       let opt := (toks[i + 1]?.map (·.1)).getD ""
       unless allowedOptions.contains opt do
         bad := bad.push s!"{at_}: forbidden `set_option {opt}`"
+  let mut ln := 0
+  for line in src.splitOn "\n" do
+    ln := ln + 1
+    let n := line.length - (if line.endsWith "\r" then 1 else 0)
+    if n > maxColumns then
+      bad := bad.push s!"{path}:{ln}: line of {n} characters (at most {maxColumns})"
   return bad
 
 /-- An equation lemma Lean generated, on first use, about a constant defined outside the `Oris`

@@ -71,10 +71,12 @@ is too slow for the kernel is a sign to restate the lemma (prove it for a symbol
 
 The audit was checked to reject a `sorry`, a `native_decide`, a hand-written axiom (inside and
 outside the `Oris` namespace), a module redefining the audit command of the old in-build gate,
-and a theorem added with `debug.skipKernelTC`, which the kernel replay rejects too. (A
-`bv_decide` whose preprocessing closes the goal leaves an ordinary kernel proof, which the audit
-rightly accepts.) If you change `Tools/Audit.lean`, re-run those checks on a scratch copy of the
-project.
+and a theorem added with `debug.skipKernelTC`, which the kernel replay rejects too; since the
+audit of 2026-11-21, also an `#eval!`, a `_root_.Lean...` name and a line over 100 characters,
+which an earlier lint let through. (A `bv_decide` whose preprocessing closes the goal leaves an
+ordinary kernel proof, which the audit rightly accepts.) If you change `Tools/Audit.lean`, re-run
+those checks on a scratch copy of the project (the sorry, `native_decide`, both axioms,
+`skipKernelTC` and the three later cases were re-run then).
 
 ### The audit covers every module
 
