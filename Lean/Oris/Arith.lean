@@ -6,14 +6,14 @@ Models, on 64-bit machine words (`BitVec 64`, i.e. Rust's `usize` on the 64-bit 
 crate is restricted to by `block.rs`'s compile-time assertion `usize::BITS == 64`), the size
 arithmetic of the tree path's normalization and growth and of the bucket size classes:
 
-| Lean | Rust |
-|---|---|
-| `roundUp` | `align.rs` `round_up` |
-| `normalizeSize`, `MAX_ALLOCATION` | `tree.rs` `normalize_size`, `MAX_ALLOCATION` |
-| `growSize` | `tree.rs` `Tree::grow` (its two size lines) |
-| `bucketSpacing`, `bucketSpacingAligned`, `bucketSpacingInverse` | `bucket.rs` `bucket_spacing_function{,_aligned,_inverse}` |
-| `clampSmall`, `isSmall` | `bucket.rs` `clamp_small_allocation`, `is_small_allocation` |
-| `hphaMask`, `hphaRoundUp`, `hphaNormalize` | `Cpp/hpha.h` `round_up`, its mask `-(int)a`, and the normalization in `tree_alloc` |
+- `roundUp`: `align.rs` `round_up`.
+- `normalizeSize`, `MAX_ALLOCATION`: `tree.rs` `normalize_size`, `MAX_ALLOCATION`.
+- `growSize`: `tree.rs` `Tree::grow` (its two size lines).
+- `bucketSpacing`, `bucketSpacingAligned`, `bucketSpacingInverse`: `bucket.rs`
+  `bucket_spacing_function{,_aligned,_inverse}`.
+- `clampSmall`, `isSmall`: `bucket.rs` `clamp_small_allocation`, `is_small_allocation`.
+- `hphaMask`, `hphaRoundUp`, `hphaNormalize`: `Cpp/hpha.h` `round_up`, its mask `-(int)a`, and
+  the normalization in `tree_alloc`.
 
 `alloc_aligned`'s guard is stated directly on its expression (`alloc_aligned_guard`), and the
 plain small-allocation path (`is_small_allocation`, `clamp_small_allocation`, `guard::inflate`,
@@ -22,7 +22,9 @@ plain small-allocation path (`is_small_allocation`, `clamp_small_allocation`, `g
 **Departures from the Rust: none.** Every definition above transcribes its Rust expression;
 `isSmall` and `clampSmall` take the guard size as a parameter where the Rust reads the constant
 `MEMORY_GUARD_SIZE` (16 with `debug-allocator`, 0 without), so their theorems cover both
-builds.
+builds. Not modelled: the Rust's `debug_assert!`s (`round_up`'s power-of-two alignment, the
+bucket functions' range checks), which the theorems' hypotheses satisfy wherever they matter;
+where a doc mentions a value outside that range, it describes the release build.
 
 **Not modelled yet**, among the size arithmetic of `tree.rs`, `bucket.rs` and `align.rs`, all
 of it unchecked `usize` arithmetic that the memory-management tier will need:
@@ -350,7 +352,7 @@ theorem bucketSpacing_inverse (i : Usize) (h : i.toNat < 32) :
   omega
 
 /-- On every multiple of 8 the cheaper aligned form computes the same word (at `0` both wrap to
-`usize::MAX`). -/
+`usize::MAX` in a release build; a debug build's assertion rejects `0`). -/
 theorem bucketSpacingAligned_eq (s : Usize) (h8 : s.toNat % 8 = 0) :
     bucketSpacingAligned s = bucketSpacing s := by
   apply BitVec.eq_of_toNat_eq
@@ -398,7 +400,8 @@ theorem isSmall_iff (guard size : Usize) :
     omega
 
 /-- **The plain small-allocation path lands in the smallest bucket that fits.** `orisnik.rs`
-`alloc` sends a request `s` with `is_small_allocation(s)` to the bucket
+`alloc` sends a nonzero request `s` (it returns `None` on `0` first) with
+`is_small_allocation(s)` to the bucket
 `bucket_spacing_function(inflate(clamp_small_allocation(s)))`, where `inflate` adds the guard.
 For every guard (the Rust's is 0 or 16): the inflated size is `max(s + guard, 8)` (neither step
 overflows), the bucket is one of the 32, and its element size holds `s` and the guard and is

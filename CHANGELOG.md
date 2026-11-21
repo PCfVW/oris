@@ -13,12 +13,12 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 ### Added
 
 - **Lean: `insert_fixup` performs `insFix`** (step 3b of the heap layer, `Lean/docs/heap-layer.md`
-  §4). `insertFixupLoop_refines` and `insertFixup_refines`: from any located subtree whose tree
+  §5). `insertFixupLoop_refines` and `insertFixup_refines`: from any located subtree whose tree
   has a black root, `insert_fixup`'s pointer code leaves a heap representing `insFix`'s tree, after
   `insFix`'s number of rotations. `insertFixup_refines_depth`, the first fuel theorem: fuel at
   least the tree's depth suffices, so the heap model's fuel never runs out there.
 - **Lean: `attach_to`, `substitute_with` and `switch_with` perform their zipper steps** (step 3a
-  of the heap layer, `Lean/docs/heap-layer.md` §4). `attachTo_refines`: from an empty hole, the
+  of the heap layer, `Lean/docs/heap-layer.md` §5). `attachTo_refines`: from an empty hole, the
   red leaf `insert` hands to `insFix`. `substituteWith_refines_left` and `_right`: a node with at
   most one child gives way to it, and the child's `parent` word names the slot, also when it is
   the sentinel (the scratch fields `erase_fixup` reads). `switchWith_refines`: another address
@@ -29,13 +29,20 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Changed
 
+- **Lean: a fresh-eyes audit before step 3c** (`Lean/docs/audits/2026-11-21-fresh-eyes/`, which
+  keeps its verified findings). `switchWith_frame` and `rotateAt_apply` drop a hypothesis each
+  that they did not need, so they are stronger; `modify_red` is now `Heap.modify_red`. The design
+  note defines the plan's steps 3a-3d and records two findings for what comes next: step 3c's
+  refinement needs a `DelFixClean` hypothesis (on an unbalanced tree the heap model, like the
+  Rust, paints the sentinel red), and the cached-root theorem a black root (on a red root the two
+  readings differ). Documentation made consistent throughout.
 - **Lean: the heap model's `child` and `rotate` are now `childAt` and `rotateAt`**, and the
   theorems about them are renamed with them: `rotate_refines_left` and `_right` (cited in 0.3.2
   below) are now `rotateAt_refines_left` and `_right`, likewise `rotateAt_refines_left_frame`,
   `_right_frame`, `rotateAt_frame`, `rotateAt_links` and `rotateAt_parent_fields`. Under their
   old names they shadowed the zipper's `Oris.RB.child` and `Oris.RB.rotate` inside
-  `Oris.RB.Heap` (`Lean/docs/heap-layer.md`, §7, decision 4). Statements and proofs are
-  otherwise unchanged.
+  `Oris.RB.Heap` (`Lean/docs/heap-layer.md`, §7, decision 4). Statements are otherwise
+  unchanged (the rotation proofs now go through `rotateAt_apply`).
 - **CI runs on `ubuntu-24.04`, pinned**, instead of `ubuntu-latest`, which GitHub is moving
   to Ubuntu 26: the Linux image now changes only when the workflows say so.
 

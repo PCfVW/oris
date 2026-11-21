@@ -78,9 +78,11 @@ project.
 
 ### The audit covers every module
 
-The audit imports every `.lean` file under `Oris/` and `RBTree/`, found on disk. `lake build`
-builds what `Oris.lean` imports, so the audit also fails if `Oris.lean` does not import a module
-under `Oris/` (read with Lean's own header parser). Every declaration of an Oris module must live
+The audit imports every `.lean` file under `Oris/` and `RBTree/`, found on disk. The kernel
+replay (`lake env leanchecker --fresh Oris`) checks what `Oris.lean` imports, so the audit also
+fails if `Oris.lean` does not import a module under `Oris/` (read with Lean's own header parser).
+(`lake build` builds every module under `Oris/` whatever `Oris.lean` imports: the lakefile's
+`Oris.*` glob takes them all.) Every declaration of an Oris module must live
 under the `Oris` namespace (Lean's internal auxiliary names, and the equation lemmas it generates
 about constants defined elsewhere, excepted); the audit checks that too.
 
@@ -169,6 +171,11 @@ case analysis on its argument may recurse on an explicit size bound instead
 |---|---|---|
 | Model of a Rust function | short camel case after the Rust name | `insFix` (`insert_fixup`), `delFix`, `eraseAt`, `normalizeSize` |
 | Heap-level model whose zipper-level model has the same name | the same, suffixed `At` (it acts at an address) | `childAt` (`NodeBase::child`), `rotateAt` (`NodeBase::rotate`) |
+| A heap operation's result, address by address | `<op>_apply` | `rotateAt_apply`, `switchWith_apply` |
+| The addresses a heap operation leaves unchanged | `<op>_frame` | `rotateAt_frame`, `attachTo_frame` |
+| A heap operation performs its zipper step | `<op>_refines` | `attachTo_refines`, `insertFixup_refines` |
+| A lemma about a relation or structure `R` | `R.<lemma>` | `Rep.frame`, `Located.up_left`, `Heap.modify_red` |
+| An inversion (what a constructor's premises say, read back) | `_inv` | `Rep.node_inv`, `RepPath.left_inv` |
 | Mirror-image definitions | suffix `L` / `R` (the side `cur` is on) | `stage2L`, `stage2R` |
 | Lemma about a definition | `<def>_<property>` | `insFix_toList`, `delFix_rotations`, `stage2L_balanced` |
 | Mirror-image standalone theorems | suffix `_left` / `_right` | `hpha_sibling_not_sentinel_left` |
@@ -200,7 +207,7 @@ bound), `_balanced` (red-black invariant), `_spec` (the operation's full contrac
 | `Oris/Arith.lean` | Size arithmetic |
 | `Oris/RB/*.lean` | The red-black tree (`Fixup.lean`: the zipper level; `Heap.lean`: the pointer level, its definitions and the refinement theorems proven so far) |
 | `Tools/` | Executables, run after the build (`Audit.lean`, the axiom audit and lint; `XCheck.lean`, the cross-check consumer) |
-| `docs/` | Design notes (`heap-layer.md`), agreed before the proofs they plan |
+| `docs/` | Design notes (`heap-layer.md`), agreed before the proofs they plan; audit records (`audits/`), each with its findings and the scratch files behind them, not built |
 | `RBTree/` | Vendored, verbatim |
 
 ---

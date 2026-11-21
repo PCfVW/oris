@@ -15,7 +15,9 @@ Four checks, each failing the run:
 1. **Every module is audited.** Every `.lean` file under `Oris/` and `RBTree/` (plus `RBTree.lean`)
    is imported, found on disk rather than through any import list. `Oris.lean` must import every
    module under `Oris/`, read with Lean's own header parser (so an `import` line inside a comment
-   does not count), since `lake build` builds what `Oris.lean` imports.
+   does not count), since the kernel replay (`lake env leanchecker --fresh Oris`) checks what
+   `Oris.lean` imports. (`lake build` builds every module under `Oris/` anyway: the lakefile's
+   `Oris.*` glob.)
 2. **Axioms, by defining module.** Every constant defined in one of those modules, `private` and
    auxiliary ones included, whatever its name, depends on `propext`, `Classical.choice` and
    `Quot.sound` at most (`collectAxioms`, transitively). A `sorry` shows up as `sorryAx`, a
@@ -175,7 +177,8 @@ def main : IO UInt32 := do
   let imported := imports.map (·.module)
   for m in orisMods do
     unless imported.contains m do
-      problems := problems.push s!"Oris.lean does not import {m}, so `lake build` does not build it"
+      problems := problems.push
+        s!"Oris.lean does not import {m}, so the kernel replay does not check it"
   -- 2 and 3. Axioms and namespaces, by defining module.
   initSearchPath (← findSysroot)
   let env ← importModules (mods.map fun m => { module := m }) {} (trustLevel := 0)
@@ -188,7 +191,8 @@ def main : IO UInt32 := do
     unless auditedRoots.contains root do continue
     counts := counts.insert root (counts.getD root 0 + 1)
     try
-      let axs ← (collectAxioms n : CoreM _).toIO' { fileName := "audit", fileMap := default } { env }
+      let axs ← (collectAxioms n : CoreM _).toIO'
+        { fileName := "audit", fileMap := default } { env }
       let bad := axs.filter (!allowedAxioms.contains ·)
       unless bad.isEmpty do
         problems := problems.push s!"{n} (in {modName}) depends on non-standard axioms: {bad}"

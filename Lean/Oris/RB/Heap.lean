@@ -4,8 +4,8 @@ import Oris.RB.Fixup
 /-!
 # `rbtree.rs`'s pointer code, on a model heap
 
-Steps 1, 2 and the first parts of 3 of the heap layer, as numbered in the plan of
-`Lean/docs/heap-layer.md` (§5; §4 numbers the theorems, `rotateAt_refines` being its first).
+Steps 1, 2, 3a and 3b of the heap layer, as numbered in the plan of `Lean/docs/heap-layer.md`
+(§5, whose steps 3a–3d prove §4's theorems 2–5; theorem 1 is `rotateAt_refines`, in step 2).
 
 - **Step 1, the definitions.** Every function below transcribes one function of
   `Rust/src/rbtree.rs`, **one heap update per Rust write, in the Rust's order**, with every read
@@ -20,13 +20,13 @@ Steps 1, 2 and the first parts of 3 of the heap layer, as numbered in the plan o
   splice out a node with at most one child, put another address at a node's position. Each
   operation, `rotateAt` included, also has a per-address description of its result (`_apply`)
   and the list of records it changes (`_frame`).
-
 - **Step 3b, `insert_fixup`.** `insertFixupLoop_refines` and `insertFixup_refines` prove that
   `insert_fixup` performs `insFix`: the same tree and the same rotation count, from any located
-  subtree whose tree has a black root. `insertFixup_refines_depth` is the first fuel theorem.
+  node in a tree with a black root, given enough fuel. `insertFixup_refines_depth` is the first
+  fuel theorem: fuel at least the tree's depth is enough.
 
-That `erase_fixup` and the counted operations perform their zipper steps is the rest of the plan's
-step 3, and its step 4.
+Steps 3c (`erase_fixup`), 3d (the cached root) and 4 (the counted operations, the chains and the
+transfer theorems) remain.
 
 ## The model (the note's §2)
 
@@ -53,8 +53,9 @@ step 3, and its step 4.
   plus one); for `erase_fixup` and the descents it is the plan's steps 3c and 4. Each loop's doc
   repeats this.
 - `erase_fixup`'s root comes in two readings: `eraseFixup` reads it once on entry, as the Rust
-  does, and `eraseFixupHpha` re-reads it, as `Cpp/hpha.cpp` does. The note's §6 plans the theorem
-  that they agree.
+  does, and `eraseFixupHpha` re-reads it, as `Cpp/hpha.cpp` does (reading it before testing
+  `cur`'s colour, where HPHA's `&&` short-circuits: a read, so no field changes). The note's §6
+  plans the theorem that they agree on a tree with a black root (on a red root they need not).
 
 ## Not modelled
 
@@ -961,10 +962,11 @@ theorem rotateAt_links (h : Heap) (this : Addr) (s : Side) {x : Addr} (h₁ : x 
   · subst h₃; simp [h₁, h₂, h₄]
   · simp [h₁, h₂, h₃, h₄]
 
-/-- Of `this`'s parent, `rotateAt` writes only the child link `this` hung from, which now holds
-`top`: the other link and the colour are kept, and so is the `parent` word unless the parent is
-also `top`'s side-`s` child (a rotation at the root whose moving subtree is empty: both are the
-sentinel, and its scratch `parent` and side are written). -/
+/-- Of `this`'s parent, if it is neither `this` nor `top` (which `Located` guarantees: the slot's
+node is outside the subtree), `rotateAt` writes only the child link `this` hung from, which now
+holds `top`: the other link and the colour are kept, and so is the `parent` word unless the
+parent is also `top`'s side-`s` child (a rotation at the root whose moving subtree is empty: both
+are the sentinel, and its scratch `parent` and side are written). -/
 theorem rotateAt_parent_fields (h : Heap) (this : Addr) (s : Side)
     (h₁ : parent h this ≠ this) (h₂ : parent h this ≠ childAt h this s.other) :
     childAt (rotateAt h this s) (parent h this) (parentSide h this) = childAt h this s.other ∧
@@ -986,14 +988,15 @@ theorem rotateAt_parent_fields (h : Heap) (this : Addr) (s : Side)
         setParentSide, Heap.modify]
 
 /-- **`rotateAt`, address by address.** With `top` `this`'s side-`o` child (`o = s.other`), `m`
-`top`'s side-`s` child and `P` `this`'s parent, all distinct except that `m` and `P` may coincide (a
-rotation at the root whose moving subtree is empty: both are then the sentinel), `rotateAt h this s`
-gives `this` the child `m` on side `o` and the slot `(top, s)`; `top` the child `this` on side `s`
-and `this`'s old slot; `m` the slot `(this, o)`; `P` the child `top` in the link that held `this`
-(on `m`'s record too when `m = P`); and every other address its old record. The writes' order
-matters only where two of them hit the same field, which the distinctness rules out. -/
+`top`'s side-`s` child and `P` `this`'s parent, where `this`, `top` and `P` are distinct and
+`top ≠ m`, `rotateAt h this s` gives `this` the child `m` on side `o` and the slot `(top, s)`;
+`top` the child `this` on side `s` and `this`'s old slot; `m` the slot `(this, o)`; `P` the child
+`top` in the link that held `this` (on `m`'s record too when `m = P`); and every other address its
+old record. `m` may coincide with `P` (a rotation at the root whose moving subtree is empty: both
+are then the sentinel) or with `this` (whose record the later writes then decide: the first
+branch). The writes' order matters only where two of them hit the same field. -/
 theorem rotateAt_apply (h : Heap) (this : Addr) (s : Side)
-    (h₁ : this ≠ childAt h this s.other) (h₂ : this ≠ childAt h (childAt h this s.other) s)
+    (h₁ : this ≠ childAt h this s.other)
     (h₃ : childAt h this s.other ≠ childAt h (childAt h this s.other) s)
     (h₄ : this ≠ parent h this) (h₅ : childAt h this s.other ≠ parent h this) (x : Addr) :
     rotateAt h this s x =
@@ -1013,7 +1016,10 @@ theorem rotateAt_apply (h : Heap) (this : Addr) (s : Side)
   generalize hps : parentSide h this = ps
   simp only [rotateAt, setChild_eq, setParentPtr, setParentSide, Heap.modify, ht, hm, hP, hps]
   by_cases e₁ : x = this
-  · subst e₁; simp [h₁, h₂, h₄]
+  · subst e₁
+    by_cases e : x = m
+    · subst e; simp [h₁, h₄]
+    · simp [h₁, h₄, e]
   by_cases e₂ : x = top
   · subst e₂; simp [e₁, h₃, h₅]
     cases s <;> rfl
@@ -1064,7 +1070,6 @@ theorem rotateAt_refines_left {h : Heap} {head a b p : Addr} {s : Side} {c c' : 
   have hbp : b ≠ p := fun e => hpt.2.2.2.1 e.symm
   have hmp : m ≠ head → m ≠ p := fun hmh e => hpt.2.2.1 (e ▸ hmrl hmh)
   have RL := rotateAt_apply h a .left (by simpa [childAt, Side.other, hab] using hab')
-    (by simpa [childAt, Side.other, hab, hm] using ham)
     (by simpa [childAt, Side.other, hab, hm] using hbm) (by simpa [parent, hpa] using hap)
     (by simpa [childAt, Side.other, hab, parent, hpa] using hbp)
   simp only [childAt, Side.other, parent, parentSide, hab, hm, hpa, hsa] at RL
@@ -1191,7 +1196,6 @@ theorem rotateAt_refines_right {h : Heap} {head a b p : Addr} {s : Side} {c c' :
   have hbp : b ≠ p := fun e => hpb' e.symm
   have hmp : m ≠ head → m ≠ p := fun hmh e => hplr (e ▸ hmlr hmh)
   have RL := rotateAt_apply h a .right (by simpa [childAt, Side.other, hab] using hab')
-    (by simpa [childAt, Side.other, hab, hm] using ham)
     (by simpa [childAt, Side.other, hab, hm] using hbm) (by simpa [parent, hpa] using hap)
     (by simpa [childAt, Side.other, hab, parent, hpa] using hbp)
   simp only [childAt, Side.other, parent, parentSide, hab, hm, hpa, hsa] at RL
@@ -1286,11 +1290,11 @@ theorem rotateAt_refines_right_frame {h : Heap} {head a b p : Addr} {s : Side} {
 
 /-! ## Step 3a: `attach_to`, `substitute_with` and `switch_with`
 
-Each performs the zipper step `Fixup.lean`'s `insert` or `eraseAt` takes at that point (the note's
-§4, step 2): `attach_to` fills an empty hole with a red leaf, `substitute_with` splices out a node
-with at most one child, and `switch_with` puts another address at a node's tree position. Each
-comes with its per-address description (`_apply`), the list of records it changes (`_frame`) and
-its refinement theorem (`_refines`). -/
+Each performs the zipper step `Fixup.lean`'s `insert` or `eraseAt` takes at that point (the
+note's §4, theorem 2): `attach_to` fills an empty hole with a red leaf, `substitute_with` splices
+out a node with at most one child, and `switch_with` puts another address at a node's tree
+position. Each comes with its per-address description (`_apply`), the list of records it changes
+(`_frame`) and its refinement theorem (`_refines`). -/
 
 /-- **`attachTo`, address by address**: `this` becomes a red leaf hanging at `(parent, s)`, both
 children the slot's old occupant and both neighbours itself; `parent`'s side-`s` link takes
@@ -1321,11 +1325,11 @@ theorem attachTo_frame (h : Heap) (this parent : Addr) (s : Side) {x : Addr} (h�
     setColour, Heap.modify]
   simp [h₁, h₂]
 
-/-- **`NodeBase::attach_to` fills the empty hole** (the note's §4, step 2). If the slot `(p, s)`
-holds the sentinel at `path` (the empty hole where `insert_counted`'s descent ends), and `this` is
-a real address off the path, then after `attachTo h this p s` the heap represents the red leaf
-`node red nil this nil` at that slot and path: the zipper state `Fixup.lean`'s `insert` hands to
-`insFix`. Which records change is `attachTo_frame`. -/
+/-- **`NodeBase::attach_to` fills the empty hole** (step 3a; the note's §4, theorem 2). If the
+slot `(p, s)` holds the sentinel at `path` (the empty hole where `insert_counted`'s descent ends),
+and `this` is a real address off the path, then after `attachTo h this p s` the heap represents
+the red leaf `node red nil this nil` at that slot and path: the zipper state `Fixup.lean`'s
+`insert` hands to `insFix`. Which records change is `attachTo_frame`. -/
 theorem attachTo_refines {h : Heap} {head this p : Addr} {s : Side} {path : Path Addr}
     (hp : RepPath h head head p s path) (hn : this ≠ head) (hn0 : this ≠ null)
     (hfresh : this ∉ path.listL ++ path.listR) :
@@ -1448,7 +1452,7 @@ theorem substituteWith_refines_core {h : Heap} {head this p k : Addr} {s σ : Si
       have hpk := Ne.symm (hkp₀ hph)
       cases s <;> simp [SU, childAt, Side.other, hpk, NodeRec.withChild]
 
-/-- **`NodeBase::substitute_with` splices out a node with no right child** (the note's §4, step 2;
+/-- **`NodeBase::substitute_with` splices out a node with no right child** (step 3a, §4 theorem 2;
 `erase_counted`'s `right == end` case). If the heap represents the located subtree
 `node c l this nil`, then after `substituteWith h this (h this).left` it represents `l` at the same
 slot and path: the zipper's `path.fill l` in `eraseAt`. And the left child's `parent` word names
@@ -1534,14 +1538,16 @@ theorem switchWith_apply (h : Heap) (this node : Addr) (h₁ : this ≠ node)
   · simp [*]
 
 /-- **`switchWith` touches four addresses**: `this`, `node`'s two children and `node`'s parent. -/
-theorem switchWith_frame (h : Heap) (this node : Addr) (h₀ : this ≠ node) {x : Addr}
+theorem switchWith_frame (h : Heap) (this node : Addr) {x : Addr}
     (h₁ : x ≠ this) (h₂ : x ≠ childAt h node .left) (h₃ : x ≠ childAt h node .right)
     (h₄ : x ≠ parent h node) : switchWith h this node x = h x := by
   simp only [switchWith, setChild_eq, setParentPtr, setParentSide, setColour, Heap.modify,
     childAt, parent, parentSide, red] at h₂ h₃ h₄ ⊢
-  simp [h₁, h₂, h₃, h₄, Ne.symm h₀]
+  by_cases h₀ : node = this
+  · subst h₀; simp [h₁, h₂, h₃, h₄]
+  · simp [h₁, h₂, h₃, h₄, h₀]
 
-/-- **`NodeBase::switch_with` puts `this` at `node`'s tree position** (the note's §4, step 2). If
+/-- **`NodeBase::switch_with` puts `this` at `node`'s tree position** (step 3a, §4 theorem 2). If
 the heap represents the located subtree `node c l node r`, and `this` is a real address neither in
 it nor on its path, then after `switchWith h this node` the heap represents `node c l this r` at
 the same slot and path: the address at that position changes, the subtrees and the colour do not.
@@ -1804,15 +1810,15 @@ theorem setColour_red_eq (h : Heap) (a : Addr) (b : Bool) : (setColour h a b a).
   simp [setColour, Heap.modify]
 
 /-- A write that keeps colours keeps every address's colour. -/
-theorem modify_red (h : Heap) (a : Addr) (f : NodeRec → NodeRec) (hf : ∀ n, (f n).red = n.red)
-    (x : Addr) : (h.modify a f x).red = (h x).red := by
+theorem Heap.modify_red (h : Heap) (a : Addr) (f : NodeRec → NodeRec)
+    (hf : ∀ n, (f n).red = n.red) (x : Addr) : (h.modify a f x).red = (h x).red := by
   by_cases e : x = a <;> simp [Heap.modify, e, hf]
 
 /-- **`rotateAt` changes no colour**: its nine writes are child links and `parent` words. -/
 theorem rotateAt_red (h : Heap) (this : Addr) (s : Side) (x : Addr) :
     (rotateAt h this s x).red = (h x).red := by
   simp only [rotateAt, setChild_eq, setParentPtr, setParentSide]
-  repeat rw [modify_red _ _ _ (fun _ => by simp)]
+  repeat rw [Heap.modify_red _ _ _ (fun _ => by simp)]
 
 /-- **`insert_fixup`'s final `make_black(head.child(Left))`** blackens the represented tree's root:
 the zipper's `setBlack` of the whole tree. On an empty tree it writes the sentinel's colour bit,
@@ -1864,7 +1870,7 @@ def rootColour : Path Addr → Option RBColor
   | .left c pp _ _ => (rootColour pp).getD c |> some
   | .right c _ _ pp => (rootColour pp).getD c |> some
 
-/-- A black (or absent) root stays so one step down the path. -/
+/-- A black (or absent) root stays so when the hole climbs one step. -/
 theorem rootColour_up_left {c : RBColor} {pp : Path Addr} {y : Addr} {b : RBNode Addr}
     (h : rootColour (.left c pp y b) ≠ some .red) : rootColour pp ≠ some .red := by
   cases e : rootColour pp with
@@ -1885,19 +1891,19 @@ theorem insertFixupLoop_exit {head : Addr} {fuel : Nat} {h : Heap} {cur p : Addr
       some (makeBlack h (childAt h head .left), rot) := by
   simp [insertFixupLoop, hp]
 
-/-- **`insert_fixup`'s loop performs `insFix`** (the note's §4, step 3). If the heap represents the
-located subtree `t` at `path`, `cur` (its first node) is a real node, the tree's root is black
-(`rootColour path ≠ some .red`, vacuous when `cur` is the root) and the fuel is at least the depth
-of the hole plus one, then the loop, started from `cur` and its parent `P` with `rot` rotations
-counted, returns a heap representing the whole tree `(insFix path t).1`, with
+/-- **`insert_fixup`'s loop performs `insFix`** (step 3b; the note's §4, theorem 3). If the heap
+represents the located subtree `t` at `path`, `cur` (its first node) is a real node, the tree's root
+is black (`rootColour path ≠ some .red`, vacuous when `cur` is the root) and the fuel is at least
+the depth of the hole plus one, then the loop, started from `cur` and its parent `P` with `rot`
+rotations counted, returns a heap representing the whole tree `(insFix path t).1`, with
 `rot + (insFix path t).2` rotations: the zipper's result and rotation count, for every input of
 these shapes, valid red-black tree or not.
 
 The proof follows `insFix` case by case: the root and a black parent (the loop's exit), and for a
 red parent the eight combinations of `p`'s side, `cur`'s side and the uncle's colour. A red uncle
-recolours three nodes and climbs two levels (the induction hypothesis, with one unit of fuel
-less); a black uncle rotates once (`cur` outer) or twice (`cur` inner), and the next test ends the
-loop, `p` being black. -/
+recolours three nodes and climbs two levels (the induction hypothesis, with one unit of fuel less);
+a black uncle rotates once (`cur` outer) or twice (`cur` inner), and the next test ends the loop,
+`p` being black. -/
 theorem insertFixupLoop_refines (head : Addr) : ∀ (fuel : Nat) {h : Heap} {cur P : Addr}
     {S : Side} {t : RBNode Addr} {path : Path Addr} (rot : Nat),
     Located h head cur P S t path → cur ≠ head → rootColour path ≠ some .red →
@@ -2178,7 +2184,7 @@ theorem insertFixupLoop_refines (head : Addr) : ∀ (fuel : Nat) {h : Heap} {cur
           Bool.false_eq_true, ite_true, ite_false, hyc, makeBlack, makeRed, hyx]
         rw [insertFixupLoop_exit hx4]; rfl
 
-/-- **`NodeBase`-level `insert_fixup` performs `insFix`**: `insertFixupLoop_refines` from the
+/-- **The heap-level `insert_fixup` performs `insFix`**: `insertFixupLoop_refines` from the
 Rust's entry, `insert_fixup(node)` with `p = parent(node)` and no rotation counted yet. -/
 theorem insertFixup_refines {fuel : Nat} {h : Heap} {head node P : Addr} {S : Side}
     {t : RBNode Addr} {path : Path Addr} (hl : Located h head node P S t path)
@@ -2208,8 +2214,9 @@ theorem pathDepth_add_depth_le (path : Path Addr) (t : RBNode Addr) :
     omega
 
 /-- **The first fuel theorem**: fuel at least the depth of the tree `insert_fixup` starts from
-(`RBNode.depth`, the number of nodes on its longest branch: its height in edges plus one) always
-suffices, the loop's one departure from the Rust (the module doc) then never showing. -/
+(`RBNode.depth`, the number of nodes on its longest branch: its height in edges plus one)
+suffices, under `insertFixup_refines`'s other hypotheses (a located real node, a black root), so
+the loop's one departure from the Rust (the module doc) never shows. -/
 theorem insertFixup_refines_depth {fuel : Nat} {h : Heap} {head node P : Addr} {S : Side}
     {t : RBNode Addr} {path : Path Addr} (hl : Located h head node P S t path)
     (hn : node ≠ head) (hroot : rootColour path ≠ some .red) (hf : (path.fill t).depth ≤ fuel) :

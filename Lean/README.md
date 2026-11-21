@@ -39,11 +39,12 @@ CI runs all four (`../.github/workflows/lean-ci.yml`).
 | `RBTree/`, `RBTree.lean` | A verified functional red-black tree library, vendored verbatim (`RBTree/NOTICE.md`) |
 | `Oris/Arith.lean` | Size arithmetic: `round_up`, `normalize_size`, `MAX_ALLOCATION`, `Tree::grow`, `alloc_aligned`'s guard, the bucket size classes |
 | `Oris/RB/Fixup.lean` | `rbtree.rs`'s `insert_fixup`, `insert_counted`, `erase_fixup` and `erase_counted` (its `Node` branch), on zippers |
-| `Oris/RB/Heap.lean` | The same functions as pointer code on a model heap, one write per Rust write; the abstraction relation to zippers, and `rotate` proven to perform the zipper rotation (the other proofs are the next steps of `docs/heap-layer.md`) |
-| `Oris.lean` | Imports every proof module (what `lake build` builds) |
+| `Oris/RB/Heap.lean` | The same functions as pointer code on a model heap, one write per Rust write; the abstraction relation to zippers, and refinement proofs for `rotate`, `attach_to`, `substitute_with`, `switch_with` and `insert_fixup` (the rest is planned in `docs/heap-layer.md`) |
+| `Oris.lean` | Imports every proof module (what the kernel replay checks) |
 | `Tools/Audit.lean` | `lake exe audit`: the axiom audit, the import and namespace checks, and the lint, run outside the build |
 | `Tools/XCheck.lean` | `lake exe xcheck`: replays `rbtree.rs`'s cross-check trace through both models |
 | `docs/heap-layer.md` | The design note for the pointer layer: the model, the theorems to come, the plan |
+| `docs/audits/` | Audit records: the findings, verdicts and scratch files of each full audit |
 | `CONVENTIONS.md`, `CLAUDE.md` | How proofs here are written, and the pre-commit checks |
 
 ## What is proven
@@ -105,6 +106,23 @@ neither check nor prove; each site is a theorem (each with a `_left` and a `_rig
 - `erase_fixup`: a red sibling has black children (`hpha_red_sibling_children_black`), and before
   the fourth case the far child is red (`hpha_far_child_red`).
 
+**The pointer layer** (`Oris/RB/Heap.lean`; design note: [`docs/heap-layer.md`](docs/heap-layer.md)).
+The Rust's pointer code, transcribed write by write onto a model heap, performs the zipper steps
+above. Each theorem takes a heap that represents a zipper state (`Located`: a subtree at a path),
+and nothing more unless stated:
+
+- `rotateAt_refines_left`, `rotateAt_refines_right`: `NodeBase::rotate` performs the zipper
+  rotation.
+- `attachTo_refines`: `attach_to` fills an empty hole with a red leaf (the node a real address
+  off the path).
+- `substituteWith_refines_left` and `_right`: `substitute_with` splices out a node with at most
+  one child, and the child's `parent` word names the slot, the sentinel's scratch fields included.
+- `switchWith_refines`: `switch_with` puts another address at a node's tree position, with the
+  same subtrees and colour (the address outside the tree and its path).
+- `insertFixupLoop_refines`, `insertFixup_refines`: `insert_fixup` performs `insFix`, the same
+  tree and the same rotation count, from any located real node in a tree with a black root;
+  `insertFixup_refines_depth`: fuel at least the tree's depth suffices.
+
 **The model agrees with the Rust code.** `rbtree.rs`'s ignored test
 `print_lean_model_cross_check_trace` runs 20,000 inserts and erases and prints, after each, the
 rotation count and kind, the whole tree of keys with every node's colour, the whole tree again
@@ -133,22 +151,12 @@ wrong way in `link_into_chain`. (A wrong side bit in `rotateAt` no longer builds
 
 ## What is not (yet) proven, and the trust base
 
-- **The pointer layer.** The theorems are about the algorithm on zippers. That the pointer code
-  in `rbtree.rs` implements it is the next layer (design note:
-  [`docs/heap-layer.md`](docs/heap-layer.md)). Its definitions are written
-  (`Oris/RB/Heap.lean`, run against the Rust by the cross-check above), and so is the relation
-  saying when a heap *is* a `(subtree, path)` pair, with its frame lemmas. Five pointer
-  functions are proven so far: `NodeBase::rotate` performs the zipper rotation
-  (`rotateAt_refines_left`, `rotateAt_refines_right`); `attach_to`, `substitute_with` and
-  `switch_with` perform the zipper steps of insert and erase (`attachTo_refines`,
-  `substituteWith_refines_left` and `_right`, `switchWith_refines`); and `insert_fixup` performs
-  `insFix`, with the same rotation count, on a tree with a black root, given fuel at least the
-  tree's depth (`insertFixup_refines`, `insertFixup_refines_depth`). That `erase_fixup` and the
-  counted operations perform their zipper steps is not proven yet; until it is, that
-  correspondence rests on the write-by-write transcription and on the cross-check. The
-  duplicate-key chains, the sentinel's scratch `parent` field, and
-  `erase_fixup`'s cached `root` (the Rust reads it once; HPHA, and the zipper model, re-read it;
-  the heap model runs both readings and finds no difference) belong to that layer.
+- **The rest of the pointer layer.** Five pointer functions are proven (above). Still open, in
+  the design note's order: `erase_fixup` performs `delFix` (step 3c), the cached root (step 3d:
+  the Rust reads `erase_fixup`'s root once, HPHA and the zipper model re-read it; the heap model
+  runs both readings and finds no difference), and the counted operations with their descents
+  and the duplicate-key chains (step 4). Until then, that part of the correspondence rests on the
+  write-by-write transcription and on the cross-check.
 - **The `Link` and `Promote` branches** of `erase_counted` and the `Chain` branch of
   `insert_counted` change the equal-key chains, not the tree of keys: they belong to the heap
   layer, where a tree node carries its chain.
