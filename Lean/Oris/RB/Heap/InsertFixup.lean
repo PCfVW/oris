@@ -59,11 +59,11 @@ theorem insertFixupLoop_refines (head : Addr) : ∀ (fuel : Nat) {h : Heap} {cur
       exact exit hhead (by simp [insFix])
     | .left .black pp y b, hl, _, _ =>
       obtain ⟨e₁, e₂⟩ := hl.2.left_inv; subst P S
-      have hy := hl.up_left.1.node_inv.2.2.2.2.2.1
+      have hy := hl.up_left.1.node_inv.red
       exact exit hy (by cases pp <;> simp [insFix])
     | .right .black b y pp, hl, _, _ =>
       obtain ⟨e₁, e₂⟩ := hl.2.right_inv; subst P S
-      have hy := hl.up_right.1.node_inv.2.2.2.2.2.1
+      have hy := hl.up_right.1.node_inv.red
       exact exit hy (by cases pp <;> simp [insFix])
     | .left .red .root y b, _, hroot, _ => exact absurd (by simp [rootColour]) hroot
     | .right .red b y .root, _, hroot, _ => exact absurd (by simp [rootColour]) hroot
@@ -73,10 +73,10 @@ theorem insertFixupLoop_refines (head : Addr) : ∀ (fuel : Nat) {h : Heap} {cur
       have Ly := hl.up_left
       obtain ⟨hyz, hys⟩ := Ly.2.left_inv
       rw [hyz, hys] at Ly
-      have hyr : (h y).red = true := Ly.1.node_inv.2.2.2.2.2.1
+      have hyr : (h y).red = true := Ly.1.node_inv.red
       have Lz := Ly.up_left
-      have hzh : z ≠ head := Lz.1.node_inv.2.1
-      have hyz' : y ≠ z := fun e => (nodup_node Lz.1.nodup).2.2.1 (by simp [e])
+      have hzh : z ≠ head := Lz.1.node_inv.ne_head
+      have hyz' : y ≠ z := fun e => (nodup_node Lz.1.nodup).not_mem_left (by simp [e])
       have Lu := Lz.down_right
       have hur : red h (h z).right = red? u := Lu.1.red_eq hhead
       have hroot' := rootColour_up_left (rootColour_up_left hroot)
@@ -86,11 +86,11 @@ theorem insertFixupLoop_refines (head : Addr) : ∀ (fuel : Nat) {h : Heap} {cur
         obtain ⟨ul, uv, ur, rfl⟩ : ∃ ul uv ur, u = .node .red ul uv ur := by
           match u, hu with
           | .node .red ul uv ur, _ => exact ⟨ul, uv, ur, rfl⟩
-        have huv : (h z).right = uv := Lu.1.node_inv.1
+        have huv : (h z).right = uv := Lu.1.node_inv.eq
         have hcol : (h uv).red = true := by rw [← huv]; exact hur.trans hu
         have Lz1 := (Ly.paint .black).up_left
         have Lu1 := Lz1.down_right
-        rw [Lu1.1.node_inv.1] at Lu1
+        rw [Lu1.1.node_inv.eq] at Lu1
         have Lz3 := ((Lu1.paint .black).up_right).paint .red
         obtain ⟨H, hH, hT⟩ := insertFixupLoop_refines head fuel rot Lz3 hzh hroot' (by omega)
         have hz : insFix (.left .red (.left c' gp z (.node .red ul uv ur)) y b) t =
@@ -132,10 +132,10 @@ theorem insertFixupLoop_refines (head : Addr) : ∀ (fuel : Nat) {h : Heap} {cur
       have Ly := hl.up_right
       obtain ⟨hyz, hys⟩ := Ly.2.right_inv
       rw [hyz, hys] at Ly
-      have hyr : (h y).red = true := Ly.1.node_inv.2.2.2.2.2.1
+      have hyr : (h y).red = true := Ly.1.node_inv.red
       have Lz := Ly.up_right
-      have hzh : z ≠ head := Lz.1.node_inv.2.1
-      have hyz' : y ≠ z := fun e => (nodup_node Lz.1.nodup).2.2.2.1 (by simp [e])
+      have hzh : z ≠ head := Lz.1.node_inv.ne_head
+      have hyz' : y ≠ z := fun e => (nodup_node Lz.1.nodup).not_mem_right (by simp [e])
       have Lu := Lz.down_left
       have hur : red h (h z).left = red? u := Lu.1.red_eq hhead
       have hroot' := rootColour_up_right (rootColour_up_right hroot)
@@ -145,11 +145,11 @@ theorem insertFixupLoop_refines (head : Addr) : ∀ (fuel : Nat) {h : Heap} {cur
         obtain ⟨ul, uv, ur, rfl⟩ : ∃ ul uv ur, u = .node .red ul uv ur := by
           match u, hu with
           | .node .red ul uv ur, _ => exact ⟨ul, uv, ur, rfl⟩
-        have huv : (h z).left = uv := Lu.1.node_inv.1
+        have huv : (h z).left = uv := Lu.1.node_inv.eq
         have hcol : (h uv).red = true := by rw [← huv]; exact hur.trans hu
         have Lz1 := (Ly.paint .black).up_right
         have Lu1 := Lz1.down_left
-        rw [Lu1.1.node_inv.1] at Lu1
+        rw [Lu1.1.node_inv.eq] at Lu1
         have Lz3 := ((Lu1.paint .black).up_left).paint .red
         obtain ⟨H, hH, hT⟩ := insertFixupLoop_refines head fuel rot Lz3 hzh hroot' (by omega)
         have hz : insFix (.right .red a y (.right c' (.node .red ul uv ur) z gp)) t =
@@ -191,9 +191,9 @@ theorem insertFixupLoop_refines (head : Addr) : ∀ (fuel : Nat) {h : Heap} {cur
       have Ly := hl.up_right
       obtain ⟨hyz, hys⟩ := Ly.2.left_inv
       rw [hyz, hys] at Ly
-      have hyr : (h y).red = true := Ly.1.node_inv.2.2.2.2.2.1
+      have hyr : (h y).red = true := Ly.1.node_inv.red
       have Lz := Ly.up_left
-      have hzh : z ≠ head := Lz.1.node_inv.2.1
+      have hzh : z ≠ head := Lz.1.node_inv.ne_head
       have Lu := Lz.down_right
       have hur : red h (h z).right = red? u := Lu.1.red_eq hhead
       have hroot' := rootColour_up_left (rootColour_up_right hroot)
@@ -203,11 +203,11 @@ theorem insertFixupLoop_refines (head : Addr) : ∀ (fuel : Nat) {h : Heap} {cur
         obtain ⟨ul, uv, ur, rfl⟩ : ∃ ul uv ur, u = .node .red ul uv ur := by
           match u, hu with
           | .node .red ul uv ur, _ => exact ⟨ul, uv, ur, rfl⟩
-        have huv : (h z).right = uv := Lu.1.node_inv.1
+        have huv : (h z).right = uv := Lu.1.node_inv.eq
         have hcol : (h uv).red = true := by rw [← huv]; exact hur.trans hu
         have Lz1 := (Ly.paint .black).up_left
         have Lu1 := Lz1.down_right
-        rw [Lu1.1.node_inv.1] at Lu1
+        rw [Lu1.1.node_inv.eq] at Lu1
         have Lz3 := ((Lu1.paint .black).up_right).paint .red
         obtain ⟨H, hH, hT⟩ := insertFixupLoop_refines head fuel rot Lz3 hzh hroot' (by omega)
         have hz : insFix (.right .red a y (.left c' gp z (.node .red ul uv ur))) t =
@@ -225,16 +225,16 @@ theorem insertFixupLoop_refines (head : Addr) : ∀ (fuel : Nat) {h : Heap} {cur
         obtain ⟨ct, tl, x, tr, rfl⟩ : ∃ ct tl x tr, t = .node ct tl x tr := by
           match t, hcm with
           | .node ct tl x tr, _ => exact ⟨ct, tl, x, tr, rfl⟩
-        have hcx : cur = x := hl.1.node_inv.1
+        have hcx : cur = x := hl.1.node_inv.eq
         subst hcx
-        have hyc : (h y).right = cur := Ly.1.node_inv.2.2.2.2.2.2.2.node_inv.1
+        have hyc : (h y).right = cur := Ly.1.node_inv.right.node_inv.eq
         obtain ⟨f, rfl⟩ : ∃ f, fuel = f + 1 := ⟨fuel - 1, by omega⟩
         have L1 : Located (rotateAt h y .left) head cur z .left
             (.node ct (.node .red a y tl) cur tr) (.left c' gp z u) := rotateAt_refines_left Ly
         have hyx : (rotateAt h y .left y).parent = cur := by
           obtain ⟨-, -, -, -, -, -, hlx, -⟩ := L1.1.node_inv
-          exact hlx.node_inv.2.2.2.1
-        have hxz : cur ≠ z := fun e => (nodup_node L1.up_left.1.nodup).2.2.1 (by simp [e])
+          exact hlx.node_inv.parent
+        have hxz : cur ≠ z := fun e => (nodup_node L1.up_left.1.nodup).not_mem_left (by simp [e])
         have L3 := ((L1.paint .black).up_left).paint .red
         have L4 := rotateAt_refines_right L3
         have hT := (L4.2.fill L4.1).makeBlack_root
@@ -257,9 +257,9 @@ theorem insertFixupLoop_refines (head : Addr) : ∀ (fuel : Nat) {h : Heap} {cur
       have Ly := hl.up_left
       obtain ⟨hyz, hys⟩ := Ly.2.right_inv
       rw [hyz, hys] at Ly
-      have hyr : (h y).red = true := Ly.1.node_inv.2.2.2.2.2.1
+      have hyr : (h y).red = true := Ly.1.node_inv.red
       have Lz := Ly.up_right
-      have hzh : z ≠ head := Lz.1.node_inv.2.1
+      have hzh : z ≠ head := Lz.1.node_inv.ne_head
       have Lu := Lz.down_left
       have hur : red h (h z).left = red? u := Lu.1.red_eq hhead
       have hroot' := rootColour_up_right (rootColour_up_left hroot)
@@ -269,11 +269,11 @@ theorem insertFixupLoop_refines (head : Addr) : ∀ (fuel : Nat) {h : Heap} {cur
         obtain ⟨ul, uv, ur, rfl⟩ : ∃ ul uv ur, u = .node .red ul uv ur := by
           match u, hu with
           | .node .red ul uv ur, _ => exact ⟨ul, uv, ur, rfl⟩
-        have huv : (h z).left = uv := Lu.1.node_inv.1
+        have huv : (h z).left = uv := Lu.1.node_inv.eq
         have hcol : (h uv).red = true := by rw [← huv]; exact hur.trans hu
         have Lz1 := (Ly.paint .black).up_right
         have Lu1 := Lz1.down_left
-        rw [Lu1.1.node_inv.1] at Lu1
+        rw [Lu1.1.node_inv.eq] at Lu1
         have Lz3 := ((Lu1.paint .black).up_left).paint .red
         obtain ⟨H, hH, hT⟩ := insertFixupLoop_refines head fuel rot Lz3 hzh hroot' (by omega)
         have hz : insFix (.left .red (.right c' (.node .red ul uv ur) z gp) y b) t =
@@ -291,16 +291,16 @@ theorem insertFixupLoop_refines (head : Addr) : ∀ (fuel : Nat) {h : Heap} {cur
         obtain ⟨ct, tl, x, tr, rfl⟩ : ∃ ct tl x tr, t = .node ct tl x tr := by
           match t, hcm with
           | .node ct tl x tr, _ => exact ⟨ct, tl, x, tr, rfl⟩
-        have hcx : cur = x := hl.1.node_inv.1
+        have hcx : cur = x := hl.1.node_inv.eq
         subst hcx
-        have hyc : (h y).left = cur := Ly.1.node_inv.2.2.2.2.2.2.1.node_inv.1
+        have hyc : (h y).left = cur := Ly.1.node_inv.left.node_inv.eq
         obtain ⟨f, rfl⟩ : ∃ f, fuel = f + 1 := ⟨fuel - 1, by omega⟩
         have L1 : Located (rotateAt h y .right) head cur z .right
             (.node ct tl cur (.node .red tr y b)) (.right c' u z gp) := rotateAt_refines_right Ly
         have hyx : (rotateAt h y .right y).parent = cur := by
           obtain ⟨-, -, -, -, -, -, -, hrx⟩ := L1.1.node_inv
-          exact hrx.node_inv.2.2.2.1
-        have hxz : cur ≠ z := fun e => (nodup_node L1.up_right.1.nodup).2.2.2.1 (by simp [e])
+          exact hrx.node_inv.parent
+        have hxz : cur ≠ z := fun e => (nodup_node L1.up_right.1.nodup).not_mem_right (by simp [e])
         have L3 := ((L1.paint .black).up_right).paint .red
         have L4 := rotateAt_refines_left L3
         have hT := (L4.2.fill L4.1).makeBlack_root

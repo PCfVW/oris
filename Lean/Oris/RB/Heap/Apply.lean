@@ -260,6 +260,34 @@ theorem switchWith_frame (h : Heap) (this node : Addr) {x : Addr}
   · subst h₀; simp [h₁, h₂, h₃, h₄]
   · simp [h₁, h₂, h₃, h₄, h₀]
 
+/-- **The sentinel's fields under a rotation**, for either side: if the sentinel is neither
+`this` nor `top`, `rotateAt` keeps its right link and colour, and its left link unless it is
+`this`'s parent, given that a rotation at the root hangs from the sentinel's left link. (It may be
+`top`'s side-`s` child or `this`'s parent, or both: only its `parent` word and the link that held
+`this` are then written.) -/
+theorem rotateAt_sentinel (h : Heap) (this : Addr) (s : Side) {head : Addr}
+    (h₁ : this ≠ childAt h this s.other)
+    (h₃ : childAt h this s.other ≠ childAt h (childAt h this s.other) s)
+    (h₄ : this ≠ parent h this) (h₅ : childAt h this s.other ≠ parent h this)
+    (hh₁ : head ≠ this) (hh₂ : head ≠ childAt h this s.other)
+    (hs : parent h this = head → parentSide h this = .left) :
+    (rotateAt h this s head).right = (h head).right ∧
+      (rotateAt h this s head).red = (h head).red ∧
+      (parent h this ≠ head → (rotateAt h this s head).left = (h head).left) := by
+  rw [rotateAt_apply h this s h₁ h₃ h₄ h₅ head, ite_eq_right hh₁, ite_eq_right hh₂]
+  by_cases hP : head = parent h this
+  · have hl := hs hP.symm
+    by_cases hm : head = childAt h (childAt h this s.other) s
+    · rw [ite_eq_left hm, ite_eq_left hP, hl]
+      exact ⟨rfl, rfl, fun hne => absurd hP.symm hne⟩
+    · rw [ite_eq_right hm, ite_eq_left hP, hl]
+      exact ⟨rfl, rfl, fun hne => absurd hP.symm hne⟩
+  · by_cases hm : head = childAt h (childAt h this s.other) s
+    · rw [ite_eq_left hm, ite_eq_right hP]
+      exact ⟨rfl, rfl, fun _ => rfl⟩
+    · rw [ite_eq_right hm, ite_eq_right hP]
+      exact ⟨rfl, rfl, fun _ => rfl⟩
+
 /-- `setColour` changes no `parent` pointer. -/
 theorem setColour_parent (h : Heap) (a : Addr) (b : Bool) (x : Addr) :
     (setColour h a b x).parent = (h x).parent := by

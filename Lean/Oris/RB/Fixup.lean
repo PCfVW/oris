@@ -1239,15 +1239,43 @@ theorem erase_unique [Std.TransCmp cmp] {t : RBNode α} {n : Nat}
 
 Facts about zippers and their element lists, with no heap in them, that `Oris/RB/Heap/` uses. -/
 
+/-- What `Nodup` says of a node's elements (`nodup_node`), with named fields: each subtree has no
+duplicate, the node's own element is in neither, and the two subtrees are disjoint. -/
+structure NodupNode (l : RBNode α) (v : α) (r : RBNode α) : Prop where
+  left : l.toList.Nodup
+  right : r.toList.Nodup
+  not_mem_left : v ∉ l.toList
+  not_mem_right : v ∉ r.toList
+  disjoint : ∀ x ∈ l.toList, x ∉ r.toList
+
 /-- What `Nodup` says of a node's elements (for the heap layer, its addresses). -/
 theorem nodup_node {c : RBColor} {l r : RBNode α} {v : α}
-    (hnd : (RBNode.node c l v r).toList.Nodup) :
-    l.toList.Nodup ∧ r.toList.Nodup ∧ v ∉ l.toList ∧ v ∉ r.toList ∧
-      ∀ x ∈ l.toList, x ∉ r.toList := by
+    (hnd : (RBNode.node c l v r).toList.Nodup) : NodupNode l v r := by
   simp only [RBNode.toList_node, List.nodup_append, List.nodup_cons, List.mem_cons] at hnd
   obtain ⟨hl, ⟨hvr, hr⟩, hlr⟩ := hnd
   exact ⟨hl, hr, fun hv => hlr v hv v (.inl rfl) rfl, hvr,
     fun x hx hxr => hlr x hx x (.inr hxr) rfl⟩
+
+/-- The converse of `nodup_node`. With it, core's `List.nodup_append` normal form is unpacked in
+two places only (here and in `nodup_withList`), so a reformulation of it touches nothing else. -/
+theorem nodup_node_intro {c : RBColor} {l r : RBNode α} {v : α} (hn : NodupNode l v r) :
+    (RBNode.node c l v r).toList.Nodup := by
+  simp only [RBNode.toList_node, List.nodup_append, List.nodup_cons, List.mem_cons]
+  refine ⟨hn.left, ⟨hn.not_mem_right, hn.right⟩, fun x hx y hy => ?_⟩
+  rcases hy with rfl | hy
+  · rintro rfl; exact hn.not_mem_left hx
+  · rintro rfl; exact hn.disjoint x hx hy
+
+/-- What `Nodup` says of a filled path's elements: the list in the hole has no duplicate, and no
+element of the path is in it. -/
+theorem nodup_withList {path : Path α} {L : List α} (hnd : (path.withList L).Nodup) :
+    L.Nodup ∧ ∀ x ∈ path.listL ++ path.listR, x ∉ L := by
+  simp only [Path.withList, List.nodup_append, List.mem_append] at hnd
+  refine ⟨hnd.1.2.1, fun x hx hxL => ?_⟩
+  simp only [List.mem_append] at hx
+  rcases hx with hx | hx
+  · exact hnd.1.2.2 x hx x hxL rfl
+  · exact hnd.2.2 x (.inr hxL) x hx rfl
 
 /-- The depth of a path's hole: the number of nodes above it. The loop's fuel is measured against
 it (`insertFixupLoop_refines`). -/

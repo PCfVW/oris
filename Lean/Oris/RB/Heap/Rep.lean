@@ -63,12 +63,23 @@ variable {h h' : Heap} {head a p : Addr} {s : Side} {t : RBNode Addr}
 theorem nil_inv (hr : Rep h head a p s .nil) : a = head := by
   cases hr; rfl
 
+/-- What a node's `Rep` says, read back (`Rep.node_inv`), one named field per premise of
+`Rep.node`: the subtree starts at its root address `v` (`eq`), a real address, whose `parent` word
+names the slot and holds the colour, and whose children represent the two subtrees. -/
+structure NodeView (h : Heap) (head a p : Addr) (s : Side) (c : RBColor) (l : RBNode Addr)
+    (v : Addr) (r : RBNode Addr) : Prop where
+  eq : a = v
+  ne_head : v ≠ head
+  ne_null : v ≠ null
+  parent : (h v).parent = p
+  side : (h v).side = s
+  red : (h v).red = colourBit c
+  left : Rep h head (h v).left v .left l
+  right : Rep h head (h v).right v .right r
+
 /-- What a node's `Rep` says, read back: the inversion of `Rep.node`. -/
 theorem node_inv {c : RBColor} {l r : RBNode Addr} {v : Addr}
-    (hr : Rep h head a p s (.node c l v r)) :
-    a = v ∧ v ≠ head ∧ v ≠ null ∧ (h v).parent = p ∧ (h v).side = s ∧
-      (h v).red = colourBit c ∧
-      Rep h head (h v).left v .left l ∧ Rep h head (h v).right v .right r := by
+    (hr : Rep h head a p s (.node c l v r)) : NodeView h head a p s c l v r := by
   cases hr with
   | node ha hn hp hs hc hl hr => exact ⟨rfl, ha, hn, hp, hs, hc, hl, hr⟩
 
@@ -89,6 +100,15 @@ theorem root_mem (hr : Rep h head a p s t) (ha : a ≠ head) : a ∈ t.toList :=
   cases hr with
   | nil => exact absurd rfl ha
   | node => simp
+
+/-- **The sentinel-or-member argument**, once: an address that is neither the sentinel nor in
+`t` is not the address a subtree representing `t` starts at (the sentinel when `t` is empty, an
+address of `t` otherwise). -/
+theorem ne_root (hr : Rep h head a p s t) {x : Addr} (hxh : x ≠ head) (hxt : x ∉ t.toList) :
+    x ≠ a := fun e => by
+  by_cases ha : a = head
+  · exact hxh (e.trans ha)
+  · exact hxt (e ▸ hr.root_mem ha)
 
 /-- A non-empty subtree's first node points back to the slot it hangs in. -/
 theorem root_fields (hr : Rep h head a p s t) {x : Addr} (hx : x ∈ t.toList) :
@@ -196,11 +216,7 @@ theorem nodup (hr : Rep h head a p s t) : t.toList.Nodup := by
           show (h (ancestor h x n₂)).parent = a
           rw [h₂]; exact sr.1
         rwa [e] at this
-    simp only [RBNode.toList_node, List.nodup_append, List.nodup_cons, List.mem_cons]
-    refine ⟨ihl, ⟨har, ihr⟩, fun x hx y hy => ?_⟩
-    rcases hy with rfl | hy
-    · rintro rfl; exact hal hx
-    · rintro rfl; exact hdis x hx hy
+    exact nodup_node_intro ⟨ihl, ihr, hal, har, hdis⟩
 
 /-- **The frame lemma.** A heap that agrees with `h` on every address of `t` represents `t` at
 the same slot. Writes elsewhere, to any field of the sentinel included, preserve `Rep`. -/
@@ -227,13 +243,13 @@ theorem reroot {p' : Addr} {s' : Side} (hr : Rep h head a p s t)
   | nil => exact .nil
   | node ha hn _ _ hc hl hr =>
     obtain ⟨e₁, e₂, e₃, e₄, e₅⟩ := hroot ha
-    simp only [RBNode.toList_node, List.nodup_append, List.nodup_cons] at hnd
+    have hn' := nodup_node hnd
     refine .node ha hn e₄ e₅ (e₃.trans hc) ?_ ?_
     · rw [e₁]
       exact hl.frame fun x hx => hrest x (by simp [hx])
-        (by rintro rfl; exact hnd.2.2 x hx x (by simp) rfl)
+        (by rintro rfl; exact hn'.not_mem_left hx)
     · rw [e₂]
-      exact hr.frame fun x hx => hrest x (by simp [hx]) (by rintro rfl; exact hnd.2.1.1 hx)
+      exact hr.frame fun x hx => hrest x (by simp [hx]) (by rintro rfl; exact hn'.not_mem_right hx)
 
 end Rep
 
@@ -335,17 +351,12 @@ theorem outside (hl : Located h head a p s t path) :
   have hf := (hl.2.fill hl.1).1
   have hnd := hf.nodup
   rw [RBTree.RBNode.Path.fill_toList] at hnd
-  simp only [RBTree.RBNode.Path.withList, List.nodup_append, List.mem_append] at hnd
   intro x hx
   have hmem : x ∈ (path.fill t).toList := by
     rw [RBTree.RBNode.Path.fill_toList]
     simp only [RBTree.RBNode.Path.withList, List.mem_append] at hx ⊢
     rcases hx with hx | hx <;> simp [hx]
-  refine ⟨fun hxt => ?_, (hf.mem_ne hmem).1⟩
-  simp only [List.mem_append] at hx
-  rcases hx with hx | hx
-  · exact hnd.1.2.2 x hx x hxt rfl
-  · exact hnd.2.2 x (.inr hxt) x hx rfl
+  exact ⟨(nodup_withList hnd).2 x hx, (hf.mem_ne hmem).1⟩
 
 /-- The slot's node is outside the subtree hanging from it. -/
 theorem slot_not_mem (hl : Located h head a p s t path) : p ∉ t.toList := by
