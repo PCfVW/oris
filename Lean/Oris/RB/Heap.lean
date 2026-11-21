@@ -961,8 +961,9 @@ theorem rotateAt_links (h : Heap) (this : Addr) (s : Side) {x : Addr} (h₁ : x 
   · subst h₃; simp [h₁, h₂, h₄]
   · simp [h₁, h₂, h₃, h₄]
 
-/-- Of `this`'s parent, `rotateAt` writes only the child link `this` hung from, which now holds
-`top`: the other link and the colour are kept, and so is the `parent` word unless the parent is
+/-- Of `this`'s parent, if it is neither `this` nor `top` (which `Located` guarantees: the slot's
+node is outside the subtree), `rotateAt` writes only the child link `this` hung from, which now
+holds `top`: the other link and the colour are kept, and so is the `parent` word unless the parent is
 also `top`'s side-`s` child (a rotation at the root whose moving subtree is empty: both are the
 sentinel, and its scratch `parent` and side are written). -/
 theorem rotateAt_parent_fields (h : Heap) (this : Addr) (s : Side)
@@ -986,14 +987,15 @@ theorem rotateAt_parent_fields (h : Heap) (this : Addr) (s : Side)
         setParentSide, Heap.modify]
 
 /-- **`rotateAt`, address by address.** With `top` `this`'s side-`o` child (`o = s.other`), `m`
-`top`'s side-`s` child and `P` `this`'s parent, all distinct except that `m` and `P` may coincide (a
-rotation at the root whose moving subtree is empty: both are then the sentinel), `rotateAt h this s`
-gives `this` the child `m` on side `o` and the slot `(top, s)`; `top` the child `this` on side `s`
-and `this`'s old slot; `m` the slot `(this, o)`; `P` the child `top` in the link that held `this`
-(on `m`'s record too when `m = P`); and every other address its old record. The writes' order
-matters only where two of them hit the same field, which the distinctness rules out. -/
+`top`'s side-`s` child and `P` `this`'s parent, where `this`, `top` and `P` are distinct and
+`top ≠ m`, `rotateAt h this s` gives `this` the child `m` on side `o` and the slot `(top, s)`;
+`top` the child `this` on side `s` and `this`'s old slot; `m` the slot `(this, o)`; `P` the child
+`top` in the link that held `this` (on `m`'s record too when `m = P`); and every other address its
+old record. `m` may coincide with `P` (a rotation at the root whose moving subtree is empty: both
+are then the sentinel) or with `this` (whose record the later writes then decide: the first
+branch). The writes' order matters only where two of them hit the same field. -/
 theorem rotateAt_apply (h : Heap) (this : Addr) (s : Side)
-    (h₁ : this ≠ childAt h this s.other) (h₂ : this ≠ childAt h (childAt h this s.other) s)
+    (h₁ : this ≠ childAt h this s.other)
     (h₃ : childAt h this s.other ≠ childAt h (childAt h this s.other) s)
     (h₄ : this ≠ parent h this) (h₅ : childAt h this s.other ≠ parent h this) (x : Addr) :
     rotateAt h this s x =
@@ -1013,7 +1015,10 @@ theorem rotateAt_apply (h : Heap) (this : Addr) (s : Side)
   generalize hps : parentSide h this = ps
   simp only [rotateAt, setChild_eq, setParentPtr, setParentSide, Heap.modify, ht, hm, hP, hps]
   by_cases e₁ : x = this
-  · subst e₁; simp [h₁, h₂, h₄]
+  · subst e₁
+    by_cases e : x = m
+    · subst e; simp [h₁, h₄]
+    · simp [h₁, h₄, e]
   by_cases e₂ : x = top
   · subst e₂; simp [e₁, h₃, h₅]
     cases s <;> rfl
@@ -1064,7 +1069,6 @@ theorem rotateAt_refines_left {h : Heap} {head a b p : Addr} {s : Side} {c c' : 
   have hbp : b ≠ p := fun e => hpt.2.2.2.1 e.symm
   have hmp : m ≠ head → m ≠ p := fun hmh e => hpt.2.2.1 (e ▸ hmrl hmh)
   have RL := rotateAt_apply h a .left (by simpa [childAt, Side.other, hab] using hab')
-    (by simpa [childAt, Side.other, hab, hm] using ham)
     (by simpa [childAt, Side.other, hab, hm] using hbm) (by simpa [parent, hpa] using hap)
     (by simpa [childAt, Side.other, hab, parent, hpa] using hbp)
   simp only [childAt, Side.other, parent, parentSide, hab, hm, hpa, hsa] at RL
@@ -1191,7 +1195,6 @@ theorem rotateAt_refines_right {h : Heap} {head a b p : Addr} {s : Side} {c c' :
   have hbp : b ≠ p := fun e => hpb' e.symm
   have hmp : m ≠ head → m ≠ p := fun hmh e => hplr (e ▸ hmlr hmh)
   have RL := rotateAt_apply h a .right (by simpa [childAt, Side.other, hab] using hab')
-    (by simpa [childAt, Side.other, hab, hm] using ham)
     (by simpa [childAt, Side.other, hab, hm] using hbm) (by simpa [parent, hpa] using hap)
     (by simpa [childAt, Side.other, hab, parent, hpa] using hbp)
   simp only [childAt, Side.other, parent, parentSide, hab, hm, hpa, hsa] at RL
@@ -1534,12 +1537,14 @@ theorem switchWith_apply (h : Heap) (this node : Addr) (h₁ : this ≠ node)
   · simp [*]
 
 /-- **`switchWith` touches four addresses**: `this`, `node`'s two children and `node`'s parent. -/
-theorem switchWith_frame (h : Heap) (this node : Addr) (h₀ : this ≠ node) {x : Addr}
+theorem switchWith_frame (h : Heap) (this node : Addr) {x : Addr}
     (h₁ : x ≠ this) (h₂ : x ≠ childAt h node .left) (h₃ : x ≠ childAt h node .right)
     (h₄ : x ≠ parent h node) : switchWith h this node x = h x := by
   simp only [switchWith, setChild_eq, setParentPtr, setParentSide, setColour, Heap.modify,
     childAt, parent, parentSide, red] at h₂ h₃ h₄ ⊢
-  simp [h₁, h₂, h₃, h₄, Ne.symm h₀]
+  by_cases h₀ : node = this
+  · subst h₀; simp [h₁, h₂, h₃, h₄]
+  · simp [h₁, h₂, h₃, h₄, h₀]
 
 /-- **`NodeBase::switch_with` puts `this` at `node`'s tree position** (the note's §4, step 2). If
 the heap represents the located subtree `node c l node r`, and `this` is a real address neither in
@@ -1804,15 +1809,15 @@ theorem setColour_red_eq (h : Heap) (a : Addr) (b : Bool) : (setColour h a b a).
   simp [setColour, Heap.modify]
 
 /-- A write that keeps colours keeps every address's colour. -/
-theorem modify_red (h : Heap) (a : Addr) (f : NodeRec → NodeRec) (hf : ∀ n, (f n).red = n.red)
-    (x : Addr) : (h.modify a f x).red = (h x).red := by
+theorem Heap.modify_red (h : Heap) (a : Addr) (f : NodeRec → NodeRec)
+    (hf : ∀ n, (f n).red = n.red) (x : Addr) : (h.modify a f x).red = (h x).red := by
   by_cases e : x = a <;> simp [Heap.modify, e, hf]
 
 /-- **`rotateAt` changes no colour**: its nine writes are child links and `parent` words. -/
 theorem rotateAt_red (h : Heap) (this : Addr) (s : Side) (x : Addr) :
     (rotateAt h this s x).red = (h x).red := by
   simp only [rotateAt, setChild_eq, setParentPtr, setParentSide]
-  repeat rw [modify_red _ _ _ (fun _ => by simp)]
+  repeat rw [Heap.modify_red _ _ _ (fun _ => by simp)]
 
 /-- **`insert_fixup`'s final `make_black(head.child(Left))`** blackens the represented tree's root:
 the zipper's `setBlack` of the whole tree. On an empty tree it writes the sentinel's colour bit,
@@ -2178,7 +2183,7 @@ theorem insertFixupLoop_refines (head : Addr) : ∀ (fuel : Nat) {h : Heap} {cur
           Bool.false_eq_true, ite_true, ite_false, hyc, makeBlack, makeRed, hyx]
         rw [insertFixupLoop_exit hx4]; rfl
 
-/-- **`NodeBase`-level `insert_fixup` performs `insFix`**: `insertFixupLoop_refines` from the
+/-- **The heap-level `insert_fixup` performs `insFix`**: `insertFixupLoop_refines` from the
 Rust's entry, `insert_fixup(node)` with `p = parent(node)` and no rotation counted yet. -/
 theorem insertFixup_refines {fuel : Nat} {h : Heap} {head node P : Addr} {S : Side}
     {t : RBNode Addr} {path : Path Addr} (hl : Located h head node P S t path)
