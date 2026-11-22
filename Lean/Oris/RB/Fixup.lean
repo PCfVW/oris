@@ -1481,4 +1481,28 @@ theorem pathDepth_add_depth_le (path : Path α) (t : RBNode α) :
     have := Nat.le_max_right b.depth t.depth
     omega
 
+/-- Filling a path with a non-empty subtree gives a non-empty tree. -/
+theorem fill_ne_nil {path : Path α} {t : RBNode α} (ht : t ≠ .nil) : path.fill t ≠ .nil := by
+  induction path generalizing t with
+  | root => exact ht
+  | left c pp y b ih => exact ih (fun e => nomatch e)
+  | right c b y pp ih => exact ih (fun e => nomatch e)
+
+/-- `stage2L` returns a tree only when the sibling's children are not both black (the
+converse of `stage2L_none`'s case). -/
+theorem stage2L_some {pc cw : RBColor} {pp : Path α} {y wv : α} {wl wr x : RBNode α}
+    {r : RBNode α × Nat} (h : stage2L pc pp y (.node cw wl wv wr) x = some r) :
+    (!red? wl && !red? wr) = false := by
+  cases e : (!red? wl && !red? wr)
+  · rfl
+  · simp only [stage2L, e, ↓reduceIte, reduceCtorEq] at h
+
+/-- The mirror image of `stage2L_some`. -/
+theorem stage2R_some {pc cw : RBColor} {pp : Path α} {y wv : α} {wl wr x : RBNode α}
+    {r : RBNode α × Nat} (h : stage2R pc pp y (.node cw wl wv wr) x = some r) :
+    (!red? wl && !red? wr) = false := by
+  cases e : (!red? wl && !red? wr)
+  · rfl
+  · simp only [stage2R, e, ↓reduceIte, reduceCtorEq] at h
+
 end Oris.RB

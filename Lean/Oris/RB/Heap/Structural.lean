@@ -207,6 +207,45 @@ theorem rotateAt_refines_right_frame {h : Heap} {head a b p : Addr} {s : Side} {
   exact rotateAt_frame h a .right h₁ (by simpa [childAt, Side.other, hab] using h₂)
     (by simpa [childAt, Side.other, hab] using h₃) (by simpa [parent, hpa] using h₄)
 
+/-- After `rotateAt` at a located subtree's first node, the slot's node keeps its `parent` word
+(so the subtree can still be climbed out of). -/
+theorem rotateAt_slot_left {h : Heap} {head a b p : Addr} {s : Side} {c c' : RBColor}
+    {l rl rr : RBNode Addr} {path : Path Addr}
+    (hl : Located h head a p s (.node c l a (.node c' rl b rr)) path) (hph : p ≠ head) :
+    (rotateAt h a .left p).parent = (h p).parent ∧ (rotateAt h a .left p).side = (h p).side := by
+  have hpt := hl.slot_not_mem
+  obtain ⟨-, -, -, hpa, -, -, -, har⟩ := hl.1.node_inv
+  obtain ⟨hab, -, -, -, -, -, hbl, -⟩ := har.node_inv
+  have hP : parent h a = p := hpa
+  have h₁ : parent h a ≠ a := by rw [hP]; exact fun e => hpt (by simp [e])
+  have h₂ : parent h a ≠ childAt h a Side.left.other := by
+    rw [hP]; show p ≠ (h a).right; rw [hab]; exact fun e => hpt (by simp [e])
+  have h₃ : parent h a ≠ childAt h (childAt h a Side.left.other) .left := by
+    rw [hP]; show p ≠ (h (h a).right).left; rw [hab]
+    exact hbl.ne_root hph fun hx => hpt (by simp [hx])
+  have := (rotateAt_parent_fields h a .left h₁ h₂).2.2.2 h₃
+  rw [hP] at this
+  exact this
+
+/-- The mirror image of `rotateAt_slot_left`. -/
+theorem rotateAt_slot_right {h : Heap} {head a b p : Addr} {s : Side} {c c' : RBColor}
+    {ll lr r : RBNode Addr} {path : Path Addr}
+    (hl : Located h head a p s (.node c (.node c' ll b lr) a r) path) (hph : p ≠ head) :
+    (rotateAt h a .right p).parent = (h p).parent ∧ (rotateAt h a .right p).side = (h p).side := by
+  have hpt := hl.slot_not_mem
+  obtain ⟨-, -, -, hpa, -, -, hal, -⟩ := hl.1.node_inv
+  obtain ⟨hab, -, -, -, -, -, -, hbr⟩ := hal.node_inv
+  have hP : parent h a = p := hpa
+  have h₁ : parent h a ≠ a := by rw [hP]; exact fun e => hpt (by simp [e])
+  have h₂ : parent h a ≠ childAt h a Side.right.other := by
+    rw [hP]; show p ≠ (h a).left; rw [hab]; exact fun e => hpt (by simp [e])
+  have h₃ : parent h a ≠ childAt h (childAt h a Side.right.other) .right := by
+    rw [hP]; show p ≠ (h (h a).left).right; rw [hab]
+    exact hbr.ne_root hph fun hx => hpt (by simp [hx])
+  have := (rotateAt_parent_fields h a .right h₁ h₂).2.2.2 h₃
+  rw [hP] at this
+  exact this
+
 /-! ## Step 3a: `attach_to`, `substitute_with` and `switch_with`
 
 Each performs the zipper step `Fixup.lean`'s `insert` or `eraseAt` takes at that point (the
