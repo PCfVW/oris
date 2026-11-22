@@ -28,6 +28,10 @@ proves it, and the cross-check runs against the Rust.
 | Write a `def` that models Rust code | [Transcription](#transcription-rules), [departures](#departures-are-listed) |
 | Write a theorem | [Kernel-only](#kernel-only-proofs), [statement honesty](#statements-say-what-the-doc-says), [naming](#naming), [proof robustness](#proof-robustness) |
 | Write a recursive `def` or theorem | [Termination](#termination) |
+| Prove that heap code performs a zipper step | [Heap-layer proof patterns](#heap-layer-proof-patterns) |
+| Write a `def` that is not a model of Rust code | [Proof devices](#proof-devices) |
+| Try something out, or audit the proofs | [Scratch work and audits](#scratch-work-and-audits) |
+| Change `Tools/Audit.lean` | [What the checks reject](#what-the-checks-reject) |
 | Reach for `native_decide`, `bv_decide`, `sorry`, `axiom`, `admit` | [Kernel-only](#kernel-only-proofs) — don't |
 | Model a `usize` computation | [Machine arithmetic](#machine-arithmetic) |
 | Write a `-- ...` or `/-- ... -/` comment | [Doc comments](#doc-comments) |
@@ -69,14 +73,24 @@ is too slow for the kernel is a sign to restate the lemma (prove it for a symbol
   from scratch: the axiom audit alone cannot see a declaration that was added with the kernel
   check switched off.
 
-The audit was checked to reject a `sorry`, a `native_decide`, a hand-written axiom (inside and
-outside the `Oris` namespace), a module redefining the audit command of the old in-build gate,
-and a theorem added with `debug.skipKernelTC`, which the kernel replay rejects too; since the
-audit of 2026-11-21, also an `#eval!`, a `_root_.Lean...` name and a line over 100 characters,
-which an earlier lint let through. (A `bv_decide` whose preprocessing closes the goal leaves an
-ordinary kernel proof, which the audit rightly accepts.) If you change `Tools/Audit.lean`, re-run
-those checks on a scratch copy of the project (the sorry, `native_decide`, both axioms,
-`skipKernelTC` and the three later cases were re-run then).
+### What the checks reject
+
+Each case below was added to a module of a scratch copy of the project and rejected. If you change
+`Tools/Audit.lean`, re-run them all on a scratch copy (last re-run: 2026-11-21).
+
+| Case | Rejected by |
+|---|---|
+| a `sorry` | the audit's axiom check (`sorryAx`) |
+| a `native_decide` | the audit's axiom check (an auxiliary `..._native.native_decide.ax_...` axiom) |
+| a hand-written `axiom`, inside or outside the `Oris` namespace | the audit's axiom check |
+| a theorem added with `set_option debug.skipKernelTC true` | the audit's lint (`set_option`), and the kernel replay (checked 2026-11-15) |
+| an `#eval!` (added 2026-11-21) | the audit's lint (any `#` command) |
+| a `_root_.Lean...` name (added 2026-11-21) | the audit's lint (any `Lean` name component) |
+| a line over 100 characters (added 2026-11-21) | the audit's lint |
+| a module redefining the audit's command | nothing can: the audit runs outside the build and imports no proof module (the old in-build gate could be fooled this way) |
+
+A `bv_decide` whose preprocessing closes the goal leaves an ordinary kernel proof, which the audit
+rightly accepts.
 
 ### The audit covers every module
 
@@ -117,13 +131,20 @@ A `def` that models Rust code is a **transcription**, not a re-derivation:
 
 Where a model deliberately does not follow the Rust (only ever on states the theorems prove
 unreachable, unless stated otherwise), say so in **two** places: the definition's doc, and the
-module doc's complete list of departures. A departure that is *not* about a state proven
-unreachable must be called out as such, with what settles it. Today: in `Fixup.lean`, the cached
-`root` of `erase_fixup` (settled by the heap layer's planned cached-root theorem) and `setBlack`
-leaving the sentinel alone where the Rust writes black over black (harmless); in `Heap/Model.lean`, the
-loops' fuel (proven sufficient for `insert_fixup` by `insertFixup_refines_depth` and for
-`erase_fixup` in HPHA's reading by `eraseFixupHpha_refines_depth`; for the Rust's reading of
-`erase_fixup`, by step 3d, and for the descents, by step 4).
+module doc's complete list of departures (`Fixup.lean`'s and `Heap/Model.lean`'s module docs
+hold them). A theorem about the heap code takes, as a hypothesis, what rules out the zipper
+model's departures on its input (`rootColour path ≠ some .red` for `insFix`'s red-root shape,
+`DelFixClean` for `delFix`'s nil sibling), and the spec theorems derive it from a valid tree.
+
+A departure that is *not* about a state proven unreachable must be called out as such, with what
+settles it. The current ones (update this table with the module docs):
+
+| Where | Departure | Settled by |
+|---|---|---|
+| `Fixup.lean` | `erase_fixup`'s root: the model re-reads it, as HPHA does; the Rust reads it once | step 3d, the cached-root theorem (it needs a black root: on a red root the readings differ) |
+| `Fixup.lean` | `paint`, `setBlack`, `setRed` leave `nil` alone where the Rust's `make_black` writes the sentinel's colour bit | harmless: reachable only when an erase empties the tree, black over black |
+| `Heap/Model.lean` | the loops' fuel: `none` when it runs out | `insertFixup_refines_depth`; `eraseFixupHpha_refines_depth` (HPHA's reading); step 3d (the Rust's reading of `erase_fixup`); step 4 (the descents) |
+| `Heap/Model.lean` | `eraseFixupHpha` reads the root before testing `cur`'s colour, where HPHA's `&&` short-circuits | harmless: a read |
 
 Lean's unused-variable linter does not see instance arguments: check by hand, by deleting it in
 a scratch copy, that every `[Std.TransCmp cmp]` a theorem takes is needed.
@@ -174,6 +195,60 @@ small change to a definition, or fail where the change is. These rules came out 
 
 ---
 
+## Heap-layer proof patterns
+
+How the refinement proofs of `Oris/RB/Heap/` are built; follow the same shapes for new ones.
+
+- **Two descriptions of every write.** Address by address: an `if` chain under the distinctness
+  the callers guarantee (`rotateAt_apply`, `switchWith_apply`) and the addresses it leaves alone
+  (`_frame`). On a located subtree: what the write does to the zipper state (`Located.paint` for
+  a colour, `rotateAt_refines_left`/`_right` for a rotation, `attachTo_refines`, ...). Proofs
+  combine the second kind; the first kind proves the second.
+- **Moving along the path.** `Located.up_left`/`_right` climb from a child to its parent's
+  subtree, `down_left`/`_right` descend. After a write, a climb needs the slot node's `parent`
+  word in the *new* heap: rewrite the indices first, with `setColour_slot` after a colour write
+  and `rotateAt_slot_left`/`_right` after a rotation.
+- **Distinctness.** `Rep.ne_root`: an address that is neither the sentinel nor in a subtree is not
+  that subtree's first address. Membership in `toList` (`fun e => hxt (by simp [e])`) for the
+  rest; `Rep.addr_eq` when two heaps represent the same subtree.
+- **Colours read back** through `Rep.red_eq` (the sentinel reads black), and **the root test**
+  through `Located.eq_root_iff` (`cur` is the root exactly when the path is empty).
+- **Loops.** One step lemma per branch of an iteration, each for either side, stated with the
+  loop's own reads (`insertFixupLoop_red_uncle`, `eraseFixupLoop_case1_finish`); the refinement
+  theorem by induction on fuel, following the zipper function's arms through its equation lemmas
+  (`delFix_left_black_none`, ...); at an exit, `Located.fill` or `Tree.makeBlack_root`.
+- **Mirror images.** Each case comes as `_left` and `_right`, written out; a side-generic lemma is
+  preferred wherever the statement does not depend on the side (`rotateAt_sentinel`, the step
+  lemmas).
+
+### Proof devices
+
+A proof module may define something that is not a model of Rust code, to name a segment of a
+transcription that several proofs use (`case1Heap`, `case1Sibling`, `finishHeap` in
+`Heap/EraseFixup.lean`: the writes of `erase_fixup`'s first case, and of its third and fourth).
+Such a **proof device** is allowed when:
+
+1. its doc says it is a proof device and names the transcription and the statements it covers;
+2. a step lemma proves that the transcription performs exactly it (`eraseFixupLoop_finish`,
+   ...), so it adds nothing a reader must trust;
+3. it is never defined in `Heap/Model.lean`, which holds only transcriptions.
+
+---
+
+## Scratch work and audits
+
+- **Scratch files** go outside `Oris/` (a `Scratch.lean` next to `Oris.lean`, or outside the
+  repository), are checked with `lake env lean <file>`, which reads the built project without
+  changing it, and are never committed. Before committing, delete them; `lake build` does not see
+  them, but they confuse a reader of `git status`.
+- **Audits.** A full audit keeps its record in `docs/audits/<date>-<name>/`: `findings.json`
+  (every finding with its verdict, and the corrected fix where a verifier changed it), the scratch
+  files behind the findings in `scratch/` (each with the SPDX header, not built, not maintained),
+  and a `README.md` (the method, the results, the decisions, the follow-up). Local paths are made
+  relative before committing.
+
+---
+
 ## Machine arithmetic
 
 Rust's `usize` is `BitVec 64` (the crate is 64-bit only), and expressions are transcribed with
@@ -208,6 +283,9 @@ case analysis on its argument may recurse on an explicit size bound instead
 | A heap operation performs its zipper step | `<op>_refines` | `attachTo_refines`, `insertFixup_refines` |
 | A lemma about a relation or structure `R` | `R.<lemma>` | `Rep.frame`, `Located.up_left`, `Heap.modify_red` |
 | An inversion (what a constructor's premises say, read back) | `_inv` | `Rep.node_inv`, `RepPath.left_inv` |
+| One iteration of a loop, one branch | `<loop>_<branch>` | `insertFixupLoop_red_uncle`, `eraseFixupLoop_case1_finish` |
+| What one case's writes do to a located subtree | `case<N>_left` / `_right`, `finish_left` / `_right` | `case1_left`, `finish_right` |
+| A zipper function's arm, as an equation | `<def>_<arm>` | `delFix_root`, `delFix_left_red_none` |
 | Mirror-image definitions | suffix `L` / `R` (the side `cur` is on) | `stage2L`, `stage2R` |
 | Lemma about a definition | `<def>_<property>` | `insFix_toList`, `delFix_rotations`, `stage2L_balanced` |
 | Mirror-image standalone theorems | suffix `_left` / `_right` | `hpha_sibling_not_sentinel_left` |
