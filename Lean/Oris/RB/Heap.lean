@@ -4,6 +4,7 @@ import Oris.RB.Heap.Rep
 import Oris.RB.Heap.Apply
 import Oris.RB.Heap.Structural
 import Oris.RB.Heap.InsertFixup
+import Oris.RB.Heap.EraseFixup
 
 /-!
 # `rbtree.rs`'s pointer code, on a model heap
