@@ -189,9 +189,8 @@ In brief (the full rules, with the reasons, are in [`CONVENTIONS.md`](CONVENTION
    enforces it on every declaration of every Oris and RBTree module (private and auxiliary ones
    included, whatever their names), and lints the proof sources against metaprogramming and
    debug options; the kernel replay re-checks every declaration. Both run in CI on every pull
-   request, and were checked to reject each of the four, a theorem added with the kernel check
-   switched off, a module redefining the audit command, and an axiom outside the `Oris`
-   namespace.
+   request; the cases they were checked to reject, and which check rejects each, are tabled in
+   [`CONVENTIONS.md`, § What the checks reject](CONVENTIONS.md#what-the-checks-reject).
 2. **Transcribe, don't re-derive.** Each definition names the Rust it models, follows its
    operations in order and sets every colour the Rust sets; every deliberate departure is listed.
 3. **Statements say what the docs say.** A fact a doc claims is proven is a theorem.
