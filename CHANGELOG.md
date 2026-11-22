@@ -12,6 +12,15 @@ state transitions (see [`ROADMAP.md`](ROADMAP.md)).
 
 ### Added
 
+- **Lean: `erase_fixup` performs `delFix`** (step 3c of the heap layer, `Lean/docs/heap-layer.md`
+  §5; `Lean/Oris/RB/Heap/EraseFixup.lean`). `eraseFixupLoop_refines` and `eraseFixupHpha_refines`:
+  in HPHA's reading (the root re-read), from any located subtree, the hole possibly empty, given
+  the hole invariant (the sentinel's scratch `parent` and side name the slot) and `DelFixClean`
+  (`delFix` never reaches its nil-sibling departure, which `delFixClean_of_balanced` derives on a
+  valid tree), the pointer code leaves a heap representing `delFix`'s tree, after `delFix`'s
+  number of rotations. `eraseFixupHpha_refines_depth`, the second fuel theorem. `Fixup.lean` gains
+  `delFix`'s arms as equations (`delFix_root`, `delFix_{left,right}_{red,black}_{some,none}`).
+  The Rust's reading, the root read once, is step 3d.
 - **Lean: `insert_fixup` performs `insFix`** (step 3b of the heap layer, `Lean/docs/heap-layer.md`
   §5). `insertFixupLoop_refines` and `insertFixup_refines`: from any located subtree whose tree
   has a black root, `insert_fixup`'s pointer code leaves a heap representing `insFix`'s tree, after

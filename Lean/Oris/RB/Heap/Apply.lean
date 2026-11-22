@@ -310,6 +310,16 @@ theorem setColour_parent (h : Heap) (a : Addr) (b : Bool) (x : Addr) :
     (setColour h a b x).parent = (h x).parent := by
   by_cases e : x = a <;> simp [setColour, Heap.modify, e]
 
+/-- `setColour` changes no side bit. -/
+theorem setColour_side (h : Heap) (a : Addr) (b : Bool) (x : Addr) :
+    (setColour h a b x).side = (h x).side := by
+  by_cases e : x = a <;> simp [setColour, Heap.modify, e]
+
+/-- A colour write keeps a node's slot: its `parent` word's pointer and side. -/
+theorem setColour_slot {h : Heap} {a y P : Addr} {S : Side} (b : Bool) (hp : (h y).parent = P)
+    (hs : (h y).side = S) : (setColour h a b y).parent = P ∧ (setColour h a b y).side = S :=
+  ⟨by rw [setColour_parent, hp], by rw [setColour_side, hs]⟩
+
 /-- `setColour` changes no other address's colour. -/
 theorem setColour_red_ne (h : Heap) (a : Addr) (b : Bool) {x : Addr} (hx : x ≠ a) :
     (setColour h a b x).red = (h x).red := by

@@ -496,6 +496,59 @@ theorem down_right (hl : Located h head y P S (.node c l y r) pp) :
 
 end Located
 
+/-- A subtree starting at the sentinel is empty. -/
+theorem Rep.eq_nil_of_head {h : Heap} {head p : Addr} {s : Side} {t : RBNode Addr}
+    (hr : Rep h head head p s t) : t = .nil := by
+  cases hr with
+  | nil => rfl
+  | node ha => exact absurd rfl ha
+
+/-- Two subtrees representing the same tree start at the same address. -/
+theorem Rep.addr_eq {h h' : Heap} {head a a' p p' : Addr} {s s' : Side} {t : RBNode Addr}
+    (hr : Rep h head a p s t) (hr' : Rep h' head a' p' s' t) : a = a' := by
+  cases t with
+  | nil => rw [hr.nil_inv, hr'.nil_inv]
+  | node c l v r => rw [hr.node_inv.eq, hr'.node_inv.eq]
+
+/-- `cur` is the root, as the loop's re-read test reads it, exactly when its path is empty. -/
+theorem Located.eq_root_iff {h : Heap} {head a P : Addr} {S : Side} {x : RBNode Addr}
+    {path : Path Addr} (hl : Located h head a P S x path) : a = (h head).left ↔ path = .root := by
+  constructor
+  · intro e
+    cases path with
+    | root => rfl
+    | left c pp y b =>
+      exfalso
+      have hT := (hl.2.fill hl.1).1
+      rw [← e] at hT
+      have hne : (Path.left c pp y b).fill x ≠ .nil := by
+        show pp.fill (.node c x y b) ≠ .nil
+        exact fill_ne_nil (fun e => nomatch e)
+      have hah : a ≠ head := fun e' => hne (e' ▸ hT).eq_nil_of_head
+      have h₁ := (hl.1.root_fields (hl.1.root_mem hah)).1
+      have h₂ := (hT.root_fields (hT.root_mem hah)).1
+      have hP : P = head := h₁.symm.trans h₂
+      subst hP
+      cases hl.2 with
+      | left hy => exact hy rfl
+    | right c b y pp =>
+      exfalso
+      have hT := (hl.2.fill hl.1).1
+      rw [← e] at hT
+      have hne : (Path.right c b y pp).fill x ≠ .nil := by
+        show pp.fill (.node c b y x) ≠ .nil
+        exact fill_ne_nil (fun e => nomatch e)
+      have hah : a ≠ head := fun e' => hne (e' ▸ hT).eq_nil_of_head
+      have h₁ := (hl.1.root_fields (hl.1.root_mem hah)).1
+      have h₂ := (hT.root_fields (hT.root_mem hah)).1
+      have hP : P = head := h₁.symm.trans h₂
+      subst hP
+      cases hl.2 with
+      | right hy => exact hy rfl
+  · rintro rfl
+    cases hl.2 with
+    | root e => exact e.symm
+
 end Heap
 
 end Oris.RB

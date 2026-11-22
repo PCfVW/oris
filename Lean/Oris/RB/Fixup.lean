@@ -475,6 +475,76 @@ theorem delFix_case1_fill_right (pp : Path α) (y wv : α) (x wl wr : RBNode α)
     (mapChild s setBlack t).toList = t.toList := by
   cases t <;> cases s <;> simp [mapChild]
 
+/-! ### `delFix`'s equations, arm by arm
+
+`delFix` is defined by well-founded recursion, so `rfl` does not unfold it (`CONVENTIONS.md`,
+§ *Proof robustness*). These are its arms as equations, for a black `cur` (`red? x = false`; a red
+one is `delFix_red`), each with the outcome of `stage2L`/`stage2R` that selects it. -/
+
+/-- `delFix` at the root, `cur` black: `make_black(cur)`, no rotation. -/
+theorem delFix_root {x : RBNode α} (hr : red? x = false) : delFix .root x = (x.setBlack, 0) := by
+  rw [delFix.eq_def]; simp only [hr, Bool.false_eq_true, ↓reduceIte]
+
+/-- `delFix`, `cur` a left child with a red sibling, finished by the third and fourth cases. -/
+theorem delFix_left_red_some {pc : RBColor} {pp : Path α} {y wv : α} {wl wr x : RBNode α}
+    {r : RBNode α × Nat} (hr : red? x = false)
+    (hs : stage2L red (.left black pp wv wr) y wl x = some r) :
+    delFix (.left pc pp y (node red wl wv wr)) x = (r.1, r.2 + 1) := by
+  rw [delFix.eq_def]; simp only [hr, hs, Bool.false_eq_true, ↓reduceIte]
+
+/-- `delFix`, `cur` a left child with a red sibling, then the second case (on a now-red `p`, so
+the recursive call stops at once: `delFix_red`). -/
+theorem delFix_left_red_none {pc : RBColor} {pp : Path α} {y wv : α} {wl wr x : RBNode α}
+    (hr : red? x = false) (hs : stage2L red (.left black pp wv wr) y wl x = none) :
+    delFix (.left pc pp y (node red wl wv wr)) x =
+      ((delFix (.left black pp wv wr) (node red x y wl.setRed)).1,
+        (delFix (.left black pp wv wr) (node red x y wl.setRed)).2 + 1) := by
+  rw [delFix.eq_def]; simp only [hr, hs, Bool.false_eq_true, ↓reduceIte]
+
+/-- `delFix`, `cur` a left child with a black sibling, finished by the third and fourth cases. -/
+theorem delFix_left_black_some {pc : RBColor} {pp : Path α} {y wv : α} {wl wr x : RBNode α}
+    {r : RBNode α × Nat} (hr : red? x = false)
+    (hs : stage2L pc pp y (node black wl wv wr) x = some r) :
+    delFix (.left pc pp y (node black wl wv wr)) x = r := by
+  rw [delFix.eq_def]; simp only [hr, hs, Bool.false_eq_true, ↓reduceIte]
+
+/-- `delFix`, `cur` a left child with a black sibling, the second case: climb to `p`. -/
+theorem delFix_left_black_none {pc : RBColor} {pp : Path α} {y wv : α} {wl wr x : RBNode α}
+    (hr : red? x = false) (hs : stage2L pc pp y (node black wl wv wr) x = none) :
+    delFix (.left pc pp y (node black wl wv wr)) x =
+      delFix pp (node pc x y (node red wl wv wr)) := by
+  rw [delFix.eq_def]; simp only [hr, hs, Bool.false_eq_true, ↓reduceIte, setRed]
+
+/-- The mirror image of `delFix_left_red_some`. -/
+theorem delFix_right_red_some {pc : RBColor} {pp : Path α} {y wv : α} {wl wr x : RBNode α}
+    {r : RBNode α × Nat} (hr : red? x = false)
+    (hs : stage2R red (.right black wl wv pp) y wr x = some r) :
+    delFix (.right pc (node red wl wv wr) y pp) x = (r.1, r.2 + 1) := by
+  rw [delFix.eq_def]; simp only [hr, hs, Bool.false_eq_true, ↓reduceIte]
+
+/-- The mirror image of `delFix_left_red_none`. -/
+theorem delFix_right_red_none {pc : RBColor} {pp : Path α} {y wv : α} {wl wr x : RBNode α}
+    (hr : red? x = false) (hs : stage2R red (.right black wl wv pp) y wr x = none) :
+    delFix (.right pc (node red wl wv wr) y pp) x =
+      ((delFix (.right black wl wv pp) (node red wr.setRed y x)).1,
+        (delFix (.right black wl wv pp) (node red wr.setRed y x)).2 + 1) := by
+  rw [delFix.eq_def]; simp only [hr, hs, Bool.false_eq_true, ↓reduceIte]
+
+/-- The mirror image of `delFix_left_black_some`. -/
+theorem delFix_right_black_some {pc : RBColor} {pp : Path α} {y wv : α} {wl wr x : RBNode α}
+    {r : RBNode α × Nat} (hr : red? x = false)
+    (hs : stage2R pc pp y (node black wl wv wr) x = some r) :
+    delFix (.right pc (node black wl wv wr) y pp) x = r := by
+  rw [delFix.eq_def]; simp only [hr, hs, Bool.false_eq_true, ↓reduceIte]
+
+/-- The mirror image of `delFix_left_black_none`. -/
+theorem delFix_right_black_none {pc : RBColor} {pp : Path α} {y wv : α} {wl wr x : RBNode α}
+    (hr : red? x = false) (hs : stage2R pc pp y (node black wl wv wr) x = none) :
+    delFix (.right pc (node black wl wv wr) y pp) x =
+      delFix pp (node pc (node red wl wv wr) y x) := by
+  rw [delFix.eq_def]; simp only [hr, hs, Bool.false_eq_true, ↓reduceIte, setRed]
+
+
 /-- A red `cur` ends the erase loop at once: `make_black(cur)`, no rotation. -/
 theorem delFix_red {path : Path α} {x : RBNode α} (h : red? x = true) :
     delFix path x = (path.fill x.setBlack, 0) := by
@@ -959,6 +1029,91 @@ theorem delFix_balanced {path : Path α} {x : RBNode α} {c : RBColor} {n n₀ :
     ∃ m, (delFix path x).1.Balanced black m :=
   delFix_balanced_aux _ (Nat.lt_succ_self _) hp hx
 
+/-! ### `delFix` never reaches its departure on a valid tree -/
+
+/-- **`delFix` never reaches its nil-sibling departure** from `(path, x)`. `stage2L`/`stage2R`
+return `none` on a `nil` sibling, and `delFix` then continues as if it were the second case; the
+Rust instead takes the sentinel as the sibling `w`, and its second case paints the sentinel red
+(`Lean/docs/heap-layer.md`, §4, theorem 4). The predicate follows `delFix`'s recursion: a red
+`cur` or the root ends it; a red sibling (the first case) needs a non-`nil` near child, the new
+sibling, after which the loop finishes or stops at once; a black sibling must not be `nil`, and if
+the second case follows, the climb to `p` must be clean too. Structural recursion on the path.
+`delFixClean_of_balanced` proves it from `delFix_balanced`'s hypotheses. -/
+def DelFixClean : Path α → RBNode α → Prop
+  | .root, _ => True
+  | .left _ _ _ (node red wl _ _), x => red? x = true ∨ wl ≠ nil
+  | .left pc pp y w, x =>
+    red? x = true ∨ (w ≠ nil ∧ (stage2L pc pp y w x = none → DelFixClean pp (node pc x y w.setRed)))
+  | .right _ (node red _ _ wr) _ _, x => red? x = true ∨ wr ≠ nil
+  | .right pc w y pp, x =>
+    red? x = true ∨ (w ≠ nil ∧ (stage2R pc pp y w x = none → DelFixClean pp (node pc w.setRed y x)))
+
+/-- **On a valid tree, `delFix` never reaches its departure**: under `delFix_balanced`'s
+hypotheses (the hole one black level short in a tree with a black root, `cur` valid up to one
+red-red pair at its root), `DelFixClean` holds. The siblings it needs are HPHA's two asserted
+facts, `hpha_sibling_not_sentinel_left`/`_right` and
+`hpha_sibling_after_case1_not_sentinel_left`/`_right`; the climb keeps `delFix_balanced_aux`'s
+invariant. -/
+theorem delFixClean_of_balanced : ∀ {path : Path α} {x : RBNode α} {c : RBColor} {n n₀ : Nat},
+    path.Balanced black n₀ c (n + 1) → x.RedRed True n → DelFixClean path x
+  | .root, _, _, _, _, _, _ => trivial
+  | .left pc pp y w, x, _, n, n₀, hp, hx => by
+    by_cases hr : red? x = true
+    · cases w with
+      | nil => exact .inl hr
+      | node cw wl wv wr => cases cw <;> exact .inl hr
+    have hxb : x.Balanced black n := by
+      cases hx with
+      | balanced h => exact balanced_black_of_not_red (by simpa using hr) h
+      | redred => simp at hr
+    cases w with
+    | nil => exact absurd rfl (hpha_sibling_not_sentinel_left hp)
+    | node cw wl wv wr =>
+      cases cw with
+      | red => exact .inr (hpha_sibling_after_case1_not_sentinel_left hp)
+      | black =>
+        refine .inr ⟨(fun e => nomatch e), fun hs => ?_⟩
+        obtain ⟨h1, h2⟩ := stage2L_none hs
+        cases hp with
+        | redL hw hpp =>
+          cases hw with
+          | black hwl hwr =>
+          exact delFixClean_of_balanced hpp (.redred trivial hxb
+            (.red (balanced_black_of_not_red h1 hwl) (balanced_black_of_not_red h2 hwr)))
+        | blackL hw hpp =>
+          cases hw with
+          | black hwl hwr =>
+          exact delFixClean_of_balanced hpp (.balanced (.black hxb
+            (.red (balanced_black_of_not_red h1 hwl) (balanced_black_of_not_red h2 hwr))))
+  | .right pc w y pp, x, _, n, n₀, hp, hx => by
+    by_cases hr : red? x = true
+    · cases w with
+      | nil => exact .inl hr
+      | node cw wl wv wr => cases cw <;> exact .inl hr
+    have hxb : x.Balanced black n := by
+      cases hx with
+      | balanced h => exact balanced_black_of_not_red (by simpa using hr) h
+      | redred => simp at hr
+    cases w with
+    | nil => exact absurd rfl (hpha_sibling_not_sentinel_right hp)
+    | node cw wl wv wr =>
+      cases cw with
+      | red => exact .inr (hpha_sibling_after_case1_not_sentinel_right hp)
+      | black =>
+        refine .inr ⟨(fun e => nomatch e), fun hs => ?_⟩
+        obtain ⟨h1, h2⟩ := stage2R_none hs
+        cases hp with
+        | redR hw hpp =>
+          cases hw with
+          | black hwl hwr =>
+          exact delFixClean_of_balanced hpp (.redred trivial
+            (.red (balanced_black_of_not_red h1 hwl) (balanced_black_of_not_red h2 hwr)) hxb)
+        | blackR hw hpp =>
+          cases hw with
+          | black hwl hwr =>
+          exact delFixClean_of_balanced hpp (.balanced (.black
+            (.red (balanced_black_of_not_red h1 hwl) (balanced_black_of_not_red h2 hwr)) hxb))
+
 /-! ## `erase_counted`: splice, switch, fix-up -/
 
 /-- `rbtree.rs` `EraseKind`. -/
@@ -1325,5 +1480,29 @@ theorem pathDepth_add_depth_le (path : Path α) (t : RBNode α) :
     simp only [pathDepth, Path.fill, RBNode.depth] at this ⊢
     have := Nat.le_max_right b.depth t.depth
     omega
+
+/-- Filling a path with a non-empty subtree gives a non-empty tree. -/
+theorem fill_ne_nil {path : Path α} {t : RBNode α} (ht : t ≠ .nil) : path.fill t ≠ .nil := by
+  induction path generalizing t with
+  | root => exact ht
+  | left c pp y b ih => exact ih (fun e => nomatch e)
+  | right c b y pp ih => exact ih (fun e => nomatch e)
+
+/-- `stage2L` returns a tree only when the sibling's children are not both black (the
+converse of `stage2L_none`'s case). -/
+theorem stage2L_some {pc cw : RBColor} {pp : Path α} {y wv : α} {wl wr x : RBNode α}
+    {r : RBNode α × Nat} (h : stage2L pc pp y (.node cw wl wv wr) x = some r) :
+    (!red? wl && !red? wr) = false := by
+  cases e : (!red? wl && !red? wr)
+  · rfl
+  · simp only [stage2L, e, ↓reduceIte, reduceCtorEq] at h
+
+/-- The mirror image of `stage2L_some`. -/
+theorem stage2R_some {pc cw : RBColor} {pp : Path α} {y wv : α} {wl wr x : RBNode α}
+    {r : RBNode α × Nat} (h : stage2R pc pp y (.node cw wl wv wr) x = some r) :
+    (!red? wl && !red? wr) = false := by
+  cases e : (!red? wl && !red? wr)
+  · rfl
+  · simp only [stage2R, e, ↓reduceIte, reduceCtorEq] at h
 
 end Oris.RB

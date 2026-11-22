@@ -1,7 +1,7 @@
 # Design note — the heap layer (`Oris/RB/Heap.lean` and `Oris/RB/Heap/`)
 
-*Status: agreed, 2026-11-14. Steps 1, 1b, 2, 3a and 3b are done (§5; 3a and 3b on 2026-11-21);
-steps 3c, 3d and 4 are not yet written. Decisions taken are recorded in §7.*
+*Status: agreed, 2026-11-14. Steps 1, 1b, 2, 3a, 3b and 3c are done (§5; 3a and 3b on 2026-11-21,
+3c on 2026-11-22); steps 3d and 4 are not yet written. Decisions taken are recorded in §7.*
 
 *Numbering.* "Step N" (with its parts 1b and 3a–3d) is always a row of §5's plan; "§4, theorem
 N" is an item of §4's list of theorems. Step 3a is theorem 2, 3b theorem 3, 3c theorem 4, 3d
@@ -186,8 +186,8 @@ Each theorem uses the ones before it. The steps of §5 that prove them are given
    along the path), `Located.paint` (`set_colour`), `rotateAt_red` and `Tree.makeBlack_root` (the
    final `make_black` is the zipper's `setBlack`); since the audit of 2026-11-21, also one lemma per
    branch of the loop (`insertFixupLoop_red_uncle`, `_black_uncle_outer`, `_black_uncle_inner`,
-   for either side), `Rep.ne_root` and `rotateAt_sentinel`, which step 3c is to reuse.
-4. [step 3c] **`erase_fixup` performs `delFix`.** The loop invariant adds a **hole invariant**:
+   for either side), `Rep.ne_root` and `rotateAt_sentinel`, which step 3c reuses.
+4. ✅ [step 3c] **`erase_fixup` performs `delFix`.** The loop invariant adds a **hole invariant**:
    when `cur` is `head`, `head`'s scratch parent and side are the hole's. The loop reads `cur`'s
    `parent` word only at the top of an iteration, before any write, and every iteration after the
    first starts from a real node (case 2 climbs to `p`, a path node; case 4 ends the loop). So the
@@ -206,6 +206,21 @@ Each theorem uses the ones before it. The steps of §5 that prove them are given
    `hpha_sibling_not_sentinel_*` and `hpha_sibling_after_case1_not_sentinel_*`). The heap theorem
    takes `DelFixClean path x` as a hypothesis, which keeps black heights out of the heap layer, and
    the step-4 spec theorem supplies it from `Path.Balanced`.
+
+   **As built** (`Oris/RB/Heap/EraseFixup.lean`, 2026-11-22): `eraseFixupLoop_refines` and
+   `eraseFixupHpha_refines`, for HPHA's reading (the root re-read: the zipper's "path empty"
+   test, through `Located.eq_root_iff`); step 3d transfers them to the Rust's reading. The hole
+   invariant is asked only when `cur` is the sentinel (`Rep` gives it for a real node). The proof
+   has three layers: one step lemma per branch of an iteration (`eraseFixupLoop_exit`, `_case2`,
+   `_finish`, `_case1_case2`, `_case1_finish`, each for either side), stated with two proof
+   devices, `case1Heap` and `finishHeap`, the writes of the first case and of the third and
+   fourth, so the finish is proven once whether or not the first case ran; the case lemmas
+   (`case1_left`, ..., `finish_right`), what those writes do to a located subtree; and the loop
+   theorem, by induction on fuel over `delFix`'s arms, which `Fixup.lean` now states as equations
+   (`delFix_root`, `delFix_left_red_some`, ...). The fuel bound is the hole's depth plus one: after
+   the first and second cases the path keeps its depth, but the next test exits at once (`p` is
+   red). The second fuel theorem, `eraseFixupHpha_refines_depth`, asks for the starting tree's
+   depth plus one, the hole possibly empty.
 5. [step 3d] **The cached root (§6).** `erase_fixup` with the root read once produces the same
    heap and the same rotation count as with HPHA's re-reads, **given a black root**: on a red
    root the two readings differ (§6).
@@ -226,7 +241,7 @@ Each theorem uses the ones before it. The steps of §5 that prove them are given
 | 2 ✅ | `Repr`, `ReprPath`, `Repr.nodup`, the frame lemma, `rotateAt_refines` (as built: `Rep`, `RepPath`, `Rep.nodup`, `Rep.frame`, `RepPath.retarget`, `rotateAt_refines_left` and `_right`; §3, §4) | The first refinement theorem; if the encoding is clumsy, it shows here, cheaply |
 | 3a ✅ | §4, theorem 2: `attach_to`, `substitute_with`, `switch_with` (2026-11-21) | Each performs its zipper step |
 | 3b ✅ | §4, theorem 3: `insert_fixup` (2026-11-21) | `insert_fixup` performs `insFix`; the first fuel theorem |
-| 3c | §4, theorem 4: `erase_fixup`, the hole invariant, `DelFixClean` | `erase_fixup` performs `delFix`; the second fuel theorem |
+| 3c ✅ | §4, theorem 4: `erase_fixup`, the hole invariant, `DelFixClean` (2026-11-22) | `erase_fixup` performs `delFix`; the second fuel theorem |
 | 3d | §4, theorem 5: the cached root (§6) | The two root readings agree on a black root |
 | 4 | §4, theorems 6 and 7, chains included | `insert_spec` and `erase_spec` hold for the pointer code |
 

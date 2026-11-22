@@ -121,8 +121,9 @@ module doc's complete list of departures. A departure that is *not* about a stat
 unreachable must be called out as such, with what settles it. Today: in `Fixup.lean`, the cached
 `root` of `erase_fixup` (settled by the heap layer's planned cached-root theorem) and `setBlack`
 leaving the sentinel alone where the Rust writes black over black (harmless); in `Heap/Model.lean`, the
-loops' fuel (proven sufficient for `insert_fixup` by `insertFixup_refines_depth`; for `erase_fixup`
-and the descents, to be proven by the heap layer's steps 3c and 4).
+loops' fuel (proven sufficient for `insert_fixup` by `insertFixup_refines_depth` and for
+`erase_fixup` in HPHA's reading by `eraseFixupHpha_refines_depth`; for the Rust's reading of
+`erase_fixup`, by step 3d, and for the descents, by step 4).
 
 Lean's unused-variable linter does not see instance arguments: check by hand, by deleting it in
 a scratch copy, that every `[Std.TransCmp cmp]` a theorem takes is needed.
@@ -242,7 +243,8 @@ bound), `_balanced` (red-black invariant), `_spec` (the operation's full contrac
 | `Oris/RB/Heap/Rep.lean` | The abstraction relation (`Rep`, `RepPath`, `Located`, `Tree`) and its lemmas |
 | `Oris/RB/Heap/Apply.lean` | Each structural operation address by address (`_apply`, `_frame`), the colour writes |
 | `Oris/RB/Heap/Structural.lean` | `rotate`, `attach_to`, `substitute_with`, `switch_with` perform their zipper steps |
-| `Oris/RB/Heap/InsertFixup.lean` | `insert_fixup` performs `insFix` (later parts: `EraseFixup.lean`, `CachedRoot.lean`, ...) |
+| `Oris/RB/Heap/InsertFixup.lean` | `insert_fixup` performs `insFix` |
+| `Oris/RB/Heap/EraseFixup.lean` | `erase_fixup`, HPHA's reading, performs `delFix` (later parts: `CachedRoot.lean`, `Counted.lean`, ...) |
 | `Tools/` | Executables, run after the build (`Audit.lean`, the axiom audit and lint; `XCheck.lean`, the cross-check consumer) |
 | `docs/` | Design notes (`heap-layer.md`), agreed before the proofs they plan; audit records (`audits/`), each with its findings and the scratch files behind them, not built |
 | `RBTree/` | Vendored, verbatim |
