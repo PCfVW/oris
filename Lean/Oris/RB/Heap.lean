@@ -29,8 +29,13 @@ Steps 1, 2, 3a and 3b of the heap layer, as numbered in the plan of `Lean/docs/h
   `insert_fixup` performs `insFix`: the same tree and the same rotation count, from any located
   node in a tree with a black root, given enough fuel. `insertFixup_refines_depth` is the first
   fuel theorem: fuel at least the tree's depth is enough.
+- **Step 3c, `erase_fixup`.** `eraseFixupLoop_refines` and `eraseFixupHpha_refines` prove that
+  `erase_fixup`, in HPHA's reading (the root re-read), performs `delFix`: the same tree and the
+  same rotation count, from any located subtree, the hole possibly empty, given the hole invariant
+  (for the sentinel, its scratch `parent` and side name the slot), `DelFixClean` and enough fuel.
+  `eraseFixupHpha_refines_depth` is the second fuel theorem.
 
-Steps 3c (`erase_fixup`), 3d (the cached root) and 4 (the counted operations, the chains and the
+Steps 3d (the cached root: the Rust's reading) and 4 (the counted operations, the chains and the
 transfer theorems) remain.
 
 ## The files
@@ -45,6 +50,8 @@ Every declaration lives in the namespace `Oris.RB.Heap`, whichever file defines 
 - `Heap/Structural.lean`: `rotate`, `attach_to`, `substitute_with` and `switch_with` perform their
   zipper steps.
 - `Heap/InsertFixup.lean`: `insert_fixup` performs `insFix`; the first fuel theorem.
+- `Heap/EraseFixup.lean`: `erase_fixup`, HPHA's reading, performs `delFix`; the second fuel
+  theorem.
 
 The type `Heap` lives at `Oris.RB.Heap.Heap`, so `Heap.modify` is `Oris.RB.Heap.Heap.modify`.
 -/

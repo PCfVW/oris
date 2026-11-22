@@ -32,8 +32,9 @@ in the other modules of `Oris/RB/Heap/` (overview: `Oris/RB/Heap.lean`).
   failing test, so fuel at least the tree's height **plus one** (its size plus one, for the
   descents) suffices. For `insert_fixup` this is proven (`insertFixup_refines_depth`: fuel at
   least `RBNode.depth`, the number of nodes on the longest branch, which is the height in edges
-  plus one); for `erase_fixup` and the descents it is the plan's steps 3c and 4. Each loop's doc
-  repeats this.
+  plus one); for `erase_fixup` in HPHA's reading too (`eraseFixupHpha_refines_depth`: the depth
+  plus one, the hole possibly empty); for the Rust's reading it follows from step 3d, and for the
+  descents it is step 4. Each loop's doc repeats this.
 - `erase_fixup`'s root comes in two readings: `eraseFixup` reads it once on entry, as the Rust
   does, and `eraseFixupHpha` re-reads it, as `Cpp/hpha.cpp` does (reading it before testing
   `cur`'s colour, where HPHA's `&&` short-circuits: a read, so no field changes). The note's §6

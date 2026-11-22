@@ -39,7 +39,7 @@ CI runs all four (`../.github/workflows/lean-ci.yml`).
 | `RBTree/`, `RBTree.lean` | A verified functional red-black tree library, vendored verbatim (`RBTree/NOTICE.md`) |
 | `Oris/Arith.lean` | Size arithmetic: `round_up`, `normalize_size`, `MAX_ALLOCATION`, `Tree::grow`, `alloc_aligned`'s guard, the bucket size classes |
 | `Oris/RB/Fixup.lean` | `rbtree.rs`'s `insert_fixup`, `insert_counted`, `erase_fixup` and `erase_counted` (its `Node` branch), on zippers |
-| `Oris/RB/Heap.lean`, `Oris/RB/Heap/` | The same functions as pointer code on a model heap, one write per Rust write (`Heap/Model.lean`); the abstraction relation to zippers (`Heap/Rep.lean`), and refinement proofs for `rotate`, `attach_to`, `substitute_with`, `switch_with` (`Heap/Structural.lean`) and `insert_fixup` (`Heap/InsertFixup.lean`); `Heap.lean` gives the overview (the rest is planned in `docs/heap-layer.md`) |
+| `Oris/RB/Heap.lean`, `Oris/RB/Heap/` | The same functions as pointer code on a model heap, one write per Rust write (`Heap/Model.lean`); the abstraction relation to zippers (`Heap/Rep.lean`), and refinement proofs for `rotate`, `attach_to`, `substitute_with`, `switch_with` (`Heap/Structural.lean`), `insert_fixup` (`Heap/InsertFixup.lean`) and `erase_fixup` (`Heap/EraseFixup.lean`); `Heap.lean` gives the overview (the rest is planned in `docs/heap-layer.md`) |
 | `Oris.lean` | Imports every proof module (what the kernel replay checks) |
 | `Tools/Audit.lean` | `lake exe audit`: the axiom audit, the import and namespace checks, and the lint, run outside the build |
 | `Tools/XCheck.lean` | `lake exe xcheck`: replays `rbtree.rs`'s cross-check trace through both models |
@@ -122,6 +122,12 @@ and nothing more unless stated:
 - `insertFixupLoop_refines`, `insertFixup_refines`: `insert_fixup` performs `insFix`, the same
   tree and the same rotation count, from any located real node in a tree with a black root;
   `insertFixup_refines_depth`: fuel at least the tree's depth suffices.
+- `eraseFixupLoop_refines`, `eraseFixupHpha_refines`: `erase_fixup`, in HPHA's reading (the root
+  re-read), performs `delFix`, the same tree and the same rotation count, from any located
+  subtree (the hole possibly empty: then the sentinel's scratch `parent` and side must name the
+  slot) from which `delFix` never reaches its nil-sibling departure (`DelFixClean`, which
+  `delFixClean_of_balanced` derives on a valid tree); `eraseFixupHpha_refines_depth`: fuel at
+  least the tree's depth plus one suffices.
 
 **The model agrees with the Rust code.** `rbtree.rs`'s ignored test
 `print_lean_model_cross_check_trace` runs 20,000 inserts and erases and prints, after each, the
@@ -155,11 +161,11 @@ wrong way in `link_into_chain`. (A wrong side bit in `rotateAt` no longer builds
 
 ## What is not (yet) proven, and the trust base
 
-- **The rest of the pointer layer.** Five pointer functions are proven (above). Still open, in
-  the design note's order: `erase_fixup` performs `delFix` (step 3c), the cached root (step 3d:
-  the Rust reads `erase_fixup`'s root once, HPHA and the zipper model re-read it; the heap model
-  runs both readings and finds no difference), and the counted operations with their descents
-  and the duplicate-key chains (step 4). Until then, that part of the correspondence rests on the
+- **The rest of the pointer layer.** Six pointer functions are proven (above), `erase_fixup` in
+  HPHA's reading. Still open, in the design note's order: the cached root (step 3d: the Rust
+  reads `erase_fixup`'s root once, HPHA and the zipper model re-read it; the heap model runs both
+  readings and finds no difference), and the counted operations with their descents and the
+  duplicate-key chains (step 4). Until then, that part of the correspondence rests on the
   write-by-write transcription and on the cross-check.
 - **The `Link` and `Promote` branches** of `erase_counted` and the `Chain` branch of
   `insert_counted` change the equal-key chains, not the tree of keys: they belong to the heap
